@@ -1,3 +1,6 @@
 [submodule "ext/gfx"]
 	path = ext/gfx
 	url = https://github.com/gboisse/gfx
+[submodule "ext/happly"]
+	path = ext/happly
+	url = https://github.com/nmwsharp/happly
