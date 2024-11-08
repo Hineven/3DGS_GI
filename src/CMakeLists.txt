@@ -5,7 +5,7 @@ add_executable(3DGS_AdvGI
         app_internal.cpp
         scene.cpp
 )
-target_link_libraries(3DGS_AdvGI PUBLIC gfx)
+target_link_libraries(3DGS_AdvGI PUBLIC gfx glm)
 
 # Set the working directory to source directory (to make shader paths work)
 set_target_properties(3DGS_AdvGI PROPERTIES VS_DEBUGGER_WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
