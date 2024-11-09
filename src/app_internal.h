@@ -9,25 +9,50 @@
 
 #include <filesystem>
 #include "gfx_window.h"
+#include "scene.h"
 
 class AppInternal {
 public:
     AppInternal();
     ~AppInternal();
-    int Run();
+    int Run ();
 
     inline GfxWindow& GetWindow() { return window_; }
     inline GfxContext& GetGfx() { return gfx_; }
-    inline std::string GetShaderPath() { return shader_path_; }
+    inline std::string GetRootPath() { return root_path_; }
+
+    inline int GetWindowWidth() { return 1280; }
+    inline int GetWindowHeight() { return 720; }
+
+    inline Scene & GetScene () { return scene_; }
+
+    static AppInternal & GetInstance() ;
+
+    friend class AppMain;
 
 protected:
 
     GfxWindow window_;
     GfxContext gfx_;
 
-    // Base directory of all shader files.
+    Scene scene_;
+
+    // Base directory of project root. Used to locate shader and asset files.
     // Detected with src/device_shared.hlsl
-    std::string shader_path_;
+    std::string root_path_;
+
+    struct Samplers {
+        GfxSamplerState linear_wrap;
+        GfxSamplerState point_wrap;
+        GfxSamplerState linear_clamp;
+        GfxSamplerState point_clamp;
+    } samplers_;
+
+    static void SetSingleton (AppInternal *singleton) ;
+
+public:
+
+    const Samplers & GetSamplers () const { return samplers_; }
 };
 
 #endif //INC_3DGS_ADVGI_APP_INTERNAL_H

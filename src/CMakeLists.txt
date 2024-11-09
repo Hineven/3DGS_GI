@@ -4,6 +4,9 @@ add_executable(3DGS_AdvGI
         app.cpp
         app_internal.cpp
         scene.cpp
+        device_scene.cpp
+        renderer.cpp
+        timed.cpp
 )
 target_link_libraries(3DGS_AdvGI PUBLIC gfx glm)
 

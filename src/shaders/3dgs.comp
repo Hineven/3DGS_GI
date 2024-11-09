@@ -1,0 +1,360 @@
+#include "3dgs.hlsl"
+
+[numthreads(1, 1, 1)]
+void GenerateDispatchIndirect () {
+	DispatchIndirectCommand Cmd = (DispatchIndirectCommand)0;
+
+	Cmd.ThreadGroupCountX = (g_ThreadsToDispatchCountBuffer[0] + UB.IndirectThreadGroupSize - 1) / UB.IndirectThreadGroupSize;
+	Cmd.ThreadGroupCountY = 1;
+	Cmd.ThreadGroupCountZ = 1;
+	g_RWDispatchIndirectCommandBuffer[0] = Cmd;
+}
+
+uint4 GetOverlappingTiles (float2 ScreenPosition, float Radius) {
+	float2 MinTexCoords = ScreenPosition - Radius;
+	float2 MaxTexCoords = ScreenPosition + Radius;
+	// Convert to tile coords
+	int2 MinTileCoords = floor(MinTexCoords / TILE_SIZE);
+	int2 MaxTileCoords = ceil(MaxTexCoords  / TILE_SIZE);
+	MinTileCoords = clamp(MinTileCoords, 0, UB.TileDimensions);
+	MaxTileCoords = clamp(MaxTileCoords, 0, UB.TileDimensions);
+	return uint4(MinTileCoords, MaxTileCoords);
+}
+
+// Splat 3D gaussians onto the screen
+[numthreads(WAVE_SIZE, 1, 1)]
+void TransformAndSplatGaussians (uint DispatchID : SV_DispatchThreadID) {
+	uint GaussianIndex = DispatchID;
+	
+	if(GaussianIndex > UB.NumGaussians) return ;
+
+    Gaussian G = FetchGaussian(GaussianIndex);
+
+	float3 ViewSpacePosition = 0;
+	if(IsInFrustrum(G.Position, UB.View, UB.Projection, ViewSpacePosition)) {
+
+		CovarianceMatrix Cov3D = ComputeCovarianceMatrix(G.Scale, G.Rotation);
+		// Project to pixel space 2D covariance
+		float3 Cov2D = ProjectCovarianceMatrixToScreen(G.Position, UB.Focal, UB.FieldOfView, Cov3D, UB.View);
+
+		// Expand the variance magnitude (screen space) to be conservative
+		float  Expand        = 0.3f;
+		float  Det           = Cov2D.x * Cov2D.z - Cov2D.y * Cov2D.y;
+		float3 Cov2DExpanded = float3(Cov2D.x + Expand, Cov2D.y, Cov2D.z + Expand);
+		float  DetExpanded   = Cov2DExpanded.x * Cov2DExpanded.z - Cov2DExpanded.y * Cov2DExpanded.y;
+		// Reduce the opacity of the projected 2d gaussian (because we expanded the variance, ie. size of the gaussian)
+		float  Scaling       =  sqrt(max(0.000025f, Det / DetExpanded));
+
+		if (DetExpanded <= 0.0f) return;
+
+		float  InvDet = 1.f / DetExpanded;
+		float3 Conic  = float3(Cov2DExpanded.z * InvDet, -Cov2DExpanded.y * InvDet, Cov2DExpanded.x * InvDet);
+
+		// Compute extent in screen space (by finding eigenvalues of
+		// 2D covariance matrix). Use extent to compute a bounding rectangle
+		// of screen-space tiles that this Gaussian overlaps with. Quit if
+		// rectangle covers 0 tiles. 
+		// Eigenvalues of 2D covariance matrix denotes the variance of the 
+		// Gaussian in the directions of the eigenvectors, which are the
+		// principal axes of the Gaussian. 
+		float Mean    = 0.5f * (Cov2DExpanded.x + Cov2DExpanded.z);
+		float Lambda1 = Mean + sqrt(max(0.1f, Mean * Mean - DetExpanded));
+		float Lambda2 = Mean - sqrt(max(0.1f, Mean * Mean - DetExpanded));
+		// Heuristic: use 3 * sigma (>= 99.7% of the Gaussian) as the radius
+		float Radius  = ceil(3.f * sqrt(max(Lambda1, Lambda2)));
+		// Reject tiny Gaussians
+		if(Radius < 0.5f) return ;
+		float4 HomogeneousW   = mul(UB.ViewProjection, float4(G.Position, 1));
+		float3 Homogeneous    = HomogeneousW.xyz / float(HomogeneousW.w +  + 1e-7f);
+		float2 ScreenPosition = NDC2Screen(Homogeneous.xy);
+
+		uint4 MinMaxTileCoords = GetOverlappingTiles(ScreenPosition, Radius);
+		// Reject Gaussians that are completely outside the screen 
+		if(all(MinMaxTileCoords.xy == MinMaxTileCoords.zw)) return;
+	
+		int GaussianCount = WaveActiveSum(1);
+		int GaussianRank  = WavePrefixSum(1);
+		int GaussianBaseIndex = 0;
+		if(WaveIsFirstLane()) {
+			InterlockedAdd(g_RWGaussianActiveCountBuffer[0], GaussianCount, GaussianBaseIndex);
+		}
+		GaussianBaseIndex = WaveReadLaneFirst(GaussianBaseIndex);
+
+		// Store the indices of active gaussians into a list.
+		int ActiveListIndex = GaussianBaseIndex + GaussianRank;
+
+		g_RWActiveGaussianListBuffer[ActiveListIndex] = GaussianIndex;
+		g_RWActiveGaussianDepthBuffer[ActiveListIndex] = ViewSpacePosition.z;
+		g_RWActiveGaussianScreenPositionBuffer[ActiveListIndex] = ScreenPosition;
+		g_RWActiveGaussianScreenRadiusBuffer[ActiveListIndex] = Radius;
+		g_RWActiveGaussianConicWBuffer[ActiveListIndex] = float4(Conic, G.Alpha * Scaling);
+		
+		g_RWActiveGaussianTileCountBuffer[ActiveListIndex] =
+			(MinMaxTileCoords.z - MinMaxTileCoords.x) * (MinMaxTileCoords.w - MinMaxTileCoords.y);
+	}
+}
+
+float3 SH3Evaluate(float3 ViewDirection, SHCoefficents3 SH3, int Degree)
+{
+	const float SH_C0 = 0.28209479177387814f;
+	const float SH_C1 = 0.4886025119029199f;
+	const float SH_C2[] = {
+		1.0925484305920792f,
+		-1.0925484305920792f,
+		0.31539156525252005f,
+		-1.0925484305920792f,
+		0.5462742152960396f
+	};
+	const float SH_C3[] = {
+		-0.5900435899266435f,
+		2.890611442640554f,
+		-0.4570457994644658f,
+		0.3731763325901154f,
+		-0.4570457994644658f,
+		1.445305721320277f,
+		-0.5900435899266435f
+	};
+	// The SH stored in the gaussians is "flipped" compared to ordinary computer graphics
+	// conventions.
+	float3 NViewDirection = -ViewDirection;
+
+	float3 result = SH_C0 * SH3.Low.Color;
+
+	if(Degree >= 1) {
+		float x = NViewDirection.x;
+		float y = NViewDirection.y;
+		float z = NViewDirection.z;
+		result = result - SH_C1 * y * SH3.Low.SH1[0] + SH_C1 * z * SH3.Low.SH1[1] - SH_C1 * x * SH3.Low.SH1[2];
+
+		if(Degree >= 2) {
+			float xx = x * x, yy = y * y, zz = z * z;
+			float xy = x * y, yz = y * z, xz = x * z;
+			result = result +
+				SH_C2[0] * xy * SH3.Low.SH2[0] +
+				SH_C2[1] * yz * SH3.Low.SH2[1] +
+				SH_C2[2] * (2.0f * zz - xx - yy) * SH3.Low.SH2[2] +
+				SH_C2[3] * xz * SH3.Low.SH2[3] +
+				SH_C2[4] * (xx - yy) * SH3.Low.SH2[4];
+
+			if(Degree >= 3) {
+				result = result +
+					SH_C3[0] * y * (3.0f * xx - yy) * SH3.SH3[0] +
+					SH_C3[1] * xy * z * SH3.SH3[1] +
+					SH_C3[2] * y * (4.0f * zz - xx - yy) * SH3.SH3[2] +
+					SH_C3[3] * z * (2.0f * zz - 3.0f * xx - 3.0f * yy) * SH3.SH3[3] +
+					SH_C3[4] * x * (4.0f * zz - xx - yy) * SH3.SH3[4] +
+					SH_C3[5] * z * (xx - yy) * SH3.SH3[5] +
+					SH_C3[6] * x * (xx - 3.0f * yy) * SH3.SH3[6];
+			}
+		}
+	}
+	// Seems that 3DGS padded the SH (maybe this made optimization easier?)
+	result += 0.5f;
+	return max(result, 0.0f);
+}
+
+
+[numthreads(WAVE_SIZE, 1, 1)]
+void ShadeActiveGaussians (uint DispatchID : SV_DispatchThreadID) {
+
+	if(DispatchID >= g_RWGaussianActiveCountBuffer[0]) return;
+
+	int ActiveListIndex = DispatchID;
+	int GaussianIndex   = g_RWActiveGaussianListBuffer[ActiveListIndex];
+
+	float3 GaussianPosition = FetchGaussian(GaussianIndex).Position;
+	float3 ViewDirection = normalize(UB.CameraPosition - GaussianPosition);
+	SHCoefficents3 SH3 = FetchGaussianSHCoefficients(GaussianIndex, 3);
+	g_RWActiveGaussianColorBuffer[ActiveListIndex] = SH3Evaluate(ViewDirection, SH3, 3);
+}
+
+// scan sum g_RWActiveGaussianTileCountBuffer into g_RWActiveGaussianInstanceBaseBuffer
+
+[numthreads(1, 1, 1)]
+void SetActiveGaussianInstanceCount () {
+	int TileCount = UB.TileDimensions.x * UB.TileDimensions.y;
+	g_RWActiveGaussianInstanceCountBuffer[0] =
+	 g_RWActiveGaussianInstanceBaseBuffer[TileCount - 1] + g_RWActiveGaussianTileCountBuffer[TileCount - 1];
+}
+
+uint MakeKey(int TileIndex, float Depth) {
+	return (TileIndex << 19) | (0x7ffffu & (asuint(Depth) >> 4));
+}
+
+int GetTileIndexFromKey(uint Key) {
+	return int(Key >> 19);
+}
+
+[numthreads(WAVE_SIZE, 1, 1)]
+void AssignGaussianInstanceKeys (uint DispatchID : SV_DispatchThreadID) {
+	if(DispatchID >= g_RWGaussianActiveCountBuffer[0]) return;
+	int Base       = g_RWActiveGaussianInstanceBaseBuffer[DispatchID];
+
+	float2 ScreenPosition = g_RWActiveGaussianScreenPositionBuffer[DispatchID];
+	float  ScreenRadius   = g_RWActiveGaussianScreenRadiusBuffer[DispatchID];
+	uint4  MinMaxTileCoords = GetOverlappingTiles(ScreenPosition, ScreenRadius);
+	int    Count = (MinMaxTileCoords.z - MinMaxTileCoords.x) * (MinMaxTileCoords.w - MinMaxTileCoords.y);
+	int MaxCount = WaveActiveMax(Count);
+
+	for(int i = 0; i < MaxCount; i++) {
+		if(i < Count) {
+			int2 TileCoords = int2(
+				MinMaxTileCoords.x + i % (MinMaxTileCoords.z - MinMaxTileCoords.x),
+				MinMaxTileCoords.y + i / (MinMaxTileCoords.z - MinMaxTileCoords.x)
+			);
+			uint TileIndex = TileCoords.y * UB.TileDimensions.x + TileCoords.x;
+			// Key: | TileIndex (13 bits) | Depth (19 bits) |
+			// IEEE float has 23 bits for mantissa, we drop 4 bits of precision
+			// So that we can stuff everything into a uint
+			uint Key = MakeKey(TileIndex, g_RWActiveGaussianDepthBuffer[DispatchID]);
+			g_RWActiveGaussianInstanceKeyBuffer[Base + i]           = Key;
+			// g_RWActiveGaussianInstanceSortIndexBuffer[Base + i]     = Base + i;
+			g_RWActiveGaussianInstanceGaussianIndexBuffer[Base + i] = DispatchID;
+		}
+	}	
+}
+
+// sort g_RWActiveGaussianInstanceIndexBuffer with g_RWActiveGaussianInstanceKeyBuffer as keys
+// into g_RWActiveGaussianInstanceKeySortedBuffer and g_RWActiveGaussianInstanceGaussianIndexSortedBuffer
+
+[numthreads(WAVE_SIZE, 1, 1)]
+void FindTileGaussianInstanceStarts (uint DispatchID : SV_DispatchThreadID) {
+	for(int i = 0; i < DEFAULT_REPEAT; i++) {
+		int Rank  = DispatchID + i * WAVE_SIZE;
+		if(Rank < g_RWGaussianActiveCountBuffer[0]) {
+			int TileIndex     = GetTileIndexFromKey(g_RWActiveGaussianInstanceKeySortedBuffer[Rank]);
+			int PrevIndex = (Rank == 0) ? -1 : g_RWActiveGaussianInstanceKeySortedBuffer[Rank - 1];
+			// -1 produces all 1s, so we can use it as a sentinel
+			int PrevTileIndex = GetTileIndexFromKey(PrevIndex);
+			if(TileIndex != PrevTileIndex) {
+				g_RWTileGaussianInstanceStartBuffer[TileIndex] = Rank;
+			}
+		}
+	}
+}
+
+int GetGaussianInstanceCount () {
+	return g_RWActiveGaussianInstanceCountBuffer[0];
+}
+
+// Okay we're prepared to rasterize tiles.
+// Dispatch a wave for each tile.
+// TODO i think i can do this with a better implementation...
+
+// Process a batch of 32 gaussians at a time
+#define GAUSSIAN_BATCH_SIZE 32
+groupshared float4 LocalGsConicWBuffer[GAUSSIAN_BATCH_SIZE];
+groupshared float3 LocalGsColorBuffer[GAUSSIAN_BATCH_SIZE];
+groupshared float2 LocalGsScreenPositionBuffer[GAUSSIAN_BATCH_SIZE];
+
+// Keep track of the accumulated transparency of pixels in this tile
+groupshared float  LocalTransparencyBuffer[TILE_SIZE * TILE_SIZE];
+groupshared float3 LocalColorBuffer[TILE_SIZE * TILE_SIZE];
+
+[numthreads(WAVE_SIZE, 1, 1)]
+void RasterizeActiveGaussians (uint GroupID : SV_GroupID, uint LocalID : SV_GroupThreadID) {
+	int  TileIndex  = GroupID;
+	int2 TileCoords = int2(TileIndex % UB.TileDimensions.x, TileIndex / UB.TileDimensions.x);
+	int  GaussianInstanceStart = g_RWTileGaussianInstanceStartBuffer[TileIndex];
+	bool bIsLastTile = TileIndex == (UB.TileDimensions.x * UB.TileDimensions.y - 1);
+	int  GaussianInstanceEnd   = 
+		bIsLastTile ? GetGaussianInstanceCount() : g_RWTileGaussianInstanceStartBuffer[TileIndex + 1];
+	int REPEAT = (GaussianInstanceEnd - GaussianInstanceStart + GAUSSIAN_BATCH_SIZE - 1) / GAUSSIAN_BATCH_SIZE;
+
+#if (TILE_SIZE * TILE_SIZE) % WAVE_SIZE != 0
+// For maximum concurrency
+#error "TILE_SIZE^2 should be a multiple of WAVE_SIZE"
+#endif
+	// Set the transparency of texels within this tile to 1.0
+	for(int BaseTexelIndex = 0; BaseTexelIndex < TILE_SIZE * TILE_SIZE; BaseTexelIndex += WAVE_SIZE) {
+		LocalTransparencyBuffer[BaseTexelIndex + LocalID] = 1.0f;
+	}
+
+	for(int Round = 0; Round < REPEAT; Round ++) {
+		// Process GAUSSIAN_BATCH_SIZE gaussians at a time
+		// Load them into shared memory
+		// Barrier reads from the previous iteration
+		GroupMemoryBarrierWithGroupSync();
+		int REPEAT_INNER = (GAUSSIAN_BATCH_SIZE + WAVE_SIZE - 1) / WAVE_SIZE;
+		int GaussianBatchBase = GaussianInstanceStart + Round * GAUSSIAN_BATCH_SIZE;
+		for(int Round_Inner = 0; Round_Inner < REPEAT_INNER; Round_Inner ++) {
+			int GaussianRankInBatch = Round_Inner * WAVE_SIZE + LocalID;
+			int GaussianInstanceRank = GaussianBatchBase + GaussianRankInBatch;
+			if(GaussianInstanceRank < GaussianInstanceEnd) {
+				int ActiveGaussianIndex   = g_RWActiveGaussianInstanceGaussianIndexSortedBuffer[GaussianInstanceRank];
+
+				float4 ConicW = g_RWActiveGaussianConicWBuffer[ActiveGaussianIndex];
+				float3 Color  = g_RWActiveGaussianColorBuffer[ActiveGaussianIndex];
+				float2 ScreenPosition = g_RWActiveGaussianScreenPositionBuffer[ActiveGaussianIndex];
+				LocalGsConicWBuffer[GaussianRankInBatch] = ConicW;
+				LocalGsColorBuffer[GaussianRankInBatch]  = Color;
+				LocalGsScreenPositionBuffer[GaussianRankInBatch] = ScreenPosition;
+			}
+		}
+		GroupMemoryBarrierWithGroupSync();
+		// Rasterize the batch
+		int NumGaussians = min(GAUSSIAN_BATCH_SIZE, GaussianInstanceEnd - GaussianBatchBase);
+		// Enumerate each pixel in the tile, and process 1 pixel per thread
+		int TexelCount = TILE_SIZE * TILE_SIZE;
+		for(int TexelBaseRank = 0; TexelBaseRank < TexelCount; TexelBaseRank += WAVE_SIZE) {
+			int TexelTileIndex = TexelBaseRank + LocalID;
+			int2 TexelCoords = int2(
+				TexelTileIndex % TILE_SIZE,
+				TexelTileIndex / TILE_SIZE
+			) + TileCoords * TILE_SIZE;
+			float2 TexelScreenPosition = float2(TexelCoords) + 0.5f;
+			float  Transparency        = LocalTransparencyBuffer[TexelTileIndex];
+			float3 Color               = LocalColorBuffer[TexelTileIndex];
+			bool   PixelCompleted      = Transparency > 0.9999f;
+			if(WaveActiveAllTrue(PixelCompleted)) {
+				// All threads finished rendering their pixel. Skip to the next ones.
+				continue;
+			}
+
+			// Enumerate all gaussians in the batch
+			[unroll(GAUSSIAN_BATCH_SIZE)]
+			for(int GaussianBatchRank = 0; GaussianBatchRank < min(GAUSSIAN_BATCH_SIZE, NumGaussians); GaussianBatchRank ++) {
+				// Resample using conic matrix (cf. "Surface 
+				// Splatting" by Zwicker et al., 2001)
+				float2 GaussianScreenPosition = LocalGsScreenPositionBuffer[GaussianBatchRank];
+				float4 ConicW                 = LocalGsConicWBuffer[GaussianBatchRank];
+				float3 GaussianColor          = LocalGsColorBuffer[GaussianBatchRank];
+				float2 D                      = GaussianScreenPosition - TexelScreenPosition;
+				float Power = -0.5f * (ConicW.x * D.x * D.x + ConicW.z * D.y * D.y) - ConicW.y * D.x * D.y;
+				if (Power <= 0.f) {
+					// Eq. (2) from 3D Gaussian splatting paper.
+					// Obtain alpha by multiplying with Gaussian opacity
+					// and its exponential falloff from mean.
+					// Avoid numerical instabilities (see paper appendix). 
+					float Alpha = min(0.99f, ConicW.w * exp(Power));
+					if (Alpha >= 1.0f / 255.0f) {
+
+						// Eq. (3) from 3D Gaussian splatting paper.
+						Color += GaussianColor * Alpha * Transparency;
+
+						// if(invdepth)
+						// expected_invdepth += (1 / depths[collected_id[j]]) * alpha * T;
+
+						Transparency *= (1 - Alpha);
+					}
+				}
+			}
+			// Write back the results
+			LocalTransparencyBuffer[TexelTileIndex] = Transparency;
+			LocalColorBuffer[TexelTileIndex] = Color;
+		}
+	}
+
+	// Write the results back to the global buffers
+	for(int TexelBaseRank = 0; TexelBaseRank < TILE_SIZE * TILE_SIZE; TexelBaseRank += WAVE_SIZE) {
+		int TexelTileIndex = TexelBaseRank + LocalID;
+		int2 TexelCoords = int2(
+			TexelTileIndex % TILE_SIZE,
+			TexelTileIndex / TILE_SIZE
+		) + TileCoords * TILE_SIZE;
+		int PixelIndex = TexelCoords.y * UB.ScreenDimensions.x + TexelCoords.x;
+		// Gamma correct to HDR
+		float3 HDRColor = pow(LocalColorBuffer[TexelTileIndex], 1.0f / 2.2f);
+		g_RW_GColorTexture[TexelCoords] = float4(HDRColor, LocalTransparencyBuffer[TexelTileIndex]);
+	}
+}

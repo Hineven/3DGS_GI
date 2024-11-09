@@ -14,56 +14,64 @@ StructuredBuffer<float3> g_GaussianPositionBuffer;
 // The buffer holding all the gaussian alphas
 StructuredBuffer<float>  g_GaussianAlphaBuffer;
 // The buffer holding all the gaussian rotations (quaternions)
-StructuredBuffer<float3> g_GaussianRotationBuffer;
+StructuredBuffer<float4> g_GaussianRotationBuffer;
 // The buffer holding all the gaussian scales (xyz)
 StructuredBuffer<float3> g_GaussianScaleBuffer;
 
-// Coarse radius of projected gaussians in screen space
-StructuredBuffer<float> g_RWGaussianCoarseRadiusBuffer;
-// Number of screen tiles overlapped by each gaussian
-StructuredBuffer<uint>  g_RWGaussianNumTilesOverlappedBuffer;
-
 // SH Coefficients
-StructuredBuffer<float3> g_RWGaussianAlbedoBuffer;
+StructuredBuffer<float3> g_GaussianColorBuffer;
 // Stride 3
-StructuredBuffer<float3> g_RWGaussianSH1Buffer;
+StructuredBuffer<float3> g_GaussianSH1Buffer;
 // Stride 5
-StructuredBuffer<float3> g_RWGaussianSH2Buffer;
+StructuredBuffer<float3> g_GaussianSH2Buffer;
 // Stride 7
-StructuredBuffer<float3> g_RWGaussianSH3Buffer;
+StructuredBuffer<float3> g_GaussianSH3Buffer;
+
+// Store indirect dispatch commands
+RWStructuredBuffer<DispatchIndirectCommand> g_RWDispatchIndirectCommandBuffer;
+StructuredBuffer<uint> g_ThreadsToDispatchCountBuffer;
 
 // Number of active gaussians. Updated every frame.
-StructuredBuffer<uint>  g_RWGaussianActiveCountBuffer;
+RWStructuredBuffer<uint>  g_RWGaussianActiveCountBuffer;
 // List of active gaussian indices
-StructuredBuffer<uint>  g_RWActiveGaussianListBuffer;
+RWStructuredBuffer<uint>  g_RWActiveGaussianListBuffer;
 // Their corresponding depths
-StructuredBuffer<float> g_RWActiveGaussianDepthBuffer;
+RWStructuredBuffer<float> g_RWActiveGaussianDepthBuffer;
 // Screen positions of the active gaussians
-StructuredBuffer<float2> g_RWActiveGaussianScreenPositionBuffer;
+RWStructuredBuffer<float2> g_RWActiveGaussianScreenPositionBuffer;
 // Screen radius
-StructuredBuffer<float>  g_RWActiveGaussianScreenRadiusBuffer;
+RWStructuredBuffer<float>  g_RWActiveGaussianScreenRadiusBuffer;
 // Conic screen space filter kernel, and extra opacity W
-StructuredBuffer<float>  g_RWActiveGaussianConicWBuffer;
+RWStructuredBuffer<float4> g_RWActiveGaussianConicWBuffer;
 // Number of tiles overlapped by each active gaussian
-StructuredBuffer<uint>   g_RWActiveGaussianTileCountBuffer;
+RWStructuredBuffer<uint>   g_RWActiveGaussianTileCountBuffer;
 // Scan sum of g_RWActiveGaussianTileCountBuffer
-StructuredBuffer<uint>   g_RWActiveGaussianInstanceBaseBuffer;
+RWStructuredBuffer<uint>   g_RWActiveGaussianInstanceBaseBuffer;
+// Number of (active) gaussian instances
+RWStructuredBuffer<uint>   g_RWActiveGaussianInstanceCountBuffer;
 // Evaluated color for active gaussians
-StructuredBuffer<float3> g_RWActiveGaussianColorBuffer;
+RWStructuredBuffer<float3> g_RWActiveGaussianColorBuffer;
 
 // Sort key (uint32) of each gaussian instance 
-StructuredBuffer<uint>   g_RWActiveGaussianInstanceKeyBuffer;
-// Indirect sorting index
-StructuredBuffer<uint>   g_RWActiveGaussianInstanceSortIndexBuffer;
+RWStructuredBuffer<uint>   g_RWActiveGaussianInstanceKeyBuffer;
+RWStructuredBuffer<uint>   g_RWActiveGaussianInstanceKeySortedBuffer;
+// // Indirect sorting index
+// RWStructuredBuffer<uint>   g_RWActiveGaussianInstanceSortIndexBuffer;
 // Refers to the original gaussian inside active gaussian list from gaussian instance
-StructuredBuffer<uint>   g_RWActiveGaussianInstanceGaussianIndexBuffer;
+RWStructuredBuffer<uint>   g_RWActiveGaussianInstanceGaussianIndexBuffer;
+// Sorted.
+RWStructuredBuffer<uint>   g_RWActiveGaussianInstanceGaussianIndexSortedBuffer;
 
 // The index of the starting gaussian in the sorted list for each tile
-StructuredBuffer<uint>   g_RWTileGaussianInstanceStartBuffer; 
+RWStructuredBuffer<uint>   g_RWTileGaussianInstanceStartBuffer; 
 
-RWTexture2D<float4>      g_RW_GColorBuffer;
+RWTexture2D<float4>      g_RW_GColorTexture;
+Texture2D<float4>        g_GColorTexture;
 
 // All non-resource uniforms
 ConstantBuffer<UniformBlock> UB;
+
+SamplerState g_LinearClampSampler;
+SamplerState g_LinearWrapSampler;
 
 #endif // INC_3DGS_INC_HLSL

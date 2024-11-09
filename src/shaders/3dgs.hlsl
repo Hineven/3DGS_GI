@@ -12,35 +12,33 @@ float2 NDC2Screen(float2 NDC) {
 Gaussian FetchGaussian(uint Index) {
     float3 Position = g_GaussianPositionBuffer[Index];
     float  Alpha = g_GaussianAlphaBuffer[Index];
-    float3 Rotation = g_GaussianRotationBuffer[Index];
-    asdfsadfdasf// quat??
-    float4 Rotation_Quat = float4(Rotation.x, Rotation.y, Rotation.z, 1.0f);
+    float4 Rotation = g_GaussianRotationBuffer[Index];
     float3 Scale = g_GaussianScaleBuffer[Index];
     Gaussian GaussianData = { Position, Alpha, Rotation, Scale };
     return GaussianData;
 }
 
 SHCoefficents3 FetchGaussianSHCoefficients (int Index, int Degree) {
-    SHCoefficents3 SHData = { 0 };
-    SHData.Low.Albedo = g_RWGaussianAlbedoBuffer[Index];
+    SHCoefficents3 SHData = (SHCoefficents3) 0;
+    SHData.Low.Color = g_GaussianColorBuffer[Index];
     if(Degree >= 1) {
-        SHData.Low.SH1[0] = g_RWGaussianSH1Buffer[Index * 3 + 0];
-        SHData.Low.SH1[1] = g_RWGaussianSH1Buffer[Index * 3 + 1];
-        SHData.Low.SH1[2] = g_RWGaussianSH1Buffer[Index * 3 + 2];
+        SHData.Low.SH1[0] = g_GaussianSH1Buffer[Index * 3 + 0];
+        SHData.Low.SH1[1] = g_GaussianSH1Buffer[Index * 3 + 1];
+        SHData.Low.SH1[2] = g_GaussianSH1Buffer[Index * 3 + 2];
         if(Degree >= 2) {
-            SHData.Low.SH2[0] = g_RWGaussianSH2Buffer[Index * 5 + 0];
-            SHData.Low.SH2[1] = g_RWGaussianSH2Buffer[Index * 5 + 1];
-            SHData.Low.SH2[2] = g_RWGaussianSH2Buffer[Index * 5 + 2];
-            SHData.Low.SH2[3] = g_RWGaussianSH2Buffer[Index * 5 + 3];
-            SHData.Low.SH2[4] = g_RWGaussianSH2Buffer[Index * 5 + 4];
+            SHData.Low.SH2[0] = g_GaussianSH2Buffer[Index * 5 + 0];
+            SHData.Low.SH2[1] = g_GaussianSH2Buffer[Index * 5 + 1];
+            SHData.Low.SH2[2] = g_GaussianSH2Buffer[Index * 5 + 2];
+            SHData.Low.SH2[3] = g_GaussianSH2Buffer[Index * 5 + 3];
+            SHData.Low.SH2[4] = g_GaussianSH2Buffer[Index * 5 + 4];
             if(Degree >= 3) {
-                SHData.SH3[0] = g_RWGaussianSH3Buffer[Index * 7 + 0];
-                SHData.SH3[1] = g_RWGaussianSH3Buffer[Index * 7 + 1];
-                SHData.SH3[2] = g_RWGaussianSH3Buffer[Index * 7 + 2];
-                SHData.SH3[3] = g_RWGaussianSH3Buffer[Index * 7 + 3];
-                SHData.SH3[4] = g_RWGaussianSH3Buffer[Index * 7 + 4];
-                SHData.SH3[5] = g_RWGaussianSH3Buffer[Index * 7 + 5];
-                SHData.SH3[6] = g_RWGaussianSH3Buffer[Index * 7 + 6];
+                SHData.SH3[0] = g_GaussianSH3Buffer[Index * 7 + 0];
+                SHData.SH3[1] = g_GaussianSH3Buffer[Index * 7 + 1];
+                SHData.SH3[2] = g_GaussianSH3Buffer[Index * 7 + 2];
+                SHData.SH3[3] = g_GaussianSH3Buffer[Index * 7 + 3];
+                SHData.SH3[4] = g_GaussianSH3Buffer[Index * 7 + 4];
+                SHData.SH3[5] = g_GaussianSH3Buffer[Index * 7 + 5];
+                SHData.SH3[6] = g_GaussianSH3Buffer[Index * 7 + 6];
             }
         }
     }
@@ -54,10 +52,10 @@ float EvaluateNormalizedGaussian (float3 Position) {
     return NormalizationFactor * exp(-0.5f * dot(Position, Position));
 }
 
-float3 QuaternionRotate (float3 Vector, float3 Quaternion) {
-    float3 q = Quaternion;
-    float3 v = Vector;
-    return v + 2.0f * cross(q, cross(q, v) + q * dot(q, v));
+float3 QuaternionRotate (float3 Vector, float4 Quaternion) {
+    float3 q = Quaternion.xyz;
+    float3 t = 2.0f * cross(q, Vector);
+    return Vector + Quaternion.w * t + cross(q, t);
 }
 
 float EvaluateGaussian (Gaussian GaussianData, float3 Position) {
@@ -90,15 +88,18 @@ float3x3 EvaluateRotationMatrix (float4 q) {
 // Perform frustrum culling
 bool IsInFrustrum (
 	float3 Position,
-	float3x4 View,
-	float3x4 Projection,
+	float4x4 View,
+	float4x4 Projection,
 	out float3 ViewSpacePosition)
 {
 	// Bring points to screen space
-	float4 Homogeneous = mul(Projection, float4(Position, 1.0f));
+    float4 ViewW = mul(View, float4(Position, 1.0f));
+    
+    ViewSpacePosition = ViewW.xyz;
+	
+    float4 Homogeneous = mul(Projection, ViewW);
 	float  InvW = 1.f / (Homogeneous.w + 1e-7f);
 	float3 Projected = Homogeneous.xyz * InvW;
-    ViewSpacePosition = mul(View, float4(Position, 1.0f)).xyz;
 
     float Tolerance = 0.2f;
     float ZNear = 0.2f;
@@ -106,7 +107,7 @@ bool IsInFrustrum (
     // Check if the point is inside the frustrum
     if(any(Projected.xy < -1.0f - Tolerance) || any(Projected.xy > 1.0f + Tolerance) 
     // Make sure that z is within 0 and 1
-    || any(Projected.z < ZNear) || any(Projected.z > 1.0f - Tolerance))
+    || Projected.z < ZNear || Projected.z > 0.99f)
     {
         return false;
     }
@@ -144,15 +145,15 @@ CovarianceMatrix ComputeCovarianceMatrix (float3 Scale, float4 Rotation) {
 
 // Project the covariance matrix to 2D
 // @return The screen space 2D covariance matrix (m00, m01, m11)
-float3 ProjectCovarianceMatrixToScreen(float3 mean, float2 focal, float2 tan_fov, CovarianceMatrix Covariance3D, float3x4 View)
+float3 ProjectCovarianceMatrixToScreen(float3 mean, float2 focal, float2 tan_fov, CovarianceMatrix Covariance3D, float4x4 View)
 {
-    float3 t = mul(View, float4(mean, 1.0));
+    float3 t = mul(View, float4(mean, 1.0)).xyz;
 
-    const float limx = 1.3f * tan_fov.x;
-    const float limy = 1.3f * tan_fov.y;
+    const float limx = 0.65f * tan_fov.x;
+    const float limy = 0.65f * tan_fov.y;
     const float txtz = t.x / t.z;
     const float tytz = t.y / t.z;
-    // Clamp to frustum
+    // Clamp to (fov expanded) frustum
     t.x = clamp(txtz, -limx, limx) * t.z;
     t.y = clamp(tytz, -limy, limy) * t.z;
 

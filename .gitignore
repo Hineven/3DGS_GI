@@ -1,2 +1,5 @@
 data/*
 src/.vscode/*
+cmake-build-debug/*
+cmake-build-release/*
+src/.vscode/*

@@ -11,10 +11,12 @@
 
 AppMain::AppMain() {
     app_internal_ = std::make_unique<AppInternal>();
+    AppInternal::SetSingleton(app_internal_.get());
 }
 
 AppMain::~AppMain() {
     // make unique_ptr work
+    AppInternal::SetSingleton(nullptr);
 }
 
 int AppMain::Run() {
