@@ -48,18 +48,23 @@ protected:
         GfxBuffer active_gaussian_instance_gaussian_index_sorted;
 
         GfxBuffer tile_gaussian_instance_start;
+        GfxBuffer tile_gaussian_instance_end;
 
         GfxBuffer UB;
-    } buf_;
+    } buf_ {};
 
     struct {
         GfxTexture G_color;
 //        GfxTexture output;
-    } tex_;
+    } tex_ {};
 
     struct {
+        // Used to write the vertex/index buffer for ray traced 3dgs proxy meshes.
+        GfxKernel GenerateRTMesh;
+
         GfxKernel GenerateDispatchIndirect;
 
+        GfxKernel ClearCounters;
         GfxKernel TransformAndSplatGaussians;
         GfxKernel ShadeActiveGaussians;
         GfxKernel SetActiveGaussianInstanceCount;
@@ -67,16 +72,22 @@ protected:
         GfxKernel FindTileGaussianInstanceStarts;
         GfxKernel RasterizeActiveGaussians;
 
+        GfxKernel TraceScheduledRays;
+
         GfxKernel TonemapAndDraw;
-    } kernel_;
+    } kernel_ {};
 
     struct {
         int wave_lane_count {};
     } cfg_;
 
-    GfxProgram program_;
+    GfxProgram program_ {};
+
+    GfxSbt sbt_ {};
 
     int frame_index_ {};
+
+    bool should_build_acceleration_structure_ {true};
 };
 
 #endif //INC_3DGS_ADVGI_RENDERER_H

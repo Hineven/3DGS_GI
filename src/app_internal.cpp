@@ -7,6 +7,9 @@
 #include <iostream>
 #include "app_internal.h"
 #include "renderer.h"
+#include "gfx_imgui.h"
+#include "glm/detail/type_quat.hpp"
+#include "glm/ext/quaternion_trigonometric.hpp"
 
 AppInternal::AppInternal() {}
 
@@ -27,10 +30,30 @@ int AppInternal::Run () {
 #endif
     );
 
-//    auto dev = gfxGetDevice(gfx_);
-//    if(dev == nullptr) {
-//        puts("qwqeqwe");
-//    }
+
+    // ImGui
+    {
+        // Create ImGui context using additional needed fonts
+        char const  *fonts[] = {"C:\\Windows\\Fonts\\seguisym.ttf"};
+        ImFontConfig fontConfigs[1];
+        fontConfigs[0].MergeMode           = true;
+        static const ImWchar glyphRanges[] = {
+                0x2310,
+                0x23FF, // Media player icons
+                0x1F500,
+                0x1F505, // Restart icon
+                0,
+        };
+        fontConfigs[0].GlyphRanges = &glyphRanges[0];
+        fontConfigs[0].SizePixels  = 30.0f;
+        fontConfigs[0].GlyphOffset.y += 5.0f; // Need to offset glyphs downward to properly center them
+        if (auto err = gfxImGuiInitialize(gfx_, fonts, 1, fontConfigs); err != kGfxResult_NoError)
+        {
+            std::cerr << "Failed to initialize ImGui: " << err << std::endl;
+            return 1;
+        }
+    }
+
 
     // Detect shader path
     std::string root_path = "";
@@ -63,7 +86,7 @@ int AppInternal::Run () {
 
     // Load scene
     {
-        scene_.LoadGaussians(root_path + "data/counter/point_cloud/iteration_7000/point_cloud.ply");
+        scene_.LoadGaussians(root_path + "data/garden/point_cloud/iteration_30000/point_cloud.ply");
         scene_.UpdateDeviceScene();
     }
 
@@ -72,6 +95,9 @@ int AppInternal::Run () {
 
     renderer->Initialize();
 
+    auto clock = std::chrono::high_resolution_clock();
+
+    double last_frame_time = std::chrono::duration<double>(clock.now().time_since_epoch()).count();
     // Main loop
     while(!gfxWindowIsCloseRequested(window_)) {
         gfxWindowPumpEvents(window_);
@@ -82,6 +108,138 @@ int AppInternal::Run () {
         // Timed sections
         auto queries = renderer->CollectTimedSections();
         // TODO profile them in GUI
+
+
+        // Op flags
+        bool need_reload_shaders = false;
+
+        // UI
+        {
+            ImGui::Begin("3DGS AdvGI");
+            if(ImGui::CollapsingHeader("Camera", ImGuiTreeNodeFlags_DefaultOpen)) {
+                auto & camera = scene_.GetCamera();
+                ImGui::Text("Position: %.2f %.2f %.2f", camera.position.x, camera.position.y, camera.position.z);
+                ImGui::Text("Direction: %.2f %.2f %.2f", camera.direction.x, camera.direction.y, camera.direction.z);
+                ImGui::Text("Up: %.2f %.2f %.2f", camera.up.x, camera.up.y, camera.up.z);
+                ImGui::Text("FOV: %.2f", camera.fov_y);
+                ImGui::Text("Near: %.2f", camera.near);
+                ImGui::Text("Far: %.2f", camera.far);
+            }
+            ImGui::Separator();
+            if(ImGui::Button("Reload shaders (F5)")) {
+                need_reload_shaders = true;
+            }
+            ImGui::End();
+        }
+
+        // Submit the frame (UI
+        {
+            GfxCommandEvent const command_event(gfx_, "DrawImGui");
+            gfxImGuiRender();
+        }
+
+        // Logic
+        double this_frame_time = std::chrono::duration<double>(clock.now().time_since_epoch()).count();
+        float const delta_tick = float(this_frame_time - last_frame_time);
+        last_frame_time = this_frame_time;
+        // Camera navigation
+        {
+            auto & camera = scene_.GetCamera();
+            float const camera_speed = 1.f;
+            if (gfxWindowIsKeyDown(window_, VK_SHIFT))
+            {
+                camera_speed_ *= (float)exp(delta_tick * log(1.002));
+            }
+            if (gfxWindowIsKeyDown(window_, VK_CONTROL)) {
+                camera_speed_ /= (float)exp(delta_tick * log(1.002));
+            }
+            if (gfxWindowIsKeyDown(window_, 'W'))
+            {
+                camera.position += camera.direction * camera_speed * delta_tick;
+            }
+            if (gfxWindowIsKeyDown(window_, 'S'))
+            {
+                camera.position -= camera.direction * camera_speed * delta_tick;
+            }
+            if (gfxWindowIsKeyDown(window_, 'A'))
+            {
+                camera.position -= glm::cross(camera.direction, camera.up) * camera_speed * delta_tick;
+            }
+            if (gfxWindowIsKeyDown(window_, 'D'))
+            {
+                camera.position += glm::cross(camera.direction, camera.up) * camera_speed * delta_tick;
+            }
+            // Roll
+            float roll = 0.f;
+            if(gfxWindowIsKeyDown(window_, 'Q')) {
+                roll += 1.f;
+            }
+            if(gfxWindowIsKeyDown(window_, 'E')) {
+                roll -= 1.f;
+            }
+            if (roll != 0.f)
+            {
+                glm::quat rotation = glm::angleAxis(roll * delta_tick * 0.4f, camera.direction);
+                camera.up = glm::normalize(rotation * camera.up);
+            }
+//            glm::vec4 col {};
+//            glm::vec3 row {};
+//            glm::mat3x4 m = glm::mat3x4(col, col, col);
+//            glm::mat3x4 m2 = glm::mat3x4(row, row, row, row);
+            auto acceleration = glm::vec2(0.0f);
+            if (!ImGui::GetIO().WantCaptureMouse)
+            {
+                acceleration.x -= ImGui::GetMouseDragDelta(0, 0.0f).x;
+                acceleration.y -= ImGui::GetMouseDragDelta(0, 0.0f).y;
+            }
+            glm::vec2 rotation = acceleration * delta_tick * 0.4f;
+            rotation = glm::clamp(rotation, -4e-2f, 4e-2f);
+            // Clamp tiny values to zero to improve convergence to resting state
+            auto const clampRotationMin = glm::lessThan(glm::abs(rotation), glm::vec2(0.00000001f));
+            if (glm::any(clampRotationMin))
+            {
+                if (clampRotationMin.x)
+                {
+                    rotation.x = 0.0f;
+                }
+                if (clampRotationMin.y)
+                {
+                    rotation.y = 0.0f;
+                }
+            }
+            ImGui::ResetMouseDragDelta(0);
+
+            if (!glm::all(glm::equal(rotation, glm::vec2(0.0f))))
+            {
+                // Update translation
+
+                glm::vec3 up = camera.up;
+                glm::vec3 right = glm::normalize(glm::cross(camera.direction, up));
+
+                // Rotate camera
+                glm::quat rotationX = glm::angleAxis(-rotation.x, up);
+                glm::quat rotationY = glm::angleAxis(rotation.y, right);
+
+                const glm::vec3 newForward = normalize(camera.direction * rotationX * rotationY);
+                if (abs(dot(newForward, glm::vec3(0.0f, 1.0f, 0.0f))) < 0.9f)
+                {
+                    // Prevent view and up direction becoming parallel (this uses a FPS style camera)
+                    camera.direction   = newForward;
+                    const glm::vec3 newRight = normalize(cross(camera.direction, up));
+                    camera.up          = normalize(cross(newRight, newForward));
+                }
+            }
+
+        }
+
+        // Hot-reload the shaders if requested
+        if (gfxWindowIsKeyReleased(window_, VK_F5) || need_reload_shaders)
+        {
+            gfxFinish(gfx_);
+            renderer->Destroy();
+            app_assert(renderer->Initialize());
+            std::cout << "Shaders reloaded" << std::endl;
+        }
 
         gfxFrame(gfx_);
     }
@@ -94,6 +252,8 @@ int AppInternal::Run () {
 
     // Destroy scene
     scene_.DestroyDeviceScene();
+
+    gfxImGuiTerminate();
 
     // Destroy samplers
     gfxDestroySamplerState(gfx_, samplers_.linear_clamp);

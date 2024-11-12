@@ -27,6 +27,12 @@ public:
     GfxBuffer gaussian_sh1;
     GfxBuffer gaussian_sh2;
     GfxBuffer gaussian_sh3;
+
+    GfxAccelerationStructure acceleration_structure_;
+    // All gaussians in the scene
+    // TODO split primitives ?
+    GfxRaytracingPrimitive rt_primitive_;
+
 };
 
 #endif //INC_3DGS_ADVGI_DEVICE_SCENE_H

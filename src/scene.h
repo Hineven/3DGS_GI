@@ -24,7 +24,7 @@ public:
     glm::mat4x4 GetProjectionMatrix () const;
 
     glm::vec3 position {0, 0, 0};
-    glm::vec3 look_at {0, 0, -1};
+    glm::vec3 direction {0, 0, -1};
     glm::vec3 up {0, 1, 0};
     // radians
     float fov_y {1.f};
@@ -32,8 +32,8 @@ public:
     // Some windows header macro occupies these names
 #undef near
 #undef far
-    float near  {0.001f};
-    float far   {100.f};
+    float near  {0.05f};
+    float far   {50.f};
 };
 
 class Scene {

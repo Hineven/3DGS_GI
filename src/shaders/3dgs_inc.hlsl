@@ -9,6 +9,12 @@
 #error "WAVE_SIZE must be defined"
 #endif
 
+// Maximum number of closest hits to cache per ray trace.
+// Consistent with the paper.
+#define HIT_BUFFER_SIZE 16
+
+RaytracingAccelerationStructure g_Trace3DGSAccelerationStructure;
+
 // The buffer holding all the gaussian positions
 StructuredBuffer<float3> g_GaussianPositionBuffer;
 // The buffer holding all the gaussian alphas
@@ -62,8 +68,17 @@ RWStructuredBuffer<uint>   g_RWActiveGaussianInstanceGaussianIndexBuffer;
 // Sorted.
 RWStructuredBuffer<uint>   g_RWActiveGaussianInstanceGaussianIndexSortedBuffer;
 
-// The index of the starting gaussian in the sorted list for each tile
+// The index of the starting gaussian in the sorted list for each tile [l, r)
 RWStructuredBuffer<uint>   g_RWTileGaussianInstanceStartBuffer; 
+RWStructuredBuffer<uint>   g_RWTileGaussianInstanceEndBuffer;
+
+// 3DGS ray tracing structs
+// Octahedron encoded ray direction
+RWStructuredBuffer<uint>   g_RWRayToTraceDirectionBuffer;
+RWStructuredBuffer<float3> g_RWRayToTraceOriginBuffer;
+// Keep the result (rgba) of the traced ray
+RWStructuredBuffer<float4> g_RWRayToTraceResultBuffer;
+
 
 RWTexture2D<float4>      g_RW_GColorTexture;
 Texture2D<float4>        g_GColorTexture;
@@ -73,5 +88,9 @@ ConstantBuffer<UniformBlock> UB;
 
 SamplerState g_LinearClampSampler;
 SamplerState g_LinearWrapSampler;
+
+// Output buffers for ray tracing proxy mesh building
+RWStructuredBuffer<float3> g_RW_RTVertexBuffer;
+RWStructuredBuffer<uint>   g_RW_RTIndexBuffer;
 
 #endif // INC_3DGS_INC_HLSL

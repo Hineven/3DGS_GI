@@ -6,6 +6,8 @@ enable_language(CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# Tell gfx to use ImGui
+set(GFX_ENABLE_GUI                ON CACHE BOOL "")
 
 add_subdirectory(ext/gfx)
 add_subdirectory(ext/glm)

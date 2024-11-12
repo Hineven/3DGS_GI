@@ -48,6 +48,9 @@ protected:
         GfxSamplerState point_clamp;
     } samplers_;
 
+    float camera_speed_ {1.f};
+
+
     static void SetSingleton (AppInternal *singleton) ;
 
 public:

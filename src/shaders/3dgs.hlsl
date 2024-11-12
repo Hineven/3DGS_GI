@@ -4,6 +4,19 @@
 #include "../device_shared.hlsl"
 
 #include "3dgs_inc.hlsl"
+#include "select.hlsl"
+#include "math_constants.hlsl"
+
+void Swap(inout float a, inout float b) {
+    float temp = a;
+    a = b;
+    b = temp;
+}
+void Swap(inout int a, inout int b) {
+    int temp = a;
+    a = b;
+    b = temp;
+}
 
 float2 NDC2Screen(float2 NDC) {
     return 0.5f * UB.ScreenDimensions * (NDC + 1.0f);
@@ -71,18 +84,27 @@ float EvaluateGaussian (Gaussian GaussianData, float3 Position) {
     return Value * GaussianData.Alpha;
 }
 
-struct CovarianceMatrix {
+struct SymmetricMatrix {
     float3 Diagonal;
     float3 OffDiagonal;
 };
 
+float3x3 ExpandSymmetricMatrix (SymmetricMatrix C) {
+    float3x3 MC = float3x3(
+        C.Diagonal.x, C.OffDiagonal.x, C.OffDiagonal.y,
+        C.OffDiagonal.x, C.Diagonal.y, C.OffDiagonal.z,
+        C.OffDiagonal.y, C.OffDiagonal.z, C.Diagonal.z
+    );
+    return MC;
+}
+
 float3x3 EvaluateRotationMatrix (float4 q) {
-    float3x3 R = {
-        1 - 2 * q.y * q.y - 2 * q.z * q.z, 2 * q.x * q.y - 2 * q.z * q.w, 2 * q.x * q.z + 2 * q.y * q.w,
-        2 * q.x * q.y + 2 * q.z * q.w, 1 - 2 * q.x * q.x - 2 * q.z * q.z, 2 * q.y * q.z - 2 * q.x * q.w,
-        2 * q.x * q.z - 2 * q.y * q.w, 2 * q.y * q.z + 2 * q.x * q.w, 1 - 2 * q.x * q.x - 2 * q.y * q.y
-    };
-    return R;
+    float3x3 R = float3x3(
+		1.f - 2.f * (q.y * q.y + q.z * q.z), 2.f * (q.x * q.y - q.w * q.z), 2.f * (q.x * q.z + q.w * q.y),
+		2.f * (q.x * q.y + q.w * q.z), 1.f - 2.f * (q.x * q.x + q.z * q.z), 2.f * (q.y * q.z - q.w * q.x),
+		2.f * (q.x * q.z - q.w * q.y), 2.f * (q.y * q.z + q.w * q.x), 1.f - 2.f * (q.x * q.x + q.y * q.y)
+    );
+    return transpose(R);
 }
 
 // Perform frustrum culling
@@ -107,14 +129,14 @@ bool IsInFrustrum (
     // Check if the point is inside the frustrum
     if(any(Projected.xy < -1.0f - Tolerance) || any(Projected.xy > 1.0f + Tolerance) 
     // Make sure that z is within 0 and 1
-    || Projected.z < ZNear || Projected.z > 0.99f)
+    || Projected.z < ZNear || Projected.z >= 1.f)
     {
         return false;
     }
 	return true;
 }
 
-CovarianceMatrix ComputeCovarianceMatrix (float3 Scale, float4 Rotation) {
+float3x3 GetScaleRotationTransform (float3 Scale, float4 Rotation) {
     // Scaling matrix
     float3x3 S = {
         Scale.x, 0, 0,
@@ -123,21 +145,25 @@ CovarianceMatrix ComputeCovarianceMatrix (float3 Scale, float4 Rotation) {
     };
     // Rotation matrix
     float3x3 R = EvaluateRotationMatrix(Rotation);
-    float3x3 M = mul(S, R);
+    return mul(S, R);
+}
+
+SymmetricMatrix ComputeCovarianceMatrix (float3 Scale, float4 Rotation) {
+    float3x3 M = GetScaleRotationTransform(Scale, Rotation);
     // Covariance matrix
     float3x3 Covariance = mul(transpose(M), M);
 
     float3 Diagonal = float3(
-        Covariance._11,
-        Covariance._22,
-        Covariance._33
+        Covariance[0][0],
+        Covariance[1][1],
+        Covariance[2][2]
     );
     float3 OffDiagonal = float3(
-        Covariance._12,
-        Covariance._13,
-        Covariance._23
+        Covariance[0][1],
+        Covariance[0][2],
+        Covariance[1][2]
     );
-    CovarianceMatrix Ret = (CovarianceMatrix)0;
+    SymmetricMatrix Ret = (SymmetricMatrix)0;
     Ret.Diagonal = Diagonal;
     Ret.OffDiagonal = OffDiagonal;
     return Ret;
@@ -145,10 +171,13 @@ CovarianceMatrix ComputeCovarianceMatrix (float3 Scale, float4 Rotation) {
 
 // Project the covariance matrix to 2D
 // @return The screen space 2D covariance matrix (m00, m01, m11)
-float3 ProjectCovarianceMatrixToScreen(float3 mean, float2 focal, float2 tan_fov, CovarianceMatrix Covariance3D, float4x4 View)
+float3 ProjectCovarianceMatrixToScreen(float3 mean, float2 focal, float2 tan_fov, SymmetricMatrix Covariance3D, float4x4 View)
 {
     float3 t = mul(View, float4(mean, 1.0)).xyz;
-
+    // -z -> z, become lhs coordinate
+    {
+        t.z = -t.z;
+    }
     const float limx = 0.65f * tan_fov.x;
     const float limy = 0.65f * tan_fov.y;
     const float txtz = t.x / t.z;
@@ -165,73 +194,122 @@ float3 ProjectCovarianceMatrixToScreen(float3 mean, float2 focal, float2 tan_fov
     float3x3 W = float3x3(
         View[0][0], View[0][1], View[0][2],
         View[1][0], View[1][1], View[1][2],
-        View[2][0], View[2][1], View[2][2]);
+        -View[2][0], -View[2][1], -View[2][2]);
 
-    float3x3 T = mul(W, J);
+    float3x3 Mk = mul(J, W);
 
-    float3x3 C = float3x3(
-        Covariance3D.Diagonal.x, Covariance3D.OffDiagonal.x, Covariance3D.OffDiagonal.y,
-        Covariance3D.OffDiagonal.x, Covariance3D.Diagonal.y, Covariance3D.OffDiagonal.z,
-        Covariance3D.OffDiagonal.y, Covariance3D.OffDiagonal.z, Covariance3D.Diagonal.z);
-
-    float3x3 C_2D = mul(transpose(T), mul(transpose(C), T));
+    float3x3 C = ExpandSymmetricMatrix(Covariance3D);
+    float3x3 C_2D = mul(Mk, mul(C, transpose(Mk)));
 
     return float3(C_2D[0][0], C_2D[0][1], C_2D[1][1]);
 }
 
+float2 UnitVectorToOctahedron(float3 N)
+{
+	N.xy /= dot( 1, abs(N) );
+	if( N.z <= 0 )
+	{
+		N.xy = ( 1 - abs(N.yx) ) * select(N.xy >= 0, float2(1,1), float2(-1,-1));
+	}
+	return N.xy;
+}
 
-// // p(x, mu, sigma) = NormalizationFactor * exp(-0.5 * (x - mu)^T * sigma^-1 * (x - mu))
-// // where NormalizationFactor = 1 / sqrt((2 * pi)^3 * det(sigma))
-// float EvaluateGaussian (float3 Position, float3 GaussianMu, float3 InvDiagonal, float3 InvCovariance, float3  NormalizationFactor) {
-//     // x - mu:
-//     float3 Delta = Position - GaussianMu;
-//     // sigma^-1:
-//     float3x3 InvCovarianceMatrix = {
-//         InvDiagonal.x, InvCovariance.x, InvCovariance.y,
-//         InvCovariance.x, InvDiagonal.y, InvCovariance.z,
-//         InvCovariance.y, InvCovariance.z, InvDiagonal.z
-//     };
-//     // -0.5 * (x - mu)^T * sigma^-1 * (x - mu):
-//     float Exponent = -0.5f * dot(Delta, mul(InvCovarianceMatrix, Delta));
-//     return NormalizationFactor * exp(Exponent);
-// }
+float2 UnitVectorToOctahedron01(float3 N)
+{
+    return (UnitVectorToOctahedron(N) + 1) * 0.5;
+}
 
-// // Evaluate the Gaussian density at the given position.
-// float EvaluateGaussianDensity (GaussianPrecomputed GaussianData, float3 Position) {
-//     float Value = EvaluateGaussian(Position, GaussianData.Position, GaussianData.InvDiagonal, GaussianData.InvCovariance, GaussianData.NormalizationFactor);
-//     return Value * GaussianData.Alpha;
-// }
+float3 OctahedronToUnitVector( float2 Oct )
+{
+	float3 N = float3( Oct, 1 - dot( 1, abs(Oct) ) );
+	float t = max( -N.z, 0 );
+	N.xy += select(N.xy >= 0, float2(-t, -t), float2(t, t));
+	return normalize(N);
+}
 
-// // // Evaluate the spherical harmonics with the given direction and SH coefficients.
-// // float EvaluateSH (float3 Direction, float SH0, float SH1[3], float SH2[5]) {
-// //     float Value = SH0;
-    
-// // }
+float3 Octahedron01ToUnitVector (float2 Oct)
+{
+    return OctahedronToUnitVector(Oct * 2 - 1);
+}
 
-// // void SHNewEval3(float fX, float fY, float fZ, out float pSH[9]) {
-// //     float fC0, fC1, fS0, fS1, fTmpA, fTmpB, fTmpC;
-// //     float fZ2 = fZ * fZ;
-// //     pSH[0] = 0.2820947917738781f;
-// //     pSH[2] = 0.4886025119029199f * fZ;
-// //     pSH[6] = 0.9461746957575601f * fZ2 + -0.3153915652525201f;
-// //     fC0 = fX;
-// //     fS0 = fY;
-// //     fTmpA = -0.48860251190292f;
-// //     pSH[3] = fTmpA * fC0;
-// //     pSH[1] = fTmpA * fS0;
-// //     fTmpB = -1.092548430592079f * fZ;
-// //     pSH[7] = fTmpB * fC0;
-// //     pSH[5] = fTmpB * fS0;
-// //     fC1 = fX * fC0 - fY * fS0;
-// //     fS1 = fX * fS0 + fY * fC0;
-// //     fTmpC = 0.5462742152960395f;
-// //     pSH[8] = fTmpC * fC1;
-// //     pSH[4] = fTmpC * fS1;
-// // }
+// Clamp to [0, 1)
+float saturateDown (float Value) {
+    return clamp(Value, 0.0f, 1.f - FLT_EPSILON);
+}
+float2 saturateDown (float2 Value) {
+    return clamp(Value, 0.0f, 1.f - FLT_EPSILON);
+}
 
-// // // Evaluate the Gaussian color with the given view direction.
-// // float3 EvaluateGaussianColor (GaussianPrecomputed GaussianData, float3 ViewDirection) {
+// Clamp to (0, 1]
+float saturateUp (float Value) {
+    return clamp(Value, FLT_EPSILON, 1.0f);
+}
+float2 saturateUp (float2 Value) {
+    return clamp(Value, FLT_EPSILON, 1.0f);
+}
 
-// // }
+float2 UnpackUnorm2x16 (uint Packed) {
+    return float2(
+        (Packed & 0xFFFF) / 65535.0f,
+        (Packed >> 16) / 65535.0f
+    );
+}
+
+uint PackUnorm2x16 (float2 Unpacked) {
+    Unpacked = saturateDown(Unpacked);
+    return uint(Unpacked.x * 65536.0f) + (uint(Unpacked.y * 65536.0f) << 16);
+}
+
+struct RayToTrace {
+    float3 Direction;
+    float3 Origin;
+    float  RayTMin;
+};
+
+RayToTrace FetchRayToTrace (int RayIndex) {
+    RayToTrace Ray = (RayToTrace)0;
+    float3 Direction = Octahedron01ToUnitVector(UnpackUnorm2x16(g_RWRayToTraceDirectionBuffer[RayIndex]));
+    float3 Origin = g_RWRayToTraceOriginBuffer[RayIndex];
+    Ray.Direction = Direction;
+    Ray.Origin = Origin;
+    return Ray;
+}
+
+// From the paper.
+float EvaluateGaussianResponse (float3 Origin, float3 Direction, Gaussian G) {
+    float3x3 MInvC = ExpandSymmetricMatrix(InvC);
+    float Numerator = dot(G.Position - Origin, mul(MInvC, Direction));
+
+    float T =  
+}
+
+float3 DebugColorTable (int Index) {
+    const float3 _ColorTable[15] = {
+        float3(1, 0, 0),
+        float3(0, 1, 0),
+        float3(0, 0, 1),
+        float3(1, 1, 0),
+        float3(1, 0, 1),
+        float3(0, 1, 1),
+        float3(1, 0.5, 0),
+        float3(0, 1, 0.5),
+        float3(0.5, 0, 1),
+        float3(1, 0, 0.5),
+        float3(0, 0.5, 1),
+        float3(0.5, 1, 0),
+        float3(1, 0.5, 0.5),
+        float3(0.5, 1, 0.5),
+        float3(0.5, 0.5, 1)
+    };
+    return _ColorTable[Index % 15];
+}
+
+float3 DebugColorHeatMap (float h) {
+    float H = saturate(1.0f - h) * 5.0f;
+    float R = saturate(min(H - 1.5f, 4.5f - H));
+    float G = saturate(min(H - 0.5f, 3.5f - H));
+    float B = saturate(min(H + 0.5f, 2.5f - H));
+    return float3(R, G, B);
+}
 
 #endif // INC_3DGS_HLSL

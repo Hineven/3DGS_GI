@@ -69,6 +69,8 @@ bool Scene::LoadGaussians (std::filesystem::path path) {
         auto alphas = element.getProperty<float>("opacity");
         gs_alphas_.resize(num_gaussians_);
         for(int i = 0; i < alphas.size(); i++) {
+            // activation: sigmoid
+            alphas[i] = 1.f / (1.f + exp(-alphas[i]));
             gs_alphas_[i] = alphas[i];
         }
     }
@@ -77,6 +79,12 @@ bool Scene::LoadGaussians (std::filesystem::path path) {
         auto scale_x = element.getProperty<float>("scale_0");
         auto scale_y = element.getProperty<float>("scale_1");
         auto scale_z = element.getProperty<float>("scale_2");
+        // Activation: exp
+        for(int i = 0; i < scale_x.size(); i++) {
+            scale_x[i] = exp(scale_x[i]);
+            scale_y[i] = exp(scale_y[i]);
+            scale_z[i] = exp(scale_z[i]);
+        }
         gs_scales_.resize(num_gaussians_);
         for(int i = 0; i < scale_x.size(); i++) {
             gs_scales_[i] = glm::vec3(scale_x[i], scale_y[i], scale_z[i]);
@@ -84,13 +92,18 @@ bool Scene::LoadGaussians (std::filesystem::path path) {
     }
     // Rotations
     {
-        auto rotation_x = element.getProperty<float>("rot_0");
-        auto rotation_y = element.getProperty<float>("rot_1");
-        auto rotation_z = element.getProperty<float>("rot_2");
-        auto rotation_w = element.getProperty<float>("rot_3");
+        // W first!
+        auto rotation_w = element.getProperty<float>("rot_0");
+        auto rotation_x = element.getProperty<float>("rot_1");
+        auto rotation_y = element.getProperty<float>("rot_2");
+        auto rotation_z = element.getProperty<float>("rot_3");
         gs_rotations_.resize(num_gaussians_);
         for(int i = 0; i < rotation_x.size(); i++) {
             gs_rotations_[i] = glm::vec4(rotation_x[i], rotation_y[i], rotation_z[i], rotation_w[i]);
+            // activation: normalize
+            auto & q = gs_rotations_[i];
+            float len = sqrt(q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w);
+            q /= len;
         }
     }
     return true;
@@ -113,7 +126,7 @@ void Scene::DestroyDeviceScene() {
 }
 
 glm::mat4x4 Camera::GetViewMatrix () const {
-    auto view_matrix = glm::lookAt(position, look_at, up);
+    auto view_matrix = glm::lookAt(position, position + direction, up);
     return view_matrix;
 }
 

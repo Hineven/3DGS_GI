@@ -21,12 +21,17 @@ uint4 GetOverlappingTiles (float2 ScreenPosition, float Radius) {
 	return uint4(MinTileCoords, MaxTileCoords);
 }
 
+[numthreads(WAVE_SIZE, 1, 1)]
+void ClearCounters () {
+	g_RWGaussianActiveCountBuffer[0] = 0;
+}
+
 // Splat 3D gaussians onto the screen
 [numthreads(WAVE_SIZE, 1, 1)]
 void TransformAndSplatGaussians (uint DispatchID : SV_DispatchThreadID) {
 	uint GaussianIndex = DispatchID;
 	
-	if(GaussianIndex > UB.NumGaussians) return ;
+	if(GaussianIndex >= UB.NumGaussians) return ;
 
     Gaussian G = FetchGaussian(GaussianIndex);
 
@@ -35,10 +40,11 @@ void TransformAndSplatGaussians (uint DispatchID : SV_DispatchThreadID) {
 
 		CovarianceMatrix Cov3D = ComputeCovarianceMatrix(G.Scale, G.Rotation);
 		// Project to pixel space 2D covariance
+
 		float3 Cov2D = ProjectCovarianceMatrixToScreen(G.Position, UB.Focal, UB.FieldOfView, Cov3D, UB.View);
 
 		// Expand the variance magnitude (screen space) to be conservative
-		float  Expand        = 0.3f;
+		float  Expand        = 0.01f;
 		float  Det           = Cov2D.x * Cov2D.z - Cov2D.y * Cov2D.y;
 		float3 Cov2DExpanded = float3(Cov2D.x + Expand, Cov2D.y, Cov2D.z + Expand);
 		float  DetExpanded   = Cov2DExpanded.x * Cov2DExpanded.z - Cov2DExpanded.y * Cov2DExpanded.y;
@@ -70,7 +76,7 @@ void TransformAndSplatGaussians (uint DispatchID : SV_DispatchThreadID) {
 
 		uint4 MinMaxTileCoords = GetOverlappingTiles(ScreenPosition, Radius);
 		// Reject Gaussians that are completely outside the screen 
-		if(all(MinMaxTileCoords.xy == MinMaxTileCoords.zw)) return;
+		if(any(MinMaxTileCoords.xy == MinMaxTileCoords.zw)) return;
 	
 		int GaussianCount = WaveActiveSum(1);
 		int GaussianRank  = WavePrefixSum(1);
@@ -84,7 +90,12 @@ void TransformAndSplatGaussians (uint DispatchID : SV_DispatchThreadID) {
 		int ActiveListIndex = GaussianBaseIndex + GaussianRank;
 
 		g_RWActiveGaussianListBuffer[ActiveListIndex] = GaussianIndex;
-		g_RWActiveGaussianDepthBuffer[ActiveListIndex] = ViewSpacePosition.z;
+		// The view space align the view direction with the negative z axis
+		float SortingDepth = (-ViewSpacePosition.z - UB.NearPlane) / (UB.FarPlane - UB.NearPlane);
+		SortingDepth = clamp(SortingDepth, 0.0f, 0.9999f);
+		// FIXME ?
+		SortingDepth = Homogeneous.z;
+		g_RWActiveGaussianDepthBuffer[ActiveListIndex] = SortingDepth;
 		g_RWActiveGaussianScreenPositionBuffer[ActiveListIndex] = ScreenPosition;
 		g_RWActiveGaussianScreenRadiusBuffer[ActiveListIndex] = Radius;
 		g_RWActiveGaussianConicWBuffer[ActiveListIndex] = float4(Conic, G.Alpha * Scaling);
@@ -172,9 +183,10 @@ void ShadeActiveGaussians (uint DispatchID : SV_DispatchThreadID) {
 
 [numthreads(1, 1, 1)]
 void SetActiveGaussianInstanceCount () {
-	int TileCount = UB.TileDimensions.x * UB.TileDimensions.y;
+	int ActiveGaussianCount = g_RWGaussianActiveCountBuffer[0];
 	g_RWActiveGaussianInstanceCountBuffer[0] =
-	 g_RWActiveGaussianInstanceBaseBuffer[TileCount - 1] + g_RWActiveGaussianTileCountBuffer[TileCount - 1];
+	 g_RWActiveGaussianInstanceBaseBuffer[ActiveGaussianCount - 1] 
+	 + g_RWActiveGaussianTileCountBuffer[ActiveGaussianCount - 1];
 }
 
 uint MakeKey(int TileIndex, float Depth) {
@@ -217,17 +229,38 @@ void AssignGaussianInstanceKeys (uint DispatchID : SV_DispatchThreadID) {
 // sort g_RWActiveGaussianInstanceIndexBuffer with g_RWActiveGaussianInstanceKeyBuffer as keys
 // into g_RWActiveGaussianInstanceKeySortedBuffer and g_RWActiveGaussianInstanceGaussianIndexSortedBuffer
 
+#define RADIX_SORT_GROUP_ITEM_COUNT 1024
+#define RADIX_SORT_BITS_PER_PHASE 8
+#define RADIX_SORT_PHASE_BIN_SIZE (1<<RADIX_SORT_BITS_PER_PHASE)
+uint LocalCountBuffer[RADIX_SORT_PHASE_BIN_SIZE];
+[numthreads(WAVE_SIZE, 1, 1)]
+void RadixSort (uint GroupID : SV_GroupID, uint LocalID : SV_GroupThreadID) {
+	int Start = GroupID * RADIX_SORT_GROUP_ITEM_COUNT;
+	for(int Base = 0; Base < RADIX_SORT_PHASE_BIN_SIZE; Base += WAVE_SIZE) {
+		LocalCountBuffer[Base + LocalID] = 0;
+	}
+	for(int Base = 0; Base < RADIX_SORT_GROUP_ITEM_COUNT; Base += WAVE_SIZE) {
+		int Index = Start + Base + LocalID;
+		
+	}
+}
+
+// g_RWTileGaussianInstanceStartBuffer is cleared into 0xffffffff
+
 [numthreads(WAVE_SIZE, 1, 1)]
 void FindTileGaussianInstanceStarts (uint DispatchID : SV_DispatchThreadID) {
 	for(int i = 0; i < DEFAULT_REPEAT; i++) {
 		int Rank  = DispatchID + i * WAVE_SIZE;
-		if(Rank < g_RWGaussianActiveCountBuffer[0]) {
+		if(Rank < g_RWActiveGaussianInstanceCountBuffer[0]) {
 			int TileIndex     = GetTileIndexFromKey(g_RWActiveGaussianInstanceKeySortedBuffer[Rank]);
 			int PrevIndex = (Rank == 0) ? -1 : g_RWActiveGaussianInstanceKeySortedBuffer[Rank - 1];
 			// -1 produces all 1s, so we can use it as a sentinel
 			int PrevTileIndex = GetTileIndexFromKey(PrevIndex);
 			if(TileIndex != PrevTileIndex) {
 				g_RWTileGaussianInstanceStartBuffer[TileIndex] = Rank;
+				if(0 <= PrevTileIndex && PrevTileIndex < UB.TileDimensions.x * UB.TileDimensions.y) {
+					g_RWTileGaussianInstanceEndBuffer[PrevTileIndex] = Rank;
+				}
 			}
 		}
 	}
@@ -253,13 +286,31 @@ groupshared float3 LocalColorBuffer[TILE_SIZE * TILE_SIZE];
 
 [numthreads(WAVE_SIZE, 1, 1)]
 void RasterizeActiveGaussians (uint GroupID : SV_GroupID, uint LocalID : SV_GroupThreadID) {
+	
+	// return ;
 	int  TileIndex  = GroupID;
 	int2 TileCoords = int2(TileIndex % UB.TileDimensions.x, TileIndex / UB.TileDimensions.x);
 	int  GaussianInstanceStart = g_RWTileGaussianInstanceStartBuffer[TileIndex];
-	bool bIsLastTile = TileIndex == (UB.TileDimensions.x * UB.TileDimensions.y - 1);
-	int  GaussianInstanceEnd   = 
-		bIsLastTile ? GetGaussianInstanceCount() : g_RWTileGaussianInstanceStartBuffer[TileIndex + 1];
+	int  GaussianInstanceEnd   = g_RWTileGaussianInstanceEndBuffer[TileIndex];
+	if(GaussianInstanceStart == GaussianInstanceEnd) {
+		// No gaussians to rasterize
+		return;
+	}
+	// For the last tile, we don't have a sentinel
+	if(GaussianInstanceEnd == -1) GaussianInstanceEnd = GetGaussianInstanceCount();
 	int REPEAT = (GaussianInstanceEnd - GaussianInstanceStart + GAUSSIAN_BATCH_SIZE - 1) / GAUSSIAN_BATCH_SIZE;
+
+	// float V = clamp((GaussianInstanceEnd - GaussianInstanceStart) / 10, 0, 1);
+	// float3 DebugColor = GaussianInstanceEnd - GaussianInstanceStart;//DebugColorHeatMap(V);
+	// for(int BaseTexelIndex = 0; BaseTexelIndex < TILE_SIZE * TILE_SIZE; BaseTexelIndex += WAVE_SIZE) {
+	// 	int  TexelIndex = BaseTexelIndex + LocalID;
+	// 	int2 TexelCoords = int2(
+	// 		TexelIndex % TILE_SIZE,
+	// 		TexelIndex / TILE_SIZE
+	// 	) + TileCoords * TILE_SIZE;
+	// 	g_RW_GColorTexture[TexelCoords] = float4(DebugColor, 1);
+	// }
+	// return ;
 
 #if (TILE_SIZE * TILE_SIZE) % WAVE_SIZE != 0
 // For maximum concurrency
@@ -268,6 +319,7 @@ void RasterizeActiveGaussians (uint GroupID : SV_GroupID, uint LocalID : SV_Grou
 	// Set the transparency of texels within this tile to 1.0
 	for(int BaseTexelIndex = 0; BaseTexelIndex < TILE_SIZE * TILE_SIZE; BaseTexelIndex += WAVE_SIZE) {
 		LocalTransparencyBuffer[BaseTexelIndex + LocalID] = 1.0f;
+		LocalColorBuffer[BaseTexelIndex + LocalID] = 0.f;
 	}
 
 	for(int Round = 0; Round < REPEAT; Round ++) {
@@ -305,7 +357,7 @@ void RasterizeActiveGaussians (uint GroupID : SV_GroupID, uint LocalID : SV_Grou
 			float2 TexelScreenPosition = float2(TexelCoords) + 0.5f;
 			float  Transparency        = LocalTransparencyBuffer[TexelTileIndex];
 			float3 Color               = LocalColorBuffer[TexelTileIndex];
-			bool   PixelCompleted      = Transparency > 0.9999f;
+			bool   PixelCompleted      = Transparency < 0.0001f;
 			if(WaveActiveAllTrue(PixelCompleted)) {
 				// All threads finished rendering their pixel. Skip to the next ones.
 				continue;
@@ -330,7 +382,7 @@ void RasterizeActiveGaussians (uint GroupID : SV_GroupID, uint LocalID : SV_Grou
 					if (Alpha >= 1.0f / 255.0f) {
 
 						// Eq. (3) from 3D Gaussian splatting paper.
-						Color += GaussianColor * Alpha * Transparency;
+						Color +=  GaussianColor * Alpha * Transparency;
 
 						// if(invdepth)
 						// expected_invdepth += (1 / depths[collected_id[j]]) * alpha * T;
@@ -354,7 +406,84 @@ void RasterizeActiveGaussians (uint GroupID : SV_GroupID, uint LocalID : SV_Grou
 		) + TileCoords * TILE_SIZE;
 		int PixelIndex = TexelCoords.y * UB.ScreenDimensions.x + TexelCoords.x;
 		// Gamma correct to HDR
-		float3 HDRColor = pow(LocalColorBuffer[TexelTileIndex], 1.0f / 2.2f);
+		float3 HDRColor = pow(LocalColorBuffer[TexelTileIndex], 2.2f);
 		g_RW_GColorTexture[TexelCoords] = float4(HDRColor, LocalTransparencyBuffer[TexelTileIndex]);
+	}
+}
+
+
+[numthreads(WAVE_SIZE, 1, 1)]
+void GenerateRTMesh (uint DispatchID : SV_DispatchThreadID) {
+	int GaussianIndex = DispatchID;
+	if(GaussianIndex >= UB.NumGaussians) return ;
+	
+	Gaussian G = FetchGaussian(GaussianIndex);
+	float4x4 ToWorld = 0;
+	{
+		float3x3 M = GetScaleRotationTransform(G.Scale, G.Rotation);
+		ToWorld = float4x4(
+			float4(M[0], G.Position.x),
+			float4(M[1], G.Position.y),
+			float4(M[2], G.Position.z),
+			float4(0.xxx, 1)
+		);
+	}
+
+	// Magic scaling number mentioned in the paper
+	float AlphaMin = UB.MinAlphaForGaussianEvaluation;
+	float Sigma    = UB.GaussianRTProxyGeometrySigma;
+	float MagicScale = sqrt(2 * log(Sigma / AlphaMin));
+
+	const float3 IcoVertices[12] = {
+		float3(0.000000, -1.000000, 0.000000),
+		float3(0.723600, -0.447215, 0.525720),
+		float3(-0.276385, -0.447215, 0.850640),
+		float3(-0.894425, -0.447215, 0.000000),
+		float3(-0.276385, -0.447215, -0.850640),
+		float3(0.723600, -0.447215, -0.525720),
+		float3(0.276385, 0.447215, 0.850640),
+		float3(-0.723600, 0.447215, 0.525720),
+		float3(-0.723600, 0.447215, -0.525720),
+		float3(0.276385, 0.447215, -0.850640),
+		float3(0.894425, 0.447215, 0.000000),
+		float3(0.000000, 1.000000, 0.000000)
+	};
+	const int3 IcoFaces[20] = {
+		int3(1, 2, 3),
+		int3(2, 1, 6),
+		int3(1, 3, 4),
+		int3(1, 4, 5),
+		int3(1, 5, 6),
+		int3(2, 6, 11),
+		int3(3, 2, 7),
+		int3(4, 3, 8),
+		int3(5, 4, 9),
+		int3(6, 5, 10),
+		int3(2, 11, 7),
+		int3(3, 7, 8),
+		int3(4, 8, 9),
+		int3(5, 9, 10),
+		int3(6, 10, 11),
+		int3(7, 11, 12),
+		int3(8, 7, 12),
+		int3(9, 8, 12),
+		int3(10, 9, 12),
+		int3(11, 10, 12)
+	};
+
+	// Emit the vertices
+	int VertexBase = GaussianIndex * 12;
+	for(int i = 0; i < 12; i++) {
+		float3 Vertex = mul(ToWorld, float4(IcoVertices[i], 1)).xyz;
+		g_RW_RTVertexBuffer[VertexBase + i] = Vertex;
+	}
+	// Emit the indices
+	int IndexBase = GaussianIndex * 60;
+	int IndexOffset = GaussianIndex * 12;
+	for(int i = 0; i < 20; i++) {
+		int3 Face = IcoFaces[i];
+		g_RW_RTIndexBuffer[IndexBase + i * 3 + 0] = Face.x + IndexOffset;
+		g_RW_RTIndexBuffer[IndexBase + i * 3 + 1] = Face.y + IndexOffset;
+		g_RW_RTIndexBuffer[IndexBase + i * 3 + 2] = Face.z + IndexOffset;
 	}
 }

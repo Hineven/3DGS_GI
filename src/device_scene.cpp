@@ -13,8 +13,10 @@ DeviceScene::~DeviceScene () {
 }
 
 void DeviceScene::Upload (const Scene & scene) {
-    auto & gfx = AppInternal::GetInstance().GetGfx();
+    auto &gfx = AppInternal::GetInstance().GetGfx();
     Destroy();
+
+    std::cout << "Uploading scene to device" << std::endl;
     gaussian_position = gfxCreateBuffer(
             gfx, scene.num_gaussians_ * sizeof(glm::vec3), scene.gs_positions_.data()
     );
