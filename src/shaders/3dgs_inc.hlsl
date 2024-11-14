@@ -3,6 +3,8 @@
 
 #include "3dgs_shared.hlsl"
 
+#define INVALID_U32 (0xffffffffu)
+
 #ifndef WAVE_SIZE
 // Make code linting work
 #define WAVE_SIZE 32
@@ -13,9 +15,27 @@
 // Consistent with the paper.
 #define HIT_BUFFER_SIZE 16
 
-RaytracingAccelerationStructure g_Trace3DGSAccelerationStructure;
+// Acceleration structure for hardware ray tracing
+//                      TLAS
+// BLAS0(GS Group), BLAS1(GS Group), BLAS2(Mesh), ... 
+RaytracingAccelerationStructure g_HWRT_AccelerationStructure;
+// Index the offset of gaussians of each instance in the acceleration structure
+// BLAS0 Gaussian indices: Offset[0], Offset[0]+1, Offset[0]+2, ..., Offset[0] + Count[0] - 1
+// BLAS1 Gaussian indices: Offset[1], Offset[1]+1, Offset[1]+2, ..., Offset[1] + Count[1] - 1
+StructuredBuffer<uint> g_InstanceGaussianIndexOffsetBuffer;
+// Number of gaussians in each instance
+StructuredBuffer<uint> g_InstanceGaussianCountBuffer;
+// Transforms of the gaussian instances (GS groups) (to world space)
+StructuredBuffer<float3x4> g_InstanceTransformBuffer;
+// Inverse transforms of the gaussian instances (GS groups) (to instance/local space)
+StructuredBuffer<float3x4> g_InstanceInvTransformBuffer;
+// Normal transforms of the gaussian instances (GS groups) (to world space)
+StructuredBuffer<float3x3> g_InstanceNormalTransformBuffer;
+// AABBs of the gaussian instances (GS groups)
+// StructuredBuffer<float3>   g_InstanceAABBMinBuffer;
+// StructuredBuffer<float3>   g_InstanceAABBMaxBuffer;
 
-// The buffer holding all the gaussian positions
+// The buffer holding all the gaussian positions (instance local coordinates)
 StructuredBuffer<float3> g_GaussianPositionBuffer;
 // The buffer holding all the gaussian alphas
 StructuredBuffer<float>  g_GaussianAlphaBuffer;
@@ -72,15 +92,35 @@ RWStructuredBuffer<uint>   g_RWActiveGaussianInstanceGaussianIndexSortedBuffer;
 RWStructuredBuffer<uint>   g_RWTileGaussianInstanceStartBuffer; 
 RWStructuredBuffer<uint>   g_RWTileGaussianInstanceEndBuffer;
 
-// 3DGS ray tracing structs
+// States of rays to be traced (or during tracing)
+// Number of rays to be traced.
+RWStructuredBuffer<uint>   g_RWRayToTraceCountBuffer;
 // Octahedron encoded ray direction
 RWStructuredBuffer<uint>   g_RWRayToTraceDirectionBuffer;
+// Ray origins
 RWStructuredBuffer<float3> g_RWRayToTraceOriginBuffer;
-// Keep the result (rgba) of the traced ray
-RWStructuredBuffer<float4> g_RWRayToTraceResultBuffer;
+// The tmax of the ray to trace
+RWStructuredBuffer<float>  g_RWRayToTraceTMaxBuffer;
+// Ray flags
+RWStructuredBuffer<uint>   g_RWRayFlagsBuffer;
+
+// The ray is completed. A closest hit is found or nothing is found in the range.
+#define RAY_FLAG_COMPLETED_BIT 0x1u
+// At least 1 hit is found along the ray
+#define RAY_FLAG_HIT_FOUND_BIT 0x2u
+// The lower 8 bits are the current accumulated opacity of geometries along the ray
+#define RAY_FLAG_OPACITY_MASK (0xffu)
+
+// Keep the result (rgba) of the traced ray, RGBA16 Packed
+RWStructuredBuffer<uint2> g_RWRayToTraceResultBuffer;
 
 
+// G-Buffers
 RWTexture2D<float4>      g_RW_GColorTexture;
+// Linear depth texture, which is dot(HitPosition - CameraPosition, CameraDirection)
+RWTexture2D<float>       g_RW_GLinearDepthTexture;
+RWTexture2D<float4>      g_RW_GAlbedoTexture;
+
 Texture2D<float4>        g_GColorTexture;
 
 // All non-resource uniforms

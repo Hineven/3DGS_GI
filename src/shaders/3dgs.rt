@@ -1,9 +1,16 @@
+#define USING_3DGS_RT
 #include "3dgs.comp"
 
 TriangleHitGroup Trace3DGSHitGroup =
 {
-    "Trace3DGSAnyHit",     // AnyHit
-    "Trace3DGSClosestHit", // ClosestHit
+    "Trace3DGSAnyHit",
+    ""     // AnyHit only, no closest hit
+};
+
+TriangleHitGroup Trace3DGSHitGroupShadow =
+{
+    "Trace3DGSShadowAnyHit",
+    ""     // AnyHit only, 
 };
 
 RaytracingShaderConfig ShaderConfig =
@@ -18,7 +25,7 @@ RaytracingPipelineConfig PipelineConfig =
 };
 
 struct Trace3DGSPayload {
-    int  HitGaussianIndices[HIT_BUFFER_SIZE];
+    uint  HitGaussianPacked[HIT_BUFFER_SIZE];
     float HitGaussianDepths[HIT_BUFFER_SIZE];
 };
 
@@ -26,33 +33,38 @@ struct Trace3DGSPayload {
 void Trace3DGSRaygen ()
 {
     int RayIndex = DispatchRaysIndex().x;
-    RayToTrace RayData = FetchRayToTrace(RayIndex);
+    if(RayIndex >= g_RWRayToTraceCountBuffer[0]) return ;
     Trace3DGSPayload Payload;
     RayDesc Ray;
-    Ray.Origin = RayData.Origin;
-    Ray.Direction = RayData.Direction;
-    Ray.TMin = 0;
-    Ray.TMax = UB.CameraFarPlane;
+    {
+        RayToTrace RayData = FetchRayToTrace(RayIndex);
+        Ray.Origin = RayData.Origin;
+        Ray.Direction = RayData.Direction;
+        Ray.TMin = RayData.RayTMin;
+        Ray.TMax = RayData.RayTMax;
+    }
+
+    
+    // g_RWRayToTraceResultBuffer[RayIndex] = PackRGBA16(float4(Ray.Direction, 1.f));
+    // return ;
     
     float3 AccumulatedColor = 0;
     float  Transparency = 1.f;
-    float  RayLengthTraveled = 0;
     int IterationCount = 0;
     
 #define MAX_ITERATIONS 4
     
-
-    while(Transparency < 0.99f 
-    && RayLengthTraveled < UB.CameraFarPlane
+    while(Transparency > 0.01f
+    && Ray.TMin < Ray.TMax
     && IterationCount < MAX_ITERATIONS) {
 
         for(int i = 0; i < HIT_BUFFER_SIZE; i++) {
-            Payload.HitGaussianIndices[i] = -1;
-            Payload.HitGaussianDepths[i] = UB.CameraFarPlane;
+            Payload.HitGaussianPacked[i] = INVALID_U32;
+            Payload.HitGaussianDepths[i] = Ray.TMax;
         }
 
         TraceRay(
-            g_Trace3DGSAccelerationStructure,
+            g_HWRT_AccelerationStructure,
             // We dont want back face hits (they are already counted by front face hits)
             RAY_FLAG_CULL_BACK_FACING_TRIANGLES,
             0xff, // All instances
@@ -62,15 +74,22 @@ void Trace3DGSRaygen ()
             Ray,
             Payload
         );
-        float MaxHitT = Ray.TMin;
+        
+        float MaxHitT = Ray.TMax;
         for(int i = 0; i < HIT_BUFFER_SIZE; i++) {
-            if(Payload.HitGaussianIndices[i] == -1) break;
-            int GaussianIndex = Payload.HitGaussianIndices[i];
+            if(Payload.HitGaussianPacked[i] == INVALID_U32) break;
+            
+            uint HitPacked = Payload.HitGaussianPacked[i];
+            int  GaussianIndex;
+            int  InstanceIndex;
+            UnpackGaussianHit(HitPacked, GaussianIndex, InstanceIndex);
             Gaussian G   = FetchGaussian(GaussianIndex);
-            float3 Alpha = EvaluateGaussianResponse(Ray.Origin, Ray.Direction, G);
+            RayDesc LocalRay = GaussianInstance_TransformWorldToLocal(Ray, InstanceIndex);
+            float Alpha = EvaluateGaussianResponse(LocalRay.Origin, LocalRay.Direction, G);
             if(Alpha >= UB.MinAlphaForGaussianEvaluation) {
-                float3 Radiance = EvaluateGaussianRadiance(G, -Ray.Direction);
-                AccumulatedColor += Radiance * Alpha * Transparency;
+                SHCoefficents3 SH = FetchGaussianSHCoefficients(GaussianIndex, 3);
+                float3 Color = SH3Evaluate(-LocalRay.Direction, SH, 3);
+                AccumulatedColor += Color * Alpha * Transparency;
                 Transparency *= 1 - Alpha;
             }
             MaxHitT = Payload.HitGaussianDepths[i];
@@ -80,38 +99,66 @@ void Trace3DGSRaygen ()
         Ray.TMin = MaxHitT + 1e-4f;
 
         // Miss occured, no more hits can be found.
-        if(Payload.HitGaussianIndices[HIT_BUFFER_SIZE - 1] == -1) {
+        if(Payload.HitGaussianPacked[HIT_BUFFER_SIZE - 1] == INVALID_U32) {
             break;
         }
         IterationCount ++;
     }
     
     // Write the result to the output buffer
-    g_RWRayToTraceResultBuffer[RayIndex] = float4(AccumulatedColor, Transparency);
+    float4 Result = float4(AccumulatedColor, Transparency);
+    g_RWRayToTraceResultBuffer[RayIndex] = PackRGBA16(Result);
+}
+
+int GetHitGaussianIndex (int HitInstance, int HitPrimitiveIndex, BuiltInTriangleIntersectionAttributes HitAttr) {
+    return g_InstanceGaussianIndexOffsetBuffer[HitInstance] + HitPrimitiveIndex / 20;
 }
 
 [shader("anyhit")]
-void Trace3DGSAnyHit (inout Trace3DGSPayload Payload, in BuiltInTriangleIntersectionAttributes attr)
+void Trace3DGSAnyHit (inout Trace3DGSPayload Payload, in BuiltInTriangleIntersectionAttributes HitAttr)
 {
+    // Duplicate the payload, and copy back the updated payload
+    // This is necessary to get rid of a compiler bug... 
+    // See: https://github.com/microsoft/DirectXShaderCompiler/issues/5158
+    Trace3DGSPayload InPayload = Payload;
+
+    int HitInstance  = InstanceIndex();
     int HitPrimitive = PrimitiveIndex();
     // 20 faces per icosaedron
-    int HitGaussianIndex = HitPrimitive / 20;
+    int  HitGaussianIndex = GetHitGaussianIndex(HitInstance, HitPrimitive, HitAttr);
+    uint HitPacked = PackGaussianHit(HitGaussianIndex, HitInstance);
     float HitDepth = RayTCurrent();
-    float OriginalHitDeoth = HitDepth;
+    float OriginalHitDepth = HitDepth;
     for(int i = 0; i < HIT_BUFFER_SIZE; i++) {
-        if(HitDepth < Payload.HitGaussianDepths[i]) {
-            Swap(Payload.HitGaussianIndices[i], HitGaussianIndex);
-            Swap(Payload.HitGaussianDepths[i],  HitDepth);
+        if(HitDepth < InPayload.HitGaussianDepths[i]) {
+            Swap(InPayload.HitGaussianPacked[i], HitPacked);
+            Swap(InPayload.HitGaussianDepths[i], HitDepth);
         }
     }
-    if (OriginalHitDeoth <= Payload.HitGaussianDepths[HIT_BUFFER_SIZE - 1])
-    {
+
+    Payload = InPayload;
+    
+    // Potentially there are more hits. Continue the search.
+    if (OriginalHitDepth <= InPayload.HitGaussianDepths[HIT_BUFFER_SIZE - 1])
         IgnoreHit();
-    }
+}
+
+[shader("anyhit")]
+void Trace3DGSShadowAnyHit (inout Trace3DGSPayload Payload, in BuiltInTriangleIntersectionAttributes HitAttr)
+{
+
 }
 
 [shader("miss")]
 void Trace3DGSMiss(inout Trace3DGSPayload Payload)
+{
+    // Payload.HitGaussianPacked[0] = 0;
+    // Payload.HitGaussianDepths[0] = 1;
+    // Do nothing
+}
+
+[shader("miss")]
+void Trace3DGSShadowMiss(inout Trace3DGSPayload Payload)
 {
     // Do nothing
 }

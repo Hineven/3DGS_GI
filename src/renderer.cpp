@@ -5,6 +5,7 @@
  */
 #include <glm/glm.hpp>
 #include <d3d12.h>
+#include "gfx_imgui.h"
 #include "renderer.h"
 #include "device_scene.h"
 #include "shaders/3dgs_shared.hlsl"
@@ -17,217 +18,19 @@ Renderer::~Renderer () {
 
 }
 
-bool Renderer::CreateResources () {
-    // a maximum of 12 million gaussians
-    int max_num_gaussians = 1024 * 1024 * 12;
-    int max_num_gaussian_instances = 1024 * 1024 * 8 * 8;
-    int width = AppInternal::GetInstance().GetWindowWidth();
-    int height = AppInternal::GetInstance().GetWindowHeight();
-    auto & gfx = AppInternal::GetInstance().GetGfx();
-    buf_.dispatch_indirect_command = gfxCreateBuffer<DispatchIndirectCommand>(gfx, 1);
-    buf_.dispatch_indirect_command.setName("DispatchIndirectCommand");
-    buf_.gaussian_active_count = gfxCreateBuffer<int>(gfx, 1);
-    buf_.gaussian_active_count.setName("GaussianActiveCount");
-    buf_.active_gaussian_list = gfxCreateBuffer<int>(gfx, max_num_gaussians);
-    buf_.active_gaussian_list.setName("ActiveGaussianList");
-    buf_.active_gaussian_depth = gfxCreateBuffer<float>(gfx, max_num_gaussians);
-    buf_.active_gaussian_depth.setName("ActiveGaussianDepth");
-    buf_.active_gaussian_screen_position = gfxCreateBuffer<glm::vec2>(gfx, max_num_gaussians);
-    buf_.active_gaussian_screen_position.setName("ActiveGaussianScreenPosition");
-    buf_.active_gaussian_screen_radius = gfxCreateBuffer<float>(gfx, max_num_gaussians);
-    buf_.active_gaussian_screen_radius.setName("ActiveGaussianScreenRadius");
-    buf_.active_gaussian_conic_w = gfxCreateBuffer<glm::vec4>(gfx, max_num_gaussians);
-    buf_.active_gaussian_conic_w.setName("ActiveGaussianConicW");
-    buf_.active_gaussian_tile_count = gfxCreateBuffer<int>(gfx, max_num_gaussians);
-    buf_.active_gaussian_tile_count.setName("ActiveGaussianTileCount");
-    buf_.active_gaussian_instance_base = gfxCreateBuffer<int>(gfx, max_num_gaussians);
-    buf_.active_gaussian_instance_base.setName("ActiveGaussianInstanceBase");
-    buf_.active_gaussian_instance_count = gfxCreateBuffer<int>(gfx, 1);
-    buf_.active_gaussian_instance_count.setName("ActiveGaussianInstanceCount");
-    buf_.active_gaussian_color = gfxCreateBuffer<glm::vec3>(gfx, max_num_gaussians);
-    buf_.active_gaussian_color.setName("ActiveGaussianColor");
-    buf_.active_gaussian_instance_key = gfxCreateBuffer<int>(gfx, max_num_gaussian_instances);
-    buf_.active_gaussian_instance_key.setName("ActiveGaussianInstanceKey");
-    buf_.active_gaussian_instance_key_sorted = gfxCreateBuffer<int>(gfx, max_num_gaussian_instances);
-    buf_.active_gaussian_instance_key_sorted.setName("ActiveGaussianInstanceKeySorted");
-    buf_.active_gaussian_instance_gaussian_index = gfxCreateBuffer<int>(gfx, max_num_gaussian_instances);
-    buf_.active_gaussian_instance_gaussian_index.setName("ActiveGaussianInstanceGaussianIndex");
-    buf_.active_gaussian_instance_gaussian_index_sorted = gfxCreateBuffer<int>(gfx, max_num_gaussian_instances);
-    buf_.active_gaussian_instance_gaussian_index_sorted.setName("ActiveGaussianInstanceGaussianIndexSorted");
-    int num_tiles = divideAndRoundUp(width, TILE_SIZE) * divideAndRoundUp(height, TILE_SIZE);
-    buf_.tile_gaussian_instance_start = gfxCreateBuffer<int>(gfx, num_tiles);
-    buf_.tile_gaussian_instance_start.setName("TileGaussianInstanceStart");
-    buf_.tile_gaussian_instance_end = gfxCreateBuffer<int>(gfx, num_tiles);
-    buf_.tile_gaussian_instance_end.setName("TileGaussianInstanceEnd");
-
-    buf_.UB = gfxCreateBuffer<UniformBlock> (gfx, 2, nullptr, kGfxCpuAccess_Write);
-    buf_.UB.setName("UniformBlock");
-    buf_.UB.setStride(sizeof(UniformBlock));
-
-    tex_.G_color = gfxCreateTexture2D(gfx, width, height, DXGI_FORMAT_R16G16B16A16_FLOAT);
-    tex_.G_color.setName("G_color");
-
-//    tex_.output = gfxCreateTexture2D(gfx, width, height, DXGI_FORMAT_R8G8B8A8_UNORM);
-
-    return true;
-}
-
-void Renderer::DestroyResources() {
-    auto & gfx = AppInternal::GetInstance().GetGfx();
-    gfxDestroyBuffer(gfx, buf_.dispatch_indirect_command);
-    gfxDestroyBuffer(gfx, buf_.gaussian_active_count);
-    gfxDestroyBuffer(gfx, buf_.active_gaussian_list);
-    gfxDestroyBuffer(gfx, buf_.active_gaussian_depth);
-    gfxDestroyBuffer(gfx, buf_.active_gaussian_screen_position);
-    gfxDestroyBuffer(gfx, buf_.active_gaussian_screen_radius);
-    gfxDestroyBuffer(gfx, buf_.active_gaussian_conic_w);
-    gfxDestroyBuffer(gfx, buf_.active_gaussian_tile_count);
-    gfxDestroyBuffer(gfx, buf_.active_gaussian_instance_base);
-    gfxDestroyBuffer(gfx, buf_.active_gaussian_instance_count);
-    gfxDestroyBuffer(gfx, buf_.active_gaussian_color);
-    gfxDestroyBuffer(gfx, buf_.active_gaussian_instance_key);
-    gfxDestroyBuffer(gfx, buf_.active_gaussian_instance_key_sorted);
-    gfxDestroyBuffer(gfx, buf_.active_gaussian_instance_gaussian_index);
-    gfxDestroyBuffer(gfx, buf_.active_gaussian_instance_gaussian_index_sorted);
-    gfxDestroyBuffer(gfx, buf_.tile_gaussian_instance_start);
-    gfxDestroyBuffer(gfx, buf_.tile_gaussian_instance_end);
-    gfxDestroyBuffer(gfx, buf_.UB);
-    gfxDestroyTexture(gfx, tex_.G_color);
-//    gfxDestroyTexture(gfx, tex_.output);
-}
-
-bool Renderer::CreateKernels () {
-    auto & gfx = AppInternal::GetInstance().GetGfx();
-    program_ = gfxCreateProgram(gfx, "src/shaders/3dgs",
-                                AppInternal::GetInstance().GetRootPath().c_str());
-    app_assert(program_);
-
-    std::vector<std::string> defines;
-    {
-        auto dx_device = gfxGetDevice(gfx);
-        D3D12_FEATURE_DATA_D3D12_OPTIONS1 features = {};
-        if (FAILED(dx_device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS1, &features, sizeof(features))))
-        {
-            app_warning("Failed to check feature support");
-            return false;
-        }
-        if (!features.WaveOps)
-        {
-            app_warning("Wave operations are not supported");
-            return false;
-        }
-        if (features.WaveLaneCountMin != 32)
-        {
-            app_warning("only 32 wave lanes are supported");
-            return false;
-        }
-        cfg_.wave_lane_count = 32;
-        defines.push_back("WAVE_SIZE=32");
-    }
-
-    auto defines_c = std::make_unique<const char*[]>(defines.size());
-    for(int i = 0; i < defines.size(); i++) {
-        defines_c[i] = defines[i].c_str();
-    }
-    int define_count = defines.size();
-
-    kernel_.GenerateRTMesh = gfxCreateComputeKernel(gfx, program_, "GenerateRTMesh", defines_c.get(), define_count);
-
-    kernel_.GenerateDispatchIndirect = gfxCreateComputeKernel(gfx, program_, "GenerateDispatchIndirect", defines_c.get(), define_count);
-
-    kernel_.ClearCounters = gfxCreateComputeKernel(gfx, program_, "ClearCounters", defines_c.get(), define_count);
-    kernel_.TransformAndSplatGaussians = gfxCreateComputeKernel(gfx, program_, "TransformAndSplatGaussians", defines_c.get(), define_count);
-    kernel_.ShadeActiveGaussians = gfxCreateComputeKernel(gfx, program_, "ShadeActiveGaussians", defines_c.get(), define_count);
-    kernel_.SetActiveGaussianInstanceCount = gfxCreateComputeKernel(gfx, program_, "SetActiveGaussianInstanceCount", defines_c.get(), define_count);
-    kernel_.AssignGaussianInstanceKeys = gfxCreateComputeKernel(gfx, program_, "AssignGaussianInstanceKeys", defines_c.get(), define_count);
-    kernel_.FindTileGaussianInstanceStarts = gfxCreateComputeKernel(gfx, program_, "FindTileGaussianInstanceStarts", defines_c.get(), define_count);
-    kernel_.RasterizeActiveGaussians = gfxCreateComputeKernel(gfx, program_, "RasterizeActiveGaussians", defines_c.get(), define_count);
-
-    {
-        std::vector<char const *> base_subobjects;
-        base_subobjects.push_back("ShaderConfig");
-        base_subobjects.push_back("PipelineConfig");
-
-        std::vector<char const *> TraceScheduledRays_kernel_exports;
-        TraceScheduledRays_kernel_exports.push_back("Trace3DGSRaygen");
-        TraceScheduledRays_kernel_exports.push_back("Trace3DGSMiss");
-        TraceScheduledRays_kernel_exports.push_back("Trace3DGSShadowMiss");
-        TraceScheduledRays_kernel_exports.push_back("Trace3DGSAnyHit");
-        TraceScheduledRays_kernel_exports.push_back("Trace3DGSShadowAnyHit");
-        TraceScheduledRays_kernel_exports.push_back("Trace3DGSClosestHit");
-        TraceScheduledRays_kernel_exports.push_back("Trace3DGSShadowHit");
-        std::vector<char const *> TraceScheduledRays_kernel_subobjects = base_subobjects;
-        TraceScheduledRays_kernel_subobjects.push_back("Trace3DGSHitGroup");
-        kernel_.TraceScheduledRays = gfxCreateRaytracingKernel(gfx, program_, nullptr, 0,
-                   TraceScheduledRays_kernel_exports.data(), (uint32_t)TraceScheduledRays_kernel_exports.size(),
-                   TraceScheduledRays_kernel_subobjects.data(), (uint32_t)TraceScheduledRays_kernel_subobjects.size());
-
-        uint32_t entry_count[kGfxShaderGroupType_Count] {
-                1,
-                2, // SHADING RAY / SHADOW RAY
-                2,
-                1
-        };
-        GfxKernel sbt_kernels[] {kernel_.TraceScheduledRays};
-        sbt_ = gfxCreateSbt(gfx, sbt_kernels, ARRAYSIZE(sbt_kernels), entry_count);
-
-        gfxSbtSetShaderGroup(gfx, sbt_, kGfxShaderGroupType_Raygen, 0, "Trace3DGSRaygen");
-        gfxSbtSetShaderGroup(gfx, sbt_, kGfxShaderGroupType_Miss, 0,   "Trace3DGSMiss");
-        gfxSbtSetShaderGroup(gfx, sbt_, kGfxShaderGroupType_Miss, 1,   "Trace3DGSShadowMiss");
-        gfxSbtSetShaderGroup(gfx, sbt_, kGfxShaderGroupType_Hit, 0,    "Trace3DGSHitGroup");
-        gfxSbtSetShaderGroup(gfx, sbt_, kGfxShaderGroupType_Hit, 1,    "Trace3DGSHitGroupShadow");
-    }
-
-
-    {
-        GfxDrawState draw_state = {};
-        kernel_.TonemapAndDraw = gfxCreateGraphicsKernel(
-                gfx, program_, "TonemapAndDraw", defines_c.get(), define_count);
-    }
-
-    return true;
-}
-
-void Renderer::DestroyKernels () {
-    auto & gfx = AppInternal::GetInstance().GetGfx();
-    gfxDestroyKernel(gfx, kernel_.GenerateRTMesh);
-
-    gfxDestroyKernel(gfx, kernel_.GenerateDispatchIndirect);
-
-    gfxDestroyKernel(gfx, kernel_.ClearCounters);
-    gfxDestroyKernel(gfx, kernel_.TransformAndSplatGaussians);
-    gfxDestroyKernel(gfx, kernel_.ShadeActiveGaussians);
-    gfxDestroyKernel(gfx, kernel_.SetActiveGaussianInstanceCount);
-    gfxDestroyKernel(gfx, kernel_.AssignGaussianInstanceKeys);
-    gfxDestroyKernel(gfx, kernel_.FindTileGaussianInstanceStarts);
-    gfxDestroyKernel(gfx, kernel_.RasterizeActiveGaussians);
-
-    gfxDestroyKernel(gfx, kernel_.TonemapAndDraw);
-
-    gfxDestroyProgram(gfx, program_);
-}
-
-
-bool Renderer::Initialize () {
-    if(!CreateResources()) {
-        return false;
-    }
-    if(!CreateKernels()) {
-        return false;
-    }
-    return true;
-}
-
-void Renderer::Destroy() {
-    DestroyResources();
-    DestroyKernels();
-}
-
 void Renderer::GenerateDispatchIndirect (const GfxBuffer & thread_count_buffer) {
     auto & gfx = AppInternal::GetInstance().GetGfx();
     gfxProgramSetParameter(gfx, program_, "g_ThreadsToDispatchCountBuffer", thread_count_buffer);
     gfxCommandBindKernel(gfx, kernel_.GenerateDispatchIndirect);
     gfxCommandDispatch(gfx, 1, 1, 1);
+}
+
+void Renderer::RenderUI () {
+    if(ImGui::CollapsingHeader("Renderer")) {
+        ImGui::Checkbox("Show HWRT Color", &options_.show_HWRT_color);
+        ImGui::SliderFloat("Gaussian RT Proxy Geometry Sigma", &options_.gaussian_RT_proxy_geometry_sigma, 0.01f, 1.0f);
+        ImGui::SliderFloat("Min Alpha For Gaussian Evaluation", &options_.min_alpha_for_gaussian_evaluation, 0.0f, 0.5f);
+    }
 }
 
 void Renderer::Render() {
@@ -249,19 +52,37 @@ void Renderer::Render() {
                 AppInternal::GetInstance().GetWindowWidth(),
                 AppInternal::GetInstance().GetWindowHeight()
         };
-        auto TanFieldOfView = float(tan(camera.fov_y / 2.0) * 2.0);
-        UB.Focal = glm::vec2(resolution) / TanFieldOfView;
+        auto tan_fov_y = tan(camera.fov_y / 2.0);
+        auto two_tan_fov_y = float(tan_fov_y * 2.0);
+        UB.CameraFocal = glm::vec2(resolution) / two_tan_fov_y;
         auto Aspect = float(double(resolution.x) / resolution.y);
-        UB.FieldOfView = glm::vec2(Aspect * TanFieldOfView, TanFieldOfView);
-        UB.NearPlane = camera.near;
-        UB.FarPlane  = camera.far;
+        UB.CameraFieldOfView = glm::vec2(Aspect * two_tan_fov_y, two_tan_fov_y);
+
+        glm::vec3 axis_forward = camera.direction;
+        // Camera forward is -z axis
+        glm::vec3 axis_right = glm::normalize(glm::cross(axis_forward, camera.up));
+        glm::vec3 axis_up = glm::normalize(glm::cross(axis_right, axis_forward));
+        // Thus, normalize(axis_forward + axis_right * ndc.x + axis_up * ndc.y) is the camera ray direction
+        axis_up    *= tan_fov_y;
+        axis_right *= tan_fov_y * Aspect;
+
+        UB.CameraRight = axis_right;
+        UB.CameraNearPlane = camera.near;
+
+        UB.CameraUp = axis_up;
+        UB.CameraFarPlane  = camera.far;
+
+        UB.CameraDirection = axis_forward;
+        UB.GaussianRTProxyGeometrySigma = options_.gaussian_RT_proxy_geometry_sigma;
 
         UB.ScreenDimensions = resolution;
         UB.TileDimensions   = resolution / TILE_SIZE;
+
         assert(UB.TileDimensions.x * TILE_SIZE == resolution.x);
         assert(UB.TileDimensions.y * TILE_SIZE == resolution.y);
         UB.IndirectThreadGroupSize = cfg_.wave_lane_count;
-
+        UB.MinAlphaForGaussianEvaluation = options_.min_alpha_for_gaussian_evaluation;
+        UB.SmallTileDimensions = resolution / SMALL_TILE_SIZE;
     }
     gfxBufferGetData<UniformBlock>(gfx, buf_.UB)[frame_index_ & 1] = UB;
     gfxProgramSetParameter(gfx, program_, "UB", buf_.UB);
@@ -289,6 +110,13 @@ void Renderer::Render() {
 
     gfxProgramSetParameter(gfx, program_, "g_RWTileGaussianInstanceStartBuffer", buf_.tile_gaussian_instance_start);
     gfxProgramSetParameter(gfx, program_, "g_RWTileGaussianInstanceEndBuffer", buf_.tile_gaussian_instance_end);
+
+    gfxProgramSetParameter(gfx, program_, "g_RWRayToTraceCountBuffer", buf_.ray_to_trace_count);
+    gfxProgramSetParameter(gfx, program_, "g_RWRayToTraceDirectionBuffer", buf_.ray_to_trace_direction);
+    gfxProgramSetParameter(gfx, program_, "g_RWRayToTraceOriginBuffer", buf_.ray_to_trace_origin);
+    gfxProgramSetParameter(gfx, program_, "g_RWRayToTraceTMaxBuffer", buf_.ray_to_trace_t_max);
+    gfxProgramSetParameter(gfx, program_, "g_RWRayToTraceFlagsBuffer", buf_.ray_to_trace_flags);
+    gfxProgramSetParameter(gfx, program_, "g_RWRayToTraceResultBuffer", buf_.ray_to_trace_result);
 
     gfxProgramSetParameter(gfx, program_, "g_RW_GColorTexture", tex_.G_color);
     gfxProgramSetParameter(gfx, program_, "g_GColorTexture", tex_.G_color);
@@ -319,25 +147,49 @@ void Renderer::Render() {
         // Wait for the command to finish
         gfxFinish(gfx);
 
-        if(!device_scene.rt_primitive_) {
-            device_scene.rt_primitive_ = gfxCreateRaytracingPrimitive(gfx, device_scene.acceleration_structure_);
+        for(auto primitive : device_scene.rt_primitives_) {
+            gfxDestroyRaytracingPrimitive(gfx, primitive);
         }
-        gfxRaytracingPrimitiveBuild(
-                gfx, device_scene.rt_primitive_, index_buffer, vertex_buffer, sizeof(glm::vec3)
-        );
-        auto identity = glm::mat4(1.0f);
-        gfxRaytracingPrimitiveSetTransform(gfx, device_scene.rt_primitive_, &identity[0][0]);
-        gfxRaytracingPrimitiveSetInstanceID(gfx, device_scene.rt_primitive_, 0);
-        gfxRaytracingPrimitiveSetInstanceContributionToHitGroupIndex(
-                gfx, device_scene.rt_primitive_,
-                0
-        );
+        device_scene.rt_primitives_.resize(scene.GetNumInstances());
+
+        for(int i = 0; i < (int)scene.GetNumInstances(); i++) {
+            device_scene.rt_primitives_[i] = gfxCreateRaytracingPrimitive(gfx, device_scene.acceleration_structure_);
+            auto index_range = gfxCreateBufferRange(
+                    gfx, index_buffer, scene.gsi_gs_index_offsets_[i] * 60 * sizeof(int),
+                    scene.gsi_gs_counts_[i] * 60 * sizeof(int));
+            auto vertex_range = gfxCreateBufferRange(
+                    gfx, vertex_buffer, scene.gsi_gs_index_offsets_[i] * 12 * sizeof(glm::vec3),
+                    scene.gsi_gs_counts_[i] * 12 * sizeof(glm::vec3));
+            gfxRaytracingPrimitiveBuild(
+                    gfx, device_scene.rt_primitives_[i], index_range, vertex_range, sizeof(glm::vec3)
+            );
+            glm::mat4x3 mat4x3_colmajor = scene.gsi_transforms_[i];
+            float mat4x4_rowmajor[16] = {
+                    mat4x3_colmajor[0][0], mat4x3_colmajor[1][0], mat4x3_colmajor[2][0], mat4x3_colmajor[3][0],
+                    mat4x3_colmajor[0][1], mat4x3_colmajor[1][1], mat4x3_colmajor[2][1], mat4x3_colmajor[3][1],
+                    mat4x3_colmajor[0][2], mat4x3_colmajor[1][2], mat4x3_colmajor[2][2], mat4x3_colmajor[3][2],
+                    0, 0, 0, 1
+                };
+            gfxRaytracingPrimitiveSetTransform(gfx, device_scene.rt_primitives_[i], mat4x4_rowmajor);
+            gfxRaytracingPrimitiveSetInstanceID(gfx, device_scene.rt_primitives_[i], i);
+            gfxRaytracingPrimitiveSetInstanceContributionToHitGroupIndex(
+                    gfx, device_scene.rt_primitives_[i],
+                    0
+            );
+            gfxDestroyBuffer(gfx, index_range);
+            gfxDestroyBuffer(gfx, vertex_range);
+        }
         gfxAccelerationStructureUpdate(gfx, device_scene.acceleration_structure_);
 
         gfxDestroyBuffer(gfx, vertex_buffer);
         gfxDestroyBuffer(gfx, index_buffer);
 
         should_build_acceleration_structure_ = false;
+    }
+
+    // Bind the acceleration structure if present
+    if(device_scene.acceleration_structure_) {
+        gfxProgramSetParameter(gfx, program_, "g_HWRT_AccelerationStructure", device_scene.acceleration_structure_);
     }
 
     {
@@ -351,78 +203,99 @@ void Renderer::Render() {
         gfxCommandDispatch(gfx, 1, 1, 1);
     }
 
-    // Transform and first cull all gaussians outside of the view frustum
-    {
-        auto section = TimedSection(*this, "TransformAndSplatGaussians");
-        gfxCommandBindKernel(gfx, kernel_.TransformAndSplatGaussians);
-        auto num_threads = gfxKernelGetNumThreads(gfx, kernel_.TransformAndSplatGaussians);
-        gfxCommandDispatch(gfx, divideAndRoundUp(scene.GetNumGaussians(), (int)num_threads[0]), 1, 1);
-    }
+    if(options_.show_HWRT_color) {
+        // HWRT pipeline
 
-    // Compute the color for each gaussian with the current view direction using SH
-    {
-        auto section = TimedSection(*this, "ShadeActiveGaussians");
-        GenerateDispatchIndirect(buf_.gaussian_active_count);
-        gfxCommandBindKernel(gfx, kernel_.ShadeActiveGaussians);
-        gfxCommandDispatchIndirect(gfx, buf_.dispatch_indirect_command);
-    }
+        auto section = TimedSection(*this, "HWRT Color");
 
-    // Scan sum all tiles to get total number of gaussian instances.
-    // A gaussian instance is spawned per each unique overlapping tile-gaussian pair.
-    {
-        auto section = TimedSection(*this, "ScanSumTileGaussianInstances");
-        gfxCommandScanSum(gfx, kGfxDataType_Uint,
-                          buf_.active_gaussian_instance_base,
-                          buf_.active_gaussian_tile_count,
-                          &buf_.gaussian_active_count);
-    }
+        gfxCommandBindKernel(gfx, kernel_.SpawnCameraRays);
+        // Rays are packed in small tiles.
+        int num_groups = UB.SmallTileDimensions.x * UB.SmallTileDimensions.y;
+        gfxCommandDispatch(gfx, num_groups, 1, 1);
 
-    // Sum the number of active gaussian instances into a counter buffer for further processing.
-    {
-        auto section = TimedSection(*this, "SetActiveGaussianInstanceCount");
-        gfxCommandBindKernel(gfx, kernel_.SetActiveGaussianInstanceCount);
-        gfxCommandDispatch(gfx, 1, 1, 1);
-    }
+        int num_rays = num_groups * TILE_SIZE * TILE_SIZE;
+        gfxCommandBindKernel(gfx, kernel_.Trace3DGSRays);
+        gfxCommandDispatchRays(gfx, sbt_, num_rays, 1, 1);
 
-    // Assign a sort key to each active gaussian instance.
-    {
-        auto section = TimedSection(*this, "AssignGaussianInstanceKeys");
-        GenerateDispatchIndirect(buf_.active_gaussian_instance_count);
-        gfxCommandBindKernel(gfx, kernel_.AssignGaussianInstanceKeys);
-        gfxCommandDispatchIndirect(gfx, buf_.dispatch_indirect_command);
-    }
+        gfxCommandBindKernel(gfx, kernel_.DisplayCameraRays);
+        gfxCommandDispatch(gfx, num_groups, 1, 1);
 
-    // Sort the active gaussian instances by their sort key.
-    {
-        auto section = TimedSection(*this, "SortActiveGaussianInstances");
-//        gfxCommandBindKernel(gfx, kernel_.SetRadixSortDispatchParams);
-//        gfxCommandBindKernel(gfx, kernel_.RadixSort);
-        gfxCommandSortRadix(gfx,
-                            buf_.active_gaussian_instance_key_sorted,
-                            buf_.active_gaussian_instance_key,
-                            &buf_.active_gaussian_instance_gaussian_index_sorted,
-                            &buf_.active_gaussian_instance_gaussian_index,
-                            &buf_.active_gaussian_instance_count);
-    }
+    } else {
+        // Rasterization pipeline
 
-    {
-        auto section = TimedSection(*this, "ClearTileGaussianInstanceStartsEnds");
-        gfxCommandClearBuffer(gfx, buf_.tile_gaussian_instance_start, 0xffffffffu);
-        gfxCommandClearBuffer(gfx, buf_.tile_gaussian_instance_end, 0xffffffffu);
-    }
+        // Transform and first cull all gaussians outside of the view frustum
+        {
+            auto section = TimedSection(*this, "TransformAndSplatGaussians");
+            gfxCommandBindKernel(gfx, kernel_.TransformAndSplatGaussians);
+            auto num_threads = gfxKernelGetNumThreads(gfx, kernel_.TransformAndSplatGaussians);
+            gfxCommandDispatch(gfx, divideAndRoundUp(scene.GetNumGaussians(), (int) num_threads[0]), 1, 1);
+        }
 
-    {
-        assert(DEFAULT_REPEAT == 1);
-        auto section = TimedSection(*this, "FindTileGaussianInstanceStarts");
-        gfxCommandBindKernel(gfx, kernel_.FindTileGaussianInstanceStarts);
-        gfxCommandDispatchIndirect(gfx, buf_.dispatch_indirect_command);
-    }
+        // Compute the color for each gaussian with the current view direction using SH
+        {
+            auto section = TimedSection(*this, "ShadeActiveGaussians");
+            GenerateDispatchIndirect(buf_.gaussian_active_count);
+            gfxCommandBindKernel(gfx, kernel_.ShadeActiveGaussians);
+            gfxCommandDispatchIndirect(gfx, buf_.dispatch_indirect_command);
+        }
 
-    {
-        auto section = TimedSection(*this, "RasterizeActiveGaussians");
-        gfxCommandBindKernel(gfx, kernel_.RasterizeActiveGaussians);
-        int tile_count = UB.TileDimensions.x * UB.TileDimensions.y;
-        gfxCommandDispatch(gfx, tile_count, 1, 1);
+        // Scan sum all tiles to get total number of gaussian instances.
+        // A gaussian instance is spawned per each unique overlapping tile-gaussian pair.
+        {
+            auto section = TimedSection(*this, "ScanSumTileGaussianInstances");
+            gfxCommandScanSum(gfx, kGfxDataType_Uint,
+                              buf_.active_gaussian_instance_base,
+                              buf_.active_gaussian_tile_count,
+                              &buf_.gaussian_active_count);
+        }
+
+        // Sum the number of active gaussian instances into a counter buffer for further processing.
+        {
+            auto section = TimedSection(*this, "SetActiveGaussianInstanceCount");
+            gfxCommandBindKernel(gfx, kernel_.SetActiveGaussianInstanceCount);
+            gfxCommandDispatch(gfx, 1, 1, 1);
+        }
+
+        // Assign a sort key to each active gaussian instance.
+        {
+            auto section = TimedSection(*this, "AssignGaussianInstanceKeys");
+            GenerateDispatchIndirect(buf_.active_gaussian_instance_count);
+            gfxCommandBindKernel(gfx, kernel_.AssignGaussianInstanceKeys);
+            gfxCommandDispatchIndirect(gfx, buf_.dispatch_indirect_command);
+        }
+
+        // Sort the active gaussian instances by their sort key.
+        {
+            auto section = TimedSection(*this, "SortActiveGaussianInstances");
+            //        gfxCommandBindKernel(gfx, kernel_.SetRadixSortDispatchParams);
+            //        gfxCommandBindKernel(gfx, kernel_.RadixSort);
+            gfxCommandSortRadix(gfx,
+                                buf_.active_gaussian_instance_key_sorted,
+                                buf_.active_gaussian_instance_key,
+                                &buf_.active_gaussian_instance_gaussian_index_sorted,
+                                &buf_.active_gaussian_instance_gaussian_index,
+                                &buf_.active_gaussian_instance_count);
+        }
+
+        {
+            auto section = TimedSection(*this, "ClearTileGaussianInstanceStartsEnds");
+            gfxCommandClearBuffer(gfx, buf_.tile_gaussian_instance_start, 0xffffffffu);
+            gfxCommandClearBuffer(gfx, buf_.tile_gaussian_instance_end, 0xffffffffu);
+        }
+
+        {
+            assert(DEFAULT_REPEAT == 1);
+            auto section = TimedSection(*this, "FindTileGaussianInstanceStarts");
+            gfxCommandBindKernel(gfx, kernel_.FindTileGaussianInstanceStarts);
+            gfxCommandDispatchIndirect(gfx, buf_.dispatch_indirect_command);
+        }
+
+        {
+            auto section = TimedSection(*this, "RasterizeActiveGaussians");
+            gfxCommandBindKernel(gfx, kernel_.RasterizeActiveGaussians);
+            int tile_count = UB.TileDimensions.x * UB.TileDimensions.y;
+            gfxCommandDispatch(gfx, tile_count, 1, 1);
+        }
     }
 
     {

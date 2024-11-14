@@ -106,6 +106,28 @@ bool Scene::LoadGaussians (std::filesystem::path path) {
             q /= len;
         }
     }
+
+    // FIXME
+    // Limit the number to 10 for now
+    num_gaussians_ = 10;
+
+    // We assume that there're only 1 instance for now
+    num_instances_ = 1;
+    gsi_transforms_.resize(1);
+    gsi_transforms_[0] = glm::mat4x3(1.f);
+
+    gsi_inv_transforms_.resize(1);
+    gsi_inv_transforms_[0] = glm::mat4x3(1.f);
+
+    gsi_normal_transforms_.resize(1);
+    gsi_normal_transforms_[0] = glm::mat3x3(1.f);
+
+    gsi_gs_index_offsets_.resize(1);
+    gsi_gs_index_offsets_[0] = 0;
+
+    gsi_gs_counts_.resize(1);
+    gsi_gs_counts_[0] = num_gaussians_;
+
     return true;
 }
 

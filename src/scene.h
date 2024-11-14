@@ -53,9 +53,12 @@ public:
 
     inline int GetNumGaussians () const { return num_gaussians_; }
 
+    inline int GetNumInstances () const { return num_instances_; }
+
     ~Scene();
 
     friend class DeviceScene;
+    friend class Renderer;
 protected:
 
     Camera camera_ {};
@@ -70,6 +73,16 @@ protected:
     // 3DGS datasets use 4-word quaternions directly for rotation
     std::vector<glm::vec4> gs_rotations_;
     std::vector<glm::vec3> gs_scales_;
+
+    int num_instances_;
+    // GS instance transforms
+    std::vector<glm::mat4x3> gsi_transforms_;
+    std::vector<glm::mat4x3> gsi_inv_transforms_;
+    std::vector<glm::mat3x3> gsi_normal_transforms_;
+    // GS instance GS index offsets
+    std::vector<int> gsi_gs_index_offsets_;
+    // GS instances GS count
+    std::vector<int> gsi_gs_counts_;
 
     std::unique_ptr<DeviceScene> device_scene_;
 };

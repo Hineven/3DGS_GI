@@ -29,9 +29,19 @@ public:
     GfxBuffer gaussian_sh3;
 
     GfxAccelerationStructure acceleration_structure_;
-    // All gaussians in the scene
-    // TODO split primitives ?
-    GfxRaytracingPrimitive rt_primitive_;
+    // Each primitive is a GS instance (group)
+    std::vector<GfxRaytracingPrimitive> rt_primitives_;
+
+    // Offset of the gaussian index inside a gs instance / group
+    GfxBuffer gsi_instance_base_;
+    // Number of gaussians in a gs instance / group
+    GfxBuffer gsi_instance_count_;
+    // Transforms packed in mat4x3, local to world
+    GfxBuffer gsi_transform_;
+    // World to local
+    GfxBuffer gsi_inv_transform_;
+    // To world normal transform, mat3x3 packed
+    GfxBuffer gsi_normal_transform_;
 
 };
 

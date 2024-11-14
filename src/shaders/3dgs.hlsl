@@ -18,9 +18,64 @@ void Swap(inout int a, inout int b) {
     b = temp;
 }
 
-float2 NDC2Screen(float2 NDC) {
-    return 0.5f * UB.ScreenDimensions * (NDC + 1.0f);
+// Convert NDC2 to screen position
+// NDC2: [-1, 1] -> Screen: [0, ScreenDimensions]
+float2 NDC2ToScreen(float2 NDC2) {
+    return 0.5f * UB.ScreenDimensions * (NDC2 + 1.0f);
 }
+
+// Convert screen position to NDC2
+// Screen: [0, ScreenDimensions] -> NDC2: [-1, 1]
+float2 ScreenToNDC2(float2 Screen) {
+    return 2.0f * Screen / UB.ScreenDimensions - 1.0f;
+}
+
+float3x4 FetchInstanceTransform (int Index) {
+    return g_InstanceTransformBuffer[Index];
+}
+float3x4 FetchInstanceInverseTransform (int Index) {
+    return g_InstanceInvTransformBuffer[Index];
+}
+
+float3 GaussianInstance_TransformLocalToWorld (float3 Position, int InstanceIndex) {
+    float3x4 Transform = FetchInstanceTransform(InstanceIndex);
+    return mul(Transform, float4(Position, 1.0f)).xyz;
+}
+float3 GaussianInstance_TransformWorldToLocal (float3 Position, int InstanceIndex) {
+    float3x4 Transform = FetchInstanceInverseTransform(InstanceIndex);
+    return mul(Transform, float4(Position, 1.0f)).xyz;
+}
+
+float3 GaussianInstance_TransformLocalToWorld_Vector (float3 Vector, int InstanceIndex) {
+    float3x4 Transform = FetchInstanceTransform(InstanceIndex);
+    return mul(Transform, float4(Vector, 0.0f)).xyz;
+}
+
+float3 GaussianInstance_TransformWorldToLocal_Vector (float3 Vector, int InstanceIndex) {
+    float3x4 Transform = FetchInstanceInverseTransform(InstanceIndex);
+    return mul(Transform, float4(Vector, 0.0f)).xyz;
+}
+
+RayDesc GaussianInstance_TransformWorldToLocal (RayDesc Ray, int InstanceIndex) {
+    RayDesc LocalRay = Ray;
+    LocalRay.Origin = GaussianInstance_TransformWorldToLocal(Ray.Origin, InstanceIndex);
+    float3 LocalDirection = GaussianInstance_TransformWorldToLocal_Vector(Ray.Direction, InstanceIndex);
+    float  Length = length(LocalDirection);
+    LocalRay.TMin = Ray.TMin * Length;
+    LocalRay.TMax = Ray.TMax * Length;
+    LocalRay.Direction = normalize(LocalDirection);
+    return LocalRay;
+}
+
+// 256 instance / 24 (1600 w) gaussians
+uint PackGaussianHit (uint InstanceIndex, uint GaussianIndex) {
+    return (InstanceIndex << 24) | GaussianIndex;
+}
+void UnpackGaussianHit (uint Packed, out uint InstanceIndex, out uint GaussianIndex) {
+    InstanceIndex = Packed >> 24;
+    GaussianIndex = Packed & 0xFFFFFF;
+}
+
 
 Gaussian FetchGaussian(uint Index) {
     float3 Position = g_GaussianPositionBuffer[Index];
@@ -71,6 +126,7 @@ float3 QuaternionRotate (float3 Vector, float4 Quaternion) {
     return Vector + Quaternion.w * t + cross(q, t);
 }
 
+// Evaluate the alpha value of a gaussian at a given position
 float EvaluateGaussian (Gaussian GaussianData, float3 Position) {
     // x - mu:
     float3 Delta = Position - GaussianData.Position;
@@ -248,39 +304,192 @@ float2 saturateUp (float2 Value) {
     return clamp(Value, FLT_EPSILON, 1.0f);
 }
 
-float2 UnpackUnorm2x16 (uint Packed) {
+float UnpackUnorm16 (uint Packed) {
+    return Packed / 65535.0f;
+}
+
+uint PackUnorm16 (float Unpacked) {
+    Unpacked = saturateDown(Unpacked);
+    return uint(Unpacked * 65536.0f);
+}
+
+float2 UnpackUnorm16x2 (uint Packed) {
     return float2(
         (Packed & 0xFFFF) / 65535.0f,
         (Packed >> 16) / 65535.0f
     );
 }
 
-uint PackUnorm2x16 (float2 Unpacked) {
+uint PackUnorm16x2 (float2 Unpacked) {
     Unpacked = saturateDown(Unpacked);
     return uint(Unpacked.x * 65536.0f) + (uint(Unpacked.y * 65536.0f) << 16);
+}
+
+uint2 PackFp16x4Safe (float4 Unpacked) {
+    // Clamp to fp16 range
+    Unpacked = clamp(Unpacked, -65504.0f, 65504.0f);
+    // Convert to fp16
+    uint2 Packed = uint2(
+        f32tof16(Unpacked.x) | (f32tof16(Unpacked.y) << 16),
+        f32tof16(Unpacked.z) | (f32tof16(Unpacked.w) << 16)
+    );
+    return Packed;
+}
+
+float4 UnpackFp16x4 (uint2 Packed) {
+    float4 Unpacked = float4(
+        f16tof32(Packed.x & 0xFFFF),
+        f16tof32(Packed.x >> 16),
+        f16tof32(Packed.y & 0xFFFF),
+        f16tof32(Packed.y >> 16)
+    );
+    return Unpacked;
+}
+
+uint2 PackFp16x3Safe (float3 Unpacked) {
+    // Clamp to fp16 range
+    Unpacked = clamp(Unpacked, -65504.0f, 65504.0f);
+    // Convert to fp16
+    uint2 Packed = uint2(
+        f32tof16(Unpacked.x) | (f32tof16(Unpacked.y) << 16),
+        f32tof16(Unpacked.z)
+    );
+    return Packed;
+}
+
+float3 UnpackFp16x3 (uint2 Packed) {
+    float3 Unpacked = float3(
+        f16tof32(Packed.x & 0xFFFF),
+        f16tof32(Packed.x >> 16),
+        f16tof32(Packed.y & 0xFFFF)
+    );
+    return Unpacked;
+}
+
+uint2 PackRGBA16 (float4 Unpacked) {
+    uint2 RGBPacked = PackFp16x3Safe(Unpacked.xyz);
+    return uint2(
+        RGBPacked.x,
+        RGBPacked.y | (PackUnorm16(Unpacked.w) << 16)
+    );
+}
+
+float4 UnpackRGBA16 (uint2 Packed) {
+    float3 RGBUnpacked = UnpackFp16x3(Packed);
+    float AUnpacked = UnpackUnorm16(Packed.y >> 16);
+    return float4(RGBUnpacked, AUnpacked);
 }
 
 struct RayToTrace {
     float3 Direction;
     float3 Origin;
     float  RayTMin;
+    float  RayTMax;
+    // Specifies if at least 1 hit has been found
+    bool   bHit;
+    // Specifies if the hit found is sure to be the closest hit
+    bool   bCompleted;
+    // The accumulated opacity of the ray traveled so far
+    float  AccumulatedOpacity;
 };
 
-RayToTrace FetchRayToTrace (int RayIndex) {
+// Initialize the ray to trace struct
+RayToTrace InitRayToTrace () {
     RayToTrace Ray = (RayToTrace)0;
-    float3 Direction = Octahedron01ToUnitVector(UnpackUnorm2x16(g_RWRayToTraceDirectionBuffer[RayIndex]));
-    float3 Origin = g_RWRayToTraceOriginBuffer[RayIndex];
-    Ray.Direction = Direction;
-    Ray.Origin = Origin;
+    Ray.RayTMin = 0.0f;
+    Ray.RayTMax = FLT_MAX;
     return Ray;
 }
 
-// From the paper.
-float EvaluateGaussianResponse (float3 Origin, float3 Direction, Gaussian G) {
-    float3x3 MInvC = ExpandSymmetricMatrix(InvC);
-    float Numerator = dot(G.Position - Origin, mul(MInvC, Direction));
+// Fetch the ray to trace by its index
+RayToTrace FetchRayToTrace (int RayIndex) {
+    RayToTrace Ray = (RayToTrace)0;
+    Ray.Direction = Octahedron01ToUnitVector(UnpackUnorm16x2(g_RWRayToTraceDirectionBuffer[RayIndex]));
+    Ray.Origin    = g_RWRayToTraceOriginBuffer[RayIndex];
+    Ray.RayTMax   = g_RWRayToTraceTMaxBuffer[RayIndex];
+    Ray.RayTMin   = 0.0f;
+    uint Flags = g_RWRayFlagsBuffer[RayIndex];
+    Ray.bHit = (Flags & RAY_FLAG_HIT_FOUND_BIT) != 0;
+    Ray.bCompleted = (Flags & RAY_FLAG_COMPLETED_BIT) != 0;
+    Ray.AccumulatedOpacity = (Flags & RAY_FLAG_OPACITY_MASK) / (RAY_FLAG_OPACITY_MASK + 1.f);
+    return Ray;
+}
 
-    float T =  
+// Write the ray to trace by its index
+void WriteRayToTrace (int RayIndex, RayToTrace Ray) {
+    g_RWRayToTraceDirectionBuffer[RayIndex] = PackUnorm16x2(UnitVectorToOctahedron01(Ray.Direction));
+    float3 NewOrigin = Ray.Origin + Ray.RayTMin * Ray.Direction;
+    g_RWRayToTraceOriginBuffer[RayIndex] = NewOrigin;
+    g_RWRayToTraceTMaxBuffer[RayIndex] = Ray.RayTMax - Ray.RayTMin;
+    uint Flags = 0;
+    Flags |= Ray.bHit ? RAY_FLAG_HIT_FOUND_BIT : 0;
+    Flags |= Ray.bCompleted ? RAY_FLAG_COMPLETED_BIT : 0;
+    Flags |= uint(saturateDown(Ray.AccumulatedOpacity) * (RAY_FLAG_OPACITY_MASK + 1.f));
+    g_RWRayFlagsBuffer[RayIndex] = Flags;
+}
+
+float4 FetchRayTraceResult (int RayIndex) {
+    return UnpackRGBA16(g_RWRayToTraceResultBuffer[RayIndex]);
+}
+
+// Compute the ray t to evaluate max respose of a ray-gaussian intersection according to the paper.
+// @param Origin The origin of the ray
+// @param Direction The direction of the ray
+// @param G The gaussian to evaluate
+// @return The ray t to evaluate the maximum response of the gaussian along the ray
+float EvaluateGaussianResponseRayT (float3 Origin, float3 Direction, Gaussian G) {
+    float3x3 InvScaleM = float3x3(
+        1.0f / G.Scale.x, 0, 0,
+        0, 1.0f / G.Scale.y, 0,
+        0, 0, 1.0f / G.Scale.z
+    );
+    float3x3 R = EvaluateRotationMatrix(G.Rotation);
+    float3x3 T = mul(InvScaleM, transpose(R));
+    float3 Og = mul(T, Origin - G.Position);
+    float3 Dg = mul(T, Direction);
+    float  Numerator  = dot(-Og, Dg);
+    float  Denominator = dot(Dg, Dg);
+    return Numerator / max(Denominator, 1e-7f);
+}
+
+// Evaluate the gaussian response along the ray
+float EvaluateGaussianResponse (float3 Origin, float3 Direction, Gaussian G) {
+    float RayT = EvaluateGaussianResponseRayT(Origin, Direction, G);
+    float3 Position = Origin + RayT * Direction;
+    return EvaluateGaussian(G, Position);
+}
+
+// Map color to radiance (using a simple inverse gamma correction)
+float3 ColorToRadiance (float3 Color, float Gamma = 2.2f) {
+    return pow(Color, Gamma);
+}
+
+// Map radiance to color (using a simple gamma correction)
+float3 RadianceToColor (float3 Radiance, float Gamma = 2.2f) {
+    return pow(Radiance, 1.0f / Gamma);
+}
+
+// Map (film space) NDC to a direction in world space
+float3 NDC2ToCameraDirectionUnnormalized (float2 NDC2) {
+    float3 UnnormalizedDirection = UB.CameraRight * NDC2.x + UB.CameraUp * NDC2.y + UB.CameraDirection;
+    return UnnormalizedDirection;
+}
+
+float3 NDC2ToCameraDirection (float2 NDC2) {
+    return normalize(NDC2ToCameraDirectionUnnormalized(NDC2));
+}
+
+// Spawn a camera ray from the screen position
+RayToTrace SpawnCameraRay (float2 ScreenPosition) {
+    RayToTrace Ray = InitRayToTrace();
+    Ray.Origin = UB.CameraPosition;
+    float2 NDC2 = ScreenToNDC2(ScreenPosition);
+    float3 DirectionUnnormalized = NDC2ToCameraDirectionUnnormalized(NDC2);
+    float  Length = length(DirectionUnnormalized);
+    Ray.RayTMin = Length * UB.CameraNearPlane;
+    Ray.RayTMax = Length * UB.CameraFarPlane;
+    Ray.Direction = normalize(DirectionUnnormalized);
+    return Ray;
 }
 
 float3 DebugColorTable (int Index) {
@@ -304,6 +513,7 @@ float3 DebugColorTable (int Index) {
     return _ColorTable[Index % 15];
 }
 
+// Gives a heatmap about h in [0, 1]
 float3 DebugColorHeatMap (float h) {
     float H = saturate(1.0f - h) * 5.0f;
     float R = saturate(min(H - 1.5f, 4.5f - H));

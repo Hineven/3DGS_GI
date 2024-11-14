@@ -27,6 +27,7 @@ int AppInternal::Run () {
             ,
             kGfxCreateContextFlag_EnableShaderDebugging
             | kGfxCreateContextFlag_EnableDebugLayer
+            | kGfxCreateContextFlag_EnableStablePowerState
 #endif
     );
 
@@ -86,7 +87,7 @@ int AppInternal::Run () {
 
     // Load scene
     {
-        scene_.LoadGaussians(root_path + "data/garden/point_cloud/iteration_30000/point_cloud.ply");
+        scene_.LoadGaussians(root_path + "data/counter/point_cloud/iteration_7000/point_cloud.ply");
         scene_.UpdateDeviceScene();
     }
 
@@ -98,22 +99,17 @@ int AppInternal::Run () {
     auto clock = std::chrono::high_resolution_clock();
 
     double last_frame_time = std::chrono::duration<double>(clock.now().time_since_epoch()).count();
+
+    std::vector<std::pair<std::string, float>> last_frame_timed_sections;
+
     // Main loop
     while(!gfxWindowIsCloseRequested(window_)) {
         gfxWindowPumpEvents(window_);
 
-        // Render
-        renderer->Render();
-
-        // Timed sections
-        auto queries = renderer->CollectTimedSections();
-        // TODO profile them in GUI
-
-
         // Op flags
         bool need_reload_shaders = false;
 
-        // UI
+        // UI (Logic)
         {
             ImGui::Begin("3DGS AdvGI");
             if(ImGui::CollapsingHeader("Camera", ImGuiTreeNodeFlags_DefaultOpen)) {
@@ -129,8 +125,26 @@ int AppInternal::Run () {
             if(ImGui::Button("Reload shaders (F5)")) {
                 need_reload_shaders = true;
             }
+            if(ImGui::CollapsingHeader("Profile")) {
+                for(auto & section : last_frame_timed_sections) {
+                    // Keep the texts aligned
+                    std::string name = section.first;
+                    if(name.size() < 30) {
+                        name += std::string(30 - name.size(), ' ');
+                    }
+                    ImGui::Text("%s: %4.2f ms", name.c_str(), section.second);
+                }
+            }
+
+            renderer->RenderUI();
             ImGui::End();
         }
+
+        // Render
+        renderer->Render();
+
+        // Update timed sections
+        last_frame_timed_sections = renderer->CollectTimedSections();
 
         // Submit the frame (UI
         {
@@ -142,6 +156,7 @@ int AppInternal::Run () {
         double this_frame_time = std::chrono::duration<double>(clock.now().time_since_epoch()).count();
         float const delta_tick = float(this_frame_time - last_frame_time);
         last_frame_time = this_frame_time;
+
         // Camera navigation
         {
             auto & camera = scene_.GetCamera();
@@ -182,10 +197,6 @@ int AppInternal::Run () {
                 glm::quat rotation = glm::angleAxis(roll * delta_tick * 0.4f, camera.direction);
                 camera.up = glm::normalize(rotation * camera.up);
             }
-//            glm::vec4 col {};
-//            glm::vec3 row {};
-//            glm::mat3x4 m = glm::mat3x4(col, col, col);
-//            glm::mat3x4 m2 = glm::mat3x4(row, row, row, row);
             auto acceleration = glm::vec2(0.0f);
             if (!ImGui::GetIO().WantCaptureMouse)
             {

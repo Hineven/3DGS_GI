@@ -5,40 +5,50 @@
 
 #define TILE_SIZE 16
 
+#define SMALL_TILE_SIZE 8
+
+// Keep aligned with C++ side
+// Each empty line indicates the end of evey 16 bytes packed in the struct.
 struct UniformBlock {
     float4x4 View;
+
     float4x4 Projection;
+
     float4x4 ViewProjection;
 
     float3 CameraPosition;
     int   NumGaussians;
 
     // Number of pixels per film unit
-    // def fov2focal(fov, pixels):
-    //     return pixels / (2 * math.tan(fov / 2))
+    //     ScreenDimension / (2 * tan(FOV / 2))
     float2 CameraFocal;
-    // 2 * Tan(fov / 2)
+    // 2 * Tan(FOV / 2)
     float2 CameraFieldOfView;
 
+    // Camera ray: normalize(CameraRight * NDC.x + CameraUp * NDC.y + CameraDirection)
+    float3 CameraRight; // Not normalized. Affected by FOV
     float  CameraNearPlane;
+
+    float3 CameraUp; // Not normalized. Affected by FOV
     float  CameraFarPlane;
 
-    // Dimension of the screen (in pixels)
-    int2  ScreenDimensions;
-
-    // Dimension of the screen (in tiles)
-    int2  TileDimensions;
-    // (Default) Thread group size for indirect dispatched shader
-    int IndirectThreadGroupSize;
-    // Min alpha we want our gaussians to have to be evaluated
-    float MinAlphaForGaussianEvaluation;
-
+    float3 CameraDirection; // Normalized
     // Paper says 0.3 will be good.
     // Smaller values will make the proxy geometry for gaussians smaller.
     float GaussianRTProxyGeometrySigma;
-    float Padding0;
-    float Padding1;
-    float Padding2;
+
+    // Dimension of the screen (in pixels)
+    int2  ScreenDimensions;
+    // Dimension of the screen (in 16x16 tiles)
+    int2  TileDimensions;
+
+    // (Default) Thread group size for indirect dispatched shader
+    int IndirectThreadGroupSize;
+    // Min alpha we want our gaussians to have to be evaluated
+    // NOTE: Only used in the ray tracing shader.
+    float MinAlphaForGaussianEvaluation;
+    // Dimension of the screen (in small 8x8 tiles)
+    int2 SmallTileDimensions;
 };
 
 struct Gaussian {
