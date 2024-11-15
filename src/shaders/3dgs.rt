@@ -52,7 +52,7 @@ void Trace3DGSRaygen ()
     float  Transparency = 1.f;
     int IterationCount = 0;
     
-#define MAX_ITERATIONS 4
+#define MAX_ITERATIONS 12
     
     while(Transparency > 0.01f
     && Ray.TMin < Ray.TMax
@@ -78,14 +78,16 @@ void Trace3DGSRaygen ()
         float MaxHitT = Ray.TMax;
         for(int i = 0; i < HIT_BUFFER_SIZE; i++) {
             if(Payload.HitGaussianPacked[i] == INVALID_U32) break;
-            
             uint HitPacked = Payload.HitGaussianPacked[i];
+            // AccumulatedColor += float3(1, 0, 0);
             int  GaussianIndex;
             int  InstanceIndex;
-            UnpackGaussianHit(HitPacked, GaussianIndex, InstanceIndex);
+            UnpackGaussianHit(HitPacked, InstanceIndex, GaussianIndex);
             Gaussian G   = FetchGaussian(GaussianIndex);
             RayDesc LocalRay = GaussianInstance_TransformWorldToLocal(Ray, InstanceIndex);
-            float Alpha = EvaluateGaussianResponse(LocalRay.Origin, LocalRay.Direction, G);
+            float Alpha = saturate(
+                EvaluateGaussianResponse(LocalRay.Origin, LocalRay.Direction, G)
+            );
             if(Alpha >= UB.MinAlphaForGaussianEvaluation) {
                 SHCoefficents3 SH = FetchGaussianSHCoefficients(GaussianIndex, 3);
                 float3 Color = SH3Evaluate(-LocalRay.Direction, SH, 3);
@@ -106,7 +108,8 @@ void Trace3DGSRaygen ()
     }
     
     // Write the result to the output buffer
-    float4 Result = float4(AccumulatedColor, Transparency);
+    float3 AccumulatedRadiance = ColorToRadiance(AccumulatedColor);
+    float4 Result = float4(AccumulatedRadiance, Transparency);
     g_RWRayToTraceResultBuffer[RayIndex] = PackRGBA16(Result);
 }
 
@@ -126,7 +129,7 @@ void Trace3DGSAnyHit (inout Trace3DGSPayload Payload, in BuiltInTriangleIntersec
     int HitPrimitive = PrimitiveIndex();
     // 20 faces per icosaedron
     int  HitGaussianIndex = GetHitGaussianIndex(HitInstance, HitPrimitive, HitAttr);
-    uint HitPacked = PackGaussianHit(HitGaussianIndex, HitInstance);
+    uint HitPacked = PackGaussianHit(HitInstance, HitGaussianIndex);
     float HitDepth = RayTCurrent();
     float OriginalHitDepth = HitDepth;
     for(int i = 0; i < HIT_BUFFER_SIZE; i++) {

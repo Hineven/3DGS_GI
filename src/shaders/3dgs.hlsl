@@ -126,15 +126,26 @@ float3 QuaternionRotate (float3 Vector, float4 Quaternion) {
     return Vector + Quaternion.w * t + cross(q, t);
 }
 
+float4 QuaternionConjugate (float4 Quaternion) {
+    return float4(-Quaternion.x, -Quaternion.y, -Quaternion.z, Quaternion.w);
+}
+
+float3 QuaternionInverseRotate(float3 Vector, float4 Quaternion) {
+    float4 Conjugate = QuaternionConjugate(Quaternion);
+    return QuaternionRotate(Vector, Conjugate);
+}
+
 // Evaluate the alpha value of a gaussian at a given position
 float EvaluateGaussian (Gaussian GaussianData, float3 Position) {
     // x - mu:
     float3 Delta = Position - GaussianData.Position;
     // Transform to gaussian-local space
-    // Rotate the position
-    float3 RotatedPosition = QuaternionRotate(Delta, GaussianData.Rotation);
-    // Scale the position
-    float3 ScaledPosition = RotatedPosition / GaussianData.Scale;
+    float3 RotatedPosition = QuaternionInverseRotate(Delta, GaussianData.Rotation);
+    float3 ScaledPosition = float3(
+        RotatedPosition.x / GaussianData.Scale.x,
+        RotatedPosition.y / GaussianData.Scale.y,
+        RotatedPosition.z / GaussianData.Scale.z
+    );
     // Evaluate the normalized gaussian
     float Value = EvaluateNormalizedGaussian(ScaledPosition);
     return Value * GaussianData.Alpha;
@@ -160,7 +171,7 @@ float3x3 EvaluateRotationMatrix (float4 q) {
 		2.f * (q.x * q.y + q.w * q.z), 1.f - 2.f * (q.x * q.x + q.z * q.z), 2.f * (q.y * q.z - q.w * q.x),
 		2.f * (q.x * q.z - q.w * q.y), 2.f * (q.y * q.z + q.w * q.x), 1.f - 2.f * (q.x * q.x + q.y * q.y)
     );
-    return transpose(R);
+    return R;
 }
 
 // Perform frustrum culling
@@ -204,10 +215,22 @@ float3x3 GetScaleRotationTransform (float3 Scale, float4 Rotation) {
     return mul(S, R);
 }
 
+float3x3 GetRotationScaleTransform (float4 Rotation, float3 Scale) {
+    // Rotation matrix
+    float3x3 R = EvaluateRotationMatrix(Rotation);
+    // Scaling matrix
+    float3x3 S = {
+        Scale.x, 0, 0,
+        0, Scale.y, 0,
+        0, 0, Scale.z
+    };
+    return mul(R, S);
+}
+
 SymmetricMatrix ComputeCovarianceMatrix (float3 Scale, float4 Rotation) {
-    float3x3 M = GetScaleRotationTransform(Scale, Rotation);
+    float3x3 M = GetRotationScaleTransform(Rotation, Scale);
     // Covariance matrix
-    float3x3 Covariance = mul(transpose(M), M);
+    float3x3 Covariance = mul(M, transpose(M));
 
     float3 Diagonal = float3(
         Covariance[0][0],
@@ -224,6 +247,12 @@ SymmetricMatrix ComputeCovarianceMatrix (float3 Scale, float4 Rotation) {
     Ret.OffDiagonal = OffDiagonal;
     return Ret;
 }
+
+// Without the constant factor. Used for ray tracing evaluation.
+// float NV_EvaluateGaussian (Gaussian GaussianData, float3 Position) {
+//     float3 Delta = Position - GaussianData.Position;
+//     SymmetricMatrix InvCovariance = ComputeCovarianceMatrix(1.f / GaussianData.Scale, GaussianData.Rotation);
+// }
 
 // Project the covariance matrix to 2D
 // @return The screen space 2D covariance matrix (m00, m01, m11)
@@ -246,16 +275,28 @@ float3 ProjectCovarianceMatrixToScreen(float3 mean, float2 focal, float2 tan_fov
         focal.x / t.z, 0.0f, -(focal.x * t.x) / (t.z * t.z),
         0.0f, focal.y / t.z, -(focal.y * t.y) / (t.z * t.z),
         0.0f, 0.0f, 0.0f);
+    // J = transpose(J);
 
     float3x3 W = float3x3(
         View[0][0], View[0][1], View[0][2],
         View[1][0], View[1][1], View[1][2],
         -View[2][0], -View[2][1], -View[2][2]);
-
-    float3x3 Mk = mul(J, W);
+        // View[2][0], View[2][1], View[2][2]);
+// #define _REF
+#ifdef _REF
+    W = transpose(W);
+    // float3x3 Mk = mul(J, W);
+    float3x3 T = mul(W, J);
 
     float3x3 C = ExpandSymmetricMatrix(Covariance3D);
-    float3x3 C_2D = mul(Mk, mul(C, transpose(Mk)));
+    // float3x3 C_2D = mul(mul(Mk, C), transpose(Mk));
+    float3x3 C_2D = mul(mul(transpose(T), transpose(C)), T);
+#else 
+    float3x3 Mk = mul(J, W);
+    
+    float3x3 C = ExpandSymmetricMatrix(Covariance3D);
+    float3x3 C_2D = mul(mul(Mk, C), transpose(Mk));
+#endif
 
     return float3(C_2D[0][0], C_2D[0][1], C_2D[1][1]);
 }
@@ -437,26 +478,27 @@ float4 FetchRayTraceResult (int RayIndex) {
 // @param Direction The direction of the ray
 // @param G The gaussian to evaluate
 // @return The ray t to evaluate the maximum response of the gaussian along the ray
-float EvaluateGaussianResponseRayT (float3 Origin, float3 Direction, Gaussian G) {
+float EvaluateGaussianResponseRayT (float3 Origin, float3 Direction, Gaussian G, inout float3x3 InvCov) {
     float3x3 InvScaleM = float3x3(
         1.0f / G.Scale.x, 0, 0,
         0, 1.0f / G.Scale.y, 0,
         0, 0, 1.0f / G.Scale.z
     );
     float3x3 R = EvaluateRotationMatrix(G.Rotation);
-    float3x3 T = mul(InvScaleM, transpose(R));
-    float3 Og = mul(T, Origin - G.Position);
-    float3 Dg = mul(T, Direction);
-    float  Numerator  = dot(-Og, Dg);
-    float  Denominator = dot(Dg, Dg);
+    InvCov = mul(InvScaleM, transpose(R));
+    InvCov = mul(transpose(InvCov), InvCov);
+    float3 Temp = mul(InvCov, Direction);
+    float  Numerator  = dot(G.Position - Origin, Temp);
+    float  Denominator = dot(Direction, Temp);
     return Numerator / max(Denominator, 1e-7f);
 }
 
 // Evaluate the gaussian response along the ray
 float EvaluateGaussianResponse (float3 Origin, float3 Direction, Gaussian G) {
-    float RayT = EvaluateGaussianResponseRayT(Origin, Direction, G);
+    float3x3 InvCov;
+    float RayT = EvaluateGaussianResponseRayT(Origin, Direction, G, InvCov);
     float3 Position = Origin + RayT * Direction;
-    return EvaluateGaussian(G, Position);
+    return exp(dot(G.Position - Position, mul(InvCov, Position - G.Position))) * G.Alpha;//EvaluateGaussian(G, Position);
 }
 
 // Map color to radiance (using a simple inverse gamma correction)

@@ -29,7 +29,7 @@ public:
     // radians
     float fov_y {1.f};
 
-    // Some windows header macro occupies these names
+    // Some windows header macro occupies these identifiers
 #undef near
 #undef far
     float near  {0.05f};

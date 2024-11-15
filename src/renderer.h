@@ -26,7 +26,7 @@ protected:
     bool CreateResources ();
     bool CreateKernels ();
     void DestroyResources ();
-    void DestroyKernels ();
+void DestroyKernels ();
 
     void GenerateDispatchIndirect (const GfxBuffer & thread_count_buffer);
     void GenerateDispatchRaysIndirect (const GfxBuffer & thread_count_buffer);

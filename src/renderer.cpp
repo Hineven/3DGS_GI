@@ -83,6 +83,8 @@ void Renderer::Render() {
         UB.IndirectThreadGroupSize = cfg_.wave_lane_count;
         UB.MinAlphaForGaussianEvaluation = options_.min_alpha_for_gaussian_evaluation;
         UB.SmallTileDimensions = resolution / SMALL_TILE_SIZE;
+
+        UB.RT_AlphaMultiplier = 2.f;
     }
     gfxBufferGetData<UniformBlock>(gfx, buf_.UB)[frame_index_ & 1] = UB;
     gfxProgramSetParameter(gfx, program_, "UB", buf_.UB);
@@ -132,6 +134,11 @@ void Renderer::Render() {
         std::cout << "Building acceleration structure" << std::endl;
         if(!device_scene.acceleration_structure_) {
             device_scene.acceleration_structure_ = gfxCreateAccelerationStructure(gfx);
+        } else {
+            for(auto primitive : device_scene.rt_primitives_) {
+                gfxDestroyRaytracingPrimitive(gfx, primitive);
+            }
+            device_scene.rt_primitives_.clear();
         }
         GfxBuffer vertex_buffer = gfxCreateBuffer<glm::vec3>(gfx, 12 * scene.GetNumGaussians());
         GfxBuffer index_buffer = gfxCreateBuffer<int>(gfx, 60 * scene.GetNumGaussians());

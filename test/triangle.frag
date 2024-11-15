@@ -22,9 +22,16 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ****************************************************************************/
 
-float3 Color;
+float3 Color1;
+float3 Color2;
 
-float4 main() : SV_Target
+struct PSInput {
+    float4 position : SV_POSITION;
+    float4 color : COLOR;
+};
+
+float4 main(PSInput v) : SV_Target
 {
-    return float4(Color, 1.0f);
+    return float4(v.color.xyz, 0.5f);
+    //return float4(v.color.xyz, 0.5f);
 }

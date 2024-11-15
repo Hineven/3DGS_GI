@@ -392,8 +392,8 @@ void RasterizeActiveGaussians (uint GroupID : SV_GroupID, uint LocalID : SV_Grou
 		) + TileCoords * TILE_SIZE;
 		int PixelIndex = TexelCoords.y * UB.ScreenDimensions.x + TexelCoords.x;
 		// Gamma correct to HDR
-		float3 HDRColor = pow(LocalColorBuffer[TexelTileIndex], 2.2f);
-		g_RW_GColorTexture[TexelCoords] = float4(HDRColor, LocalTransparencyBuffer[TexelTileIndex]);
+		float3 Radiance = ColorToRadiance(LocalColorBuffer[TexelTileIndex]);
+		g_RW_GColorTexture[TexelCoords] = float4(Radiance, LocalTransparencyBuffer[TexelTileIndex]);
 	}
 }
 
@@ -450,7 +450,14 @@ void GenerateRTMesh (uint DispatchID : SV_DispatchThreadID) {
 	Gaussian G = FetchGaussian(GaussianIndex);
 	float4x4 ToWorld = 0;
 	{
-		float3x3 M = GetScaleRotationTransform(G.Scale, G.Rotation);
+		float3x3 MS = float3x3(
+			float3(G.Scale.x, 0, 0),
+			float3(0, G.Scale.y, 0),
+			float3(0, 0, G.Scale.z)
+		);
+		float3x3 MR = EvaluateRotationMatrix(G.Rotation);
+		float3x3 M = mul(MR, MS);
+
 		ToWorld = float4x4(
 			float4(M[0], G.Position.x),
 			float4(M[1], G.Position.y),
@@ -462,7 +469,7 @@ void GenerateRTMesh (uint DispatchID : SV_DispatchThreadID) {
 	// Magic scaling number mentioned in the paper
 	float AlphaMin = UB.MinAlphaForGaussianEvaluation;
 	float Sigma    = UB.GaussianRTProxyGeometrySigma;
-	float MagicScale = sqrt(2 * log(Sigma / AlphaMin));
+	float MagicScale = sqrt(2 * log(Sigma / max(AlphaMin, 0.001f)));
 
 	const float3 IcoVertices[12] = {
 		float3(0.000000, -1.000000, 0.000000),
@@ -504,7 +511,7 @@ void GenerateRTMesh (uint DispatchID : SV_DispatchThreadID) {
 	// Emit the vertices
 	int VertexBase = GaussianIndex * 12;
 	for(int i = 0; i < 12; i++) {
-		float3 Vertex = mul(ToWorld, float4(IcoVertices[i], 1)).xyz;
+		float3 Vertex = mul(ToWorld, float4(IcoVertices[i] * MagicScale, 1)).xyz;
 		g_RW_RTVertexBuffer[VertexBase + i] = Vertex;
 	}
 	// Emit the indices

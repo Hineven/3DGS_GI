@@ -49,6 +49,11 @@ struct UniformBlock {
     float MinAlphaForGaussianEvaluation;
     // Dimension of the screen (in small 8x8 tiles)
     int2 SmallTileDimensions;
+
+    float RT_AlphaMultiplier;
+    uint  Padding0;
+    uint  Padding1;
+    uint  Padding2;
 };
 
 struct Gaussian {
