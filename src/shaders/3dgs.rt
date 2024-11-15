@@ -52,7 +52,7 @@ void Trace3DGSRaygen ()
     float  Transparency = 1.f;
     int IterationCount = 0;
     
-#define MAX_ITERATIONS 12
+#define MAX_ITERATIONS 8
     
     while(Transparency > 0.01f
     && Ray.TMin < Ray.TMax
@@ -89,8 +89,8 @@ void Trace3DGSRaygen ()
                 EvaluateGaussianResponse(LocalRay.Origin, LocalRay.Direction, G)
             );
             if(Alpha >= UB.MinAlphaForGaussianEvaluation) {
-                SHCoefficents3 SH = FetchGaussianSHCoefficients(GaussianIndex, 3);
-                float3 Color = SH3Evaluate(-LocalRay.Direction, SH, 3);
+                SHCoefficents3 SH = FetchGaussianSHCoefficients(GaussianIndex, 1);
+                float3 Color = SH3Evaluate(-LocalRay.Direction, SH, 1);
                 AccumulatedColor += Color * Alpha * Transparency;
                 Transparency *= 1 - Alpha;
             }
@@ -124,9 +124,9 @@ void Trace3DGSAnyHit (inout Trace3DGSPayload Payload, in BuiltInTriangleIntersec
     // This is necessary to get rid of a compiler bug... 
     // See: https://github.com/microsoft/DirectXShaderCompiler/issues/5158
     Trace3DGSPayload InPayload = Payload;
-
     int HitInstance  = InstanceIndex();
     int HitPrimitive = PrimitiveIndex();
+    
     // 20 faces per icosaedron
     int  HitGaussianIndex = GetHitGaussianIndex(HitInstance, HitPrimitive, HitAttr);
     uint HitPacked = PackGaussianHit(HitInstance, HitGaussianIndex);
@@ -142,9 +142,12 @@ void Trace3DGSAnyHit (inout Trace3DGSPayload Payload, in BuiltInTriangleIntersec
     Payload = InPayload;
     
     // Potentially there are more hits. Continue the search.
-    if (OriginalHitDepth <= InPayload.HitGaussianDepths[HIT_BUFFER_SIZE - 1])
+    if (OriginalHitDepth <= InPayload.HitGaussianDepths[HIT_BUFFER_SIZE - 1]) 
         IgnoreHit();
+
 }
+
+
 
 [shader("anyhit")]
 void Trace3DGSShadowAnyHit (inout Trace3DGSPayload Payload, in BuiltInTriangleIntersectionAttributes HitAttr)

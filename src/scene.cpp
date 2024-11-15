@@ -108,7 +108,6 @@ bool Scene::LoadGaussians (std::filesystem::path path) {
     }
 
     // Limit the number to 10 for now
-    // FIXME
 //    num_gaussians_ = 50;
 
     // We assume that there're only 1 instance for now
