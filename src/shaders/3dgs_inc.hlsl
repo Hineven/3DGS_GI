@@ -64,24 +64,33 @@ RWStructuredBuffer<uint>  g_RWActiveGaussianListBuffer;
 // Their corresponding depths
 RWStructuredBuffer<float> g_RWActiveGaussianDepthBuffer;
 // Screen positions of the active gaussians
+#ifdef HW_RASTERIZATION
+// Less precision needed for HW rasterization.
+RWStructuredBuffer<uint>   g_RWActiveGaussianScreenPositionBuffer;
+#else
 RWStructuredBuffer<float2> g_RWActiveGaussianScreenPositionBuffer;
+#endif
+#ifndef HW_RASTERIZATION
 // Screen radius
 RWStructuredBuffer<float>  g_RWActiveGaussianScreenRadiusBuffer;
+#endif
 // Conic screen space filter kernel, and extra opacity W
 RWStructuredBuffer<float4> g_RWActiveGaussianConicWBuffer;
+#ifndef HW_RASTERIZATION
 // Number of tiles overlapped by each active gaussian
 RWStructuredBuffer<uint>   g_RWActiveGaussianTileCountBuffer;
 // Scan sum of g_RWActiveGaussianTileCountBuffer
 RWStructuredBuffer<uint>   g_RWActiveGaussianInstanceBaseBuffer;
 // Number of (active) gaussian instances
 RWStructuredBuffer<uint>   g_RWActiveGaussianInstanceCountBuffer;
+#endif
 // Evaluated color for active gaussians
 RWStructuredBuffer<float3> g_RWActiveGaussianColorBuffer;
-
+#ifndef HW_RASTERIZATION
 // Sort key (uint32) of each gaussian instance 
 RWStructuredBuffer<uint>   g_RWActiveGaussianInstanceKeyBuffer;
 RWStructuredBuffer<uint>   g_RWActiveGaussianInstanceKeySortedBuffer;
-// // Indirect sorting index
+// Indirect sorting index
 // RWStructuredBuffer<uint>   g_RWActiveGaussianInstanceSortIndexBuffer;
 // Refers to the original gaussian inside active gaussian list from gaussian instance
 RWStructuredBuffer<uint>   g_RWActiveGaussianInstanceGaussianIndexBuffer;

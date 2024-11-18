@@ -174,7 +174,7 @@ float3x3 EvaluateRotationMatrix (float4 q) {
     return R;
 }
 
-// Perform frustrum culling
+// Perform frustrum culling (copy pasted from original 3dgs impl)
 bool IsInFrustrum (
 	float3 Position,
 	float4x4 View,
@@ -201,6 +201,19 @@ bool IsInFrustrum (
         return false;
     }
 	return true;
+}
+
+bool IsPointInFrustrum (CameraDescription C, float3 Position, bool Ortho = false, float Expand = 0.0f) {
+    float3 ViewSpacePosition = mul(C.View, float4(Position, 1.0f)).xyz;
+    float4 Homogeneous = mul(C.Projection, float4(ViewSpacePosition, 1.0f));
+    if(Ortho) {
+        // FIXME
+        return false;
+    } else {
+        float InvW = 1.0f / (Homogeneous.w + 1e-7f);
+        float3 Projected = Homogeneous.xyz * InvW;
+        return all(abs(Projected.xy) < 1.0f + Expand) && Projected.z >= 0.0f && Projected.z <= 1.0f + Expand;
+    }
 }
 
 float3x3 GetScaleRotationTransform (float3 Scale, float4 Rotation) {
@@ -248,21 +261,11 @@ SymmetricMatrix ComputeCovarianceMatrix (float3 Scale, float4 Rotation) {
     return Ret;
 }
 
-// Without the constant factor. Used for ray tracing evaluation.
-// float NV_EvaluateGaussian (Gaussian GaussianData, float3 Position) {
-//     float3 Delta = Position - GaussianData.Position;
-//     SymmetricMatrix InvCovariance = ComputeCovarianceMatrix(1.f / GaussianData.Scale, GaussianData.Rotation);
-// }
-
 // Project the covariance matrix to 2D
 // @return The screen space 2D covariance matrix (m00, m01, m11)
 float3 ProjectCovarianceMatrixToScreen(float3 mean, float2 focal, float2 tan_fov, SymmetricMatrix Covariance3D, float4x4 View)
 {
     float3 t = mul(View, float4(mean, 1.0)).xyz;
-    // -z -> z, become lhs coordinate
-    {
-        t.z = -t.z;
-    }
     const float limx = 0.65f * tan_fov.x;
     const float limy = 0.65f * tan_fov.y;
     const float txtz = t.x / t.z;
@@ -275,28 +278,50 @@ float3 ProjectCovarianceMatrixToScreen(float3 mean, float2 focal, float2 tan_fov
         focal.x / t.z, 0.0f, -(focal.x * t.x) / (t.z * t.z),
         0.0f, focal.y / t.z, -(focal.y * t.y) / (t.z * t.z),
         0.0f, 0.0f, 0.0f);
-    // J = transpose(J);
 
     float3x3 W = float3x3(
         View[0][0], View[0][1], View[0][2],
         View[1][0], View[1][1], View[1][2],
-        -View[2][0], -View[2][1], -View[2][2]);
-        // View[2][0], View[2][1], View[2][2]);
-// #define _REF
-#ifdef _REF
-    W = transpose(W);
-    // float3x3 Mk = mul(J, W);
-    float3x3 T = mul(W, J);
+        View[2][0], View[2][1], View[2][2]);
 
-    float3x3 C = ExpandSymmetricMatrix(Covariance3D);
-    // float3x3 C_2D = mul(mul(Mk, C), transpose(Mk));
-    float3x3 C_2D = mul(mul(transpose(T), transpose(C)), T);
-#else 
     float3x3 Mk = mul(J, W);
     
     float3x3 C = ExpandSymmetricMatrix(Covariance3D);
     float3x3 C_2D = mul(mul(Mk, C), transpose(Mk));
-#endif
+
+    return float3(C_2D[0][0], C_2D[0][1], C_2D[1][1]);
+}
+
+// Project the covariance matrix to 2D
+// @return The screen space 2D covariance matrix (m00, m01, m11)
+float3x3 EWAJacobian (float3 Mean, float2 TanFoV, float4x4 View) {
+    float3 P = mul(View, float4(Mean, 1.0)).xyz;
+    const float limx = 0.65f * TanFoV.x;
+    const float limy = 0.65f * TanFoV.y;
+    const float txtz = P.x / P.z;
+    const float tytz = P.y / P.z;
+    // Clamp to (fov expanded) frustum
+    P.x = clamp(txtz, -limx, limx) * P.z;
+    P.y = clamp(tytz, -limy, limy) * P.z;
+
+    float3x3 J = float3x3(
+        1 / P.z, 0.0f, - P.x / (P.z * P.z),
+        0.0f, 1 / P.z, - P.y / (P.z * P.z),
+        0.0f, 0.0f, 0.0f);
+    return J;
+}
+
+float3 ProjectCovarianceMatrixToNDC(float3x3 J, SymmetricMatrix Covariance3D, float4x4 View)
+{
+    float3x3 W = float3x3(
+        View[0][0], View[0][1], View[0][2],
+        View[1][0], View[1][1], View[1][2],
+        View[2][0], View[2][1], View[2][2]);
+
+    float3x3 Mk = mul(J, W);
+    
+    float3x3 C = ExpandSymmetricMatrix(Covariance3D);
+    float3x3 C_2D = mul(mul(Mk, C), transpose(Mk));
 
     return float3(C_2D[0][0], C_2D[0][1], C_2D[1][1]);
 }
@@ -532,6 +557,12 @@ RayToTrace SpawnCameraRay (float2 ScreenPosition) {
     Ray.RayTMax = Length * UB.CameraFarPlane;
     Ray.Direction = normalize(DirectionUnnormalized);
     return Ray;
+}
+
+uint PackPadScreenPosition (float2 ScreenPosition) {
+    // Scale and pad the borders of the screen space position to make sure it's in the range [0, 1]
+    float ScaledScreenPosition = saturateDown(.5f * ScreenPosition * UB.InvScreenDimensions + 0.25f);
+    return PackUnorm16x2(ScaledScreenPosition);
 }
 
 float3 DebugColorTable (int Index) {

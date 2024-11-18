@@ -208,8 +208,18 @@ bool Renderer::CreateKernels () {
     }
 
     // Graphics kernels
+
     {
         GfxDrawState draw_state = {};
+        gfxDrawStateSetDepthStencilTarget(draw_state, DXGI_FORMAT_UNKNOWN);
+        gfxDrawStateSetBlendMode(draw_state,
+                                 D3D12_BLEND_SRC_ALPHA, D3D12_BLEND_INV_SRC_ALPHA, D3D12_BLEND_OP_ADD,
+                                 D3D12_BLEND_SRC_ALPHA, D3D12_BLEND_DEST_ALPHA, D3D12_BLEND_OP_ADD);
+        gfxDrawStateEnableAlphaBlending(draw_state);
+        kernel_.DrawActiveGaussians = gfxCreateGraphicsKernel(
+                gfx, program_, draw_state, "DrawActiveGaussians", defines_c.get(), define_count);
+    }
+    {
         kernel_.TonemapAndDraw = gfxCreateGraphicsKernel(
                 gfx, program_, "TonemapAndDraw", defines_c.get(), define_count);
     }
@@ -235,6 +245,7 @@ void Renderer::DestroyKernels () {
     gfxDestroyKernel(gfx, kernel_.SpawnCameraRays);
     gfxDestroyKernel(gfx, kernel_.DisplayCameraRays);
 
+    gfxDestroyKernel(gfx, kernel_.DrawActiveGaussians);
     gfxDestroyKernel(gfx, kernel_.TonemapAndDraw);
 
     gfxDestroyProgram(gfx, program_);

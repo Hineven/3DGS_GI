@@ -89,6 +89,7 @@ void DestroyKernels ();
         GfxKernel SpawnCameraRays;
         GfxKernel DisplayCameraRays;
 
+        GfxKernel DrawActiveGaussians;
         GfxKernel TonemapAndDraw;
     } kernel_ {};
 

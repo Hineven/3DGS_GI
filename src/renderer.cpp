@@ -246,62 +246,74 @@ void Renderer::Render() {
             gfxCommandDispatchIndirect(gfx, buf_.dispatch_indirect_command);
         }
 
-        // Scan sum all tiles to get total number of gaussian instances.
-        // A gaussian instance is spawned per each unique overlapping tile-gaussian pair.
-        {
-            auto section = TimedSection(*this, "ScanSumTileGaussianInstances");
-            gfxCommandScanSum(gfx, kGfxDataType_Uint,
-                              buf_.active_gaussian_instance_base,
-                              buf_.active_gaussian_tile_count,
-                              &buf_.gaussian_active_count);
-        }
+        if(options_.tiled_rasterization) {
+            // Use the tiled implementation from the original 3DGS paper
 
-        // Sum the number of active gaussian instances into a counter buffer for further processing.
-        {
-            auto section = TimedSection(*this, "SetActiveGaussianInstanceCount");
-            gfxCommandBindKernel(gfx, kernel_.SetActiveGaussianInstanceCount);
-            gfxCommandDispatch(gfx, 1, 1, 1);
-        }
+            // Scan sum all tiles to get total number of gaussian instances.
+            // A gaussian instance is spawned per each unique overlapping tile-gaussian pair.
+            {
+                auto section = TimedSection(*this, "ScanSumTileGaussianInstances");
+                gfxCommandScanSum(gfx, kGfxDataType_Uint,
+                                  buf_.active_gaussian_instance_base,
+                                  buf_.active_gaussian_tile_count,
+                                  &buf_.gaussian_active_count);
+            }
 
-        // Assign a sort key to each active gaussian instance.
-        {
-            auto section = TimedSection(*this, "AssignGaussianInstanceKeys");
-            GenerateDispatchIndirect(buf_.active_gaussian_instance_count);
-            gfxCommandBindKernel(gfx, kernel_.AssignGaussianInstanceKeys);
-            gfxCommandDispatchIndirect(gfx, buf_.dispatch_indirect_command);
-        }
+            // Sum the number of active gaussian instances into a counter buffer for further processing.
+            {
+                auto section = TimedSection(*this, "SetActiveGaussianInstanceCount");
+                gfxCommandBindKernel(gfx, kernel_.SetActiveGaussianInstanceCount);
+                gfxCommandDispatch(gfx, 1, 1, 1);
+            }
 
-        // Sort the active gaussian instances by their sort key.
-        {
-            auto section = TimedSection(*this, "SortActiveGaussianInstances");
-            //        gfxCommandBindKernel(gfx, kernel_.SetRadixSortDispatchParams);
-            //        gfxCommandBindKernel(gfx, kernel_.RadixSort);
-            gfxCommandSortRadix(gfx,
-                                buf_.active_gaussian_instance_key_sorted,
-                                buf_.active_gaussian_instance_key,
-                                &buf_.active_gaussian_instance_gaussian_index_sorted,
-                                &buf_.active_gaussian_instance_gaussian_index,
-                                &buf_.active_gaussian_instance_count);
-        }
+            // Assign a sort key to each active gaussian instance.
+            {
+                auto section = TimedSection(*this, "AssignGaussianInstanceKeys");
+                GenerateDispatchIndirect(buf_.active_gaussian_instance_count);
+                gfxCommandBindKernel(gfx, kernel_.AssignGaussianInstanceKeys);
+                gfxCommandDispatchIndirect(gfx, buf_.dispatch_indirect_command);
+            }
 
-        {
-            auto section = TimedSection(*this, "ClearTileGaussianInstanceStartsEnds");
-            gfxCommandClearBuffer(gfx, buf_.tile_gaussian_instance_start, 0xffffffffu);
-            gfxCommandClearBuffer(gfx, buf_.tile_gaussian_instance_end, 0xffffffffu);
-        }
+            // Sort the active gaussian instances by their sort key.
+            {
+                auto section = TimedSection(*this, "SortActiveGaussianInstances");
+                //        gfxCommandBindKernel(gfx, kernel_.SetRadixSortDispatchParams);
+                //        gfxCommandBindKernel(gfx, kernel_.RadixSort);
+                gfxCommandSortRadix(gfx,
+                                    buf_.active_gaussian_instance_key_sorted,
+                                    buf_.active_gaussian_instance_key,
+                                    &buf_.active_gaussian_instance_gaussian_index_sorted,
+                                    &buf_.active_gaussian_instance_gaussian_index,
+                                    &buf_.active_gaussian_instance_count);
+            }
 
-        {
-            assert(DEFAULT_REPEAT == 1);
-            auto section = TimedSection(*this, "FindTileGaussianInstanceStarts");
-            gfxCommandBindKernel(gfx, kernel_.FindTileGaussianInstanceStarts);
-            gfxCommandDispatchIndirect(gfx, buf_.dispatch_indirect_command);
-        }
+            {
+                auto section = TimedSection(*this, "ClearTileGaussianInstanceStartsEnds");
+                gfxCommandClearBuffer(gfx, buf_.tile_gaussian_instance_start, 0xffffffffu);
+                gfxCommandClearBuffer(gfx, buf_.tile_gaussian_instance_end, 0xffffffffu);
+            }
 
-        {
-            auto section = TimedSection(*this, "RasterizeActiveGaussians");
-            gfxCommandBindKernel(gfx, kernel_.RasterizeActiveGaussians);
-            int tile_count = UB.TileDimensions.x * UB.TileDimensions.y;
-            gfxCommandDispatch(gfx, tile_count, 1, 1);
+            {
+                assert(DEFAULT_REPEAT == 1);
+                auto section = TimedSection(*this, "FindTileGaussianInstanceStarts");
+                gfxCommandBindKernel(gfx, kernel_.FindTileGaussianInstanceStarts);
+                gfxCommandDispatchIndirect(gfx, buf_.dispatch_indirect_command);
+            }
+
+            {
+                auto section = TimedSection(*this, "RasterizeActiveGaussians");
+                gfxCommandBindKernel(gfx, kernel_.RasterizeActiveGaussians);
+                int tile_count = UB.TileDimensions.x * UB.TileDimensions.y;
+                gfxCommandDispatch(gfx, tile_count, 1, 1);
+            }
+        } else {
+            // Use HW rasterization pipeline
+
+            {
+                auto section = TimedSection(*this, "DrawActiveGaussians");
+                gfxCommandBindKernel(gfx, kernel_.DrawActiveGaussians);
+                gfxCommandBindVertexBuffer()
+            }
         }
     }
 

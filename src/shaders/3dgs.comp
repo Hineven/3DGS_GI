@@ -155,15 +155,19 @@ void TransformAndSplatGaussians (uint DispatchID : SV_DispatchThreadID) {
 		// The view space align the view direction with the negative z axis
 		float SortingDepth = (-ViewSpacePosition.z - UB.CameraNearPlane) / (UB.CameraFarPlane - UB.CameraNearPlane);
 		SortingDepth = saturateDown(SortingDepth);
-		// FIXME ?
-		SortingDepth = Homogeneous.z;
 		g_RWActiveGaussianDepthBuffer[ActiveListIndex] = SortingDepth;
+#ifdef HW_RASTERIZATION
+		g_RWActiveGaussianLambdaBuffer[ActiveListIndex] = PackFp16x2(float2(Lambda1, Lambda2));
+#endif
+#ifndef HW_RASTERIZATION
 		g_RWActiveGaussianScreenPositionBuffer[ActiveListIndex] = ScreenPosition;
 		g_RWActiveGaussianScreenRadiusBuffer[ActiveListIndex] = Radius;
-		g_RWActiveGaussianConicWBuffer[ActiveListIndex] = float4(Conic, G.Alpha * Scaling);
-		
+		g_RWActiveGaussianConicWBuffer[ActiveListIndex] = float4(Conic, G.Alpha * Scaling);	
 		g_RWActiveGaussianTileCountBuffer[ActiveListIndex] =
 			(MinMaxTileCoords.z - MinMaxTileCoords.x) * (MinMaxTileCoords.w - MinMaxTileCoords.y);
+#else
+		g_RWActiveGaussianScreenPositionBuffer[ActiveListIndex] = PackPadScreenPosition(ScreenPosition);
+#endif 
 	}
 }
 
