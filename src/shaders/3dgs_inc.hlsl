@@ -58,48 +58,25 @@ RWStructuredBuffer<DispatchIndirectCommand> g_RWDispatchIndirectCommandBuffer;
 StructuredBuffer<uint> g_ThreadsToDispatchCountBuffer;
 
 // Number of active gaussians. Updated every frame.
-RWStructuredBuffer<uint>  g_RWGaussianActiveCountBuffer;
+RWStructuredBuffer<uint>  g_RWActiveGaussianCountBuffer;
 // List of active gaussian indices
 RWStructuredBuffer<uint>  g_RWActiveGaussianListBuffer;
-// Their corresponding depths
-RWStructuredBuffer<float> g_RWActiveGaussianDepthBuffer;
-// Screen positions of the active gaussians
-#ifdef HW_RASTERIZATION
-// Less precision needed for HW rasterization.
-RWStructuredBuffer<uint>   g_RWActiveGaussianScreenPositionBuffer;
-#else
-RWStructuredBuffer<float2> g_RWActiveGaussianScreenPositionBuffer;
-#endif
-#ifndef HW_RASTERIZATION
-// Screen radius
-RWStructuredBuffer<float>  g_RWActiveGaussianScreenRadiusBuffer;
-#endif
-// Conic screen space filter kernel, and extra opacity W
-RWStructuredBuffer<float4> g_RWActiveGaussianConicWBuffer;
-#ifndef HW_RASTERIZATION
-// Number of tiles overlapped by each active gaussian
-RWStructuredBuffer<uint>   g_RWActiveGaussianTileCountBuffer;
-// Scan sum of g_RWActiveGaussianTileCountBuffer
-RWStructuredBuffer<uint>   g_RWActiveGaussianInstanceBaseBuffer;
-// Number of (active) gaussian instances
-RWStructuredBuffer<uint>   g_RWActiveGaussianInstanceCountBuffer;
-#endif
-// Evaluated color for active gaussians
-RWStructuredBuffer<float3> g_RWActiveGaussianColorBuffer;
-#ifndef HW_RASTERIZATION
-// Sort key (uint32) of each gaussian instance 
-RWStructuredBuffer<uint>   g_RWActiveGaussianInstanceKeyBuffer;
-RWStructuredBuffer<uint>   g_RWActiveGaussianInstanceKeySortedBuffer;
-// Indirect sorting index
-// RWStructuredBuffer<uint>   g_RWActiveGaussianInstanceSortIndexBuffer;
-// Refers to the original gaussian inside active gaussian list from gaussian instance
-RWStructuredBuffer<uint>   g_RWActiveGaussianInstanceGaussianIndexBuffer;
-// Sorted.
-RWStructuredBuffer<uint>   g_RWActiveGaussianInstanceGaussianIndexSortedBuffer;
+// Depths of the active gaussians (used for sorting keys)
+RWStructuredBuffer<float> g_RWActiveGaussianLinearDepthBuffer;
+// RWStructuredBuffer<float> g_RWActiveGaussianLinearDepthSortedBuffer;
+// Sorted active gaussian list (sorted by depth)
+RWStructuredBuffer<float> g_RWActiveGaussianListSortedBuffer;
 
-// The index of the starting gaussian in the sorted list for each tile [l, r)
-RWStructuredBuffer<uint>   g_RWTileGaussianInstanceStartBuffer; 
-RWStructuredBuffer<uint>   g_RWTileGaussianInstanceEndBuffer;
+// Screen positions of the active gaussians, 1/2 packed (sorted)
+RWStructuredBuffer<uint>   g_RWActiveGaussianNDCPositionBuffer;
+RWStructuredBuffer<uint>   g_RWActiveGaussianQuadNDCVector0Buffer;
+RWStructuredBuffer<uint>   g_RWActiveGaussianQuadNDCVector1Buffer;
+
+// NDC space Conic W values of the active gaussians
+RWStructuredBuffer<float>  g_RWActiveGaussianConicWBuffer;
+
+
+// Raytracing related stuff
 
 // States of rays to be traced (or during tracing)
 // Number of rays to be traced.

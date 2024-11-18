@@ -84,8 +84,102 @@ uint4 GetOverlappingTiles (float2 ScreenPosition, float Radius) {
 
 [numthreads(WAVE_SIZE, 1, 1)]
 void ClearCounters () {
-	g_RWGaussianActiveCountBuffer[0] = 0;
+	g_RWActiveGaussianCountBuffer[0] = 0;
 }
+
+// Filter the active gaussians that are visible in the view frustrum
+[numthreads(WAVE_SIZE, 1, 1)]
+void FilterActiveGaussians (uint DispatchID : SV_DispatchThreadID) {
+
+	uint GaussianIndex = DispatchID;
+	
+	if(GaussianIndex >= UB.NumGaussians) return ;
+
+    Gaussian G = FetchGaussian(GaussianIndex);
+
+	float3 ViewSpacePosition = 0;
+	if(IsPointInFrustrum(UB.MainCamera, G.Position, false, 0.2f, 0.2f)) {
+		int GaussianCount = WaveActiveSum(1);
+		int GaussianRank  = WavePrefixSum(1);
+		int GaussianBaseIndex = 0;
+		if(WaveIsFirstLane()) {
+			InterlockedAdd(g_RWActiveGaussianCountBuffer[0], GaussianCount, GaussianBaseIndex);
+		}
+		GaussianBaseIndex = WaveReadLaneFirst(GaussianBaseIndex);
+		// Store the indices of active gaussians into a list.
+		int ActiveListIndex = GaussianBaseIndex + GaussianRank;
+
+		g_RWActiveGaussianListBuffer[ActiveListIndex] = GaussianIndex;
+		// The view space align the view direction with the negative z axis
+		float LinearDepth = -ViewSpacePosition.z;
+		LinearDepth = saturateDown(LinearDepth);
+		g_RWActiveGaussianLinearDepthBuffer[ActiveListIndex] = LinearDepth;
+	}
+}
+
+CameraDescription GetCameraDescription () {
+    return UB.MainCamera;
+}
+
+[numthreads(WAVE_SIZE, 1, 1)]
+void ProjectActiveGaussians (uint DispatchID : SV_DispatchThreadID) {
+	if(DispatchID >= g_RWActiveGaussianCountBuffer[0]) return;
+	int GaussianIndex = g_RWActiveGaussianListBuffer[DispatchID];
+    
+    CameraDescription C = GetCameraDescription();
+    Gaussian G = FetchGaussian(GaussianIndex);
+    SymmetricMatrix Cov3D = ComputeCovarianceMatrix(G.Scale, G.Rotation);
+    // Project to 2D covariance
+    float3x3 J = float3x3(
+        1, 0, 0,
+        0, 1, 0,
+        0, 0, 0
+    );
+#if !(RASTERIZATION_IS_ORTHO_CAMERA)
+    J = EWAJacobian(G.Position, C.FieldOfView, C.View);
+#endif
+    float4 HomogeneousW = mul(C.ViewProjection, float4(G.Position, 1.f));
+    float3 Homogeneous = HomogeneousW.xyz / HomogeneousW.w;
+
+    // Get the covariance matrix in NDC space ([-1, 1] ^ 2)
+    float3 Cov2D = ProjectCovarianceMatrixToNDC(
+        J, Cov3D, C.View
+    );
+
+    // Expand the variance magnitude (screen space) to be conservative
+    float  Det           = Cov2D.x * Cov2D.z - Cov2D.y * Cov2D.y;
+    if(Det < 0.0001f) return ;
+    
+    float  InvDet = 1.f / Det;
+    float3 Conic  = float3(Cov2D.z * InvDet, -Cov2D.y * InvDet, Cov2D.x * InvDet);
+
+	g_RWActiveGaussianConicWBuffer[DispatchID] = float4(Conic, G.Alpha);
+
+    // Compute extent in screen space (by finding eigenvalues of
+    // 2D covariance matrix). Use extent to compute a bounding rectangle
+    // of screen-space tiles that this Gaussian overlaps with. Quit if
+    // rectangle covers 0 tiles. 
+    // Eigenvalues of 2D covariance matrix denotes the variance of the 
+    // Gaussian in the directions of the eigenvectors, which are the
+    // principal axes of the Gaussian. 
+    float Mean    = 0.5f * (Cov2D.x + Cov2D.z);
+    float Lambda1 = Mean + sqrt(max(0.1f, Mean * Mean - Det));
+    float Lambda2 = Mean - sqrt(max(0.1f, Mean * Mean - Det));
+    // Find the eigenvectors of the covariance matrix
+    float2 Eigenvector1 = float2(Cov2D.y, Lambda1 - Cov2D.x);
+    float2 Eigenvector2 = float2(Cov2D.y, Lambda2 - Cov2D.x);
+    Eigenvector1 = normalize(Eigenvector1);
+    Eigenvector2 = normalize(Eigenvector2);
+	// Output the projected quad vectors
+	float2 ClampedPosition = saturateDown(Homogeneous.xy * 0.25 + 0.5f);
+	g_RWActiveGaussianNDCPositionBuffer[DispatchID] = PackUnorm16x2(Homogeneous.xy);
+    float2 ClampedVector1 = saturateDown(Eigenvector1 * Lambda1 * 0.5 + 0.5);
+	g_RWActiveGaussianQuadNDCVector0Buffer[DispatchID] = PackUnorm16x2(ClampedVector1);
+	float2 ClampedVector2 = saturateDown(Eigenvector2 * Lambda2 * 0.5 + 0.5);
+	g_RWActiveGaussianQuadNDCVector1Buffer[DispatchID] = PackUnorm16x2(ClampedVector2);
+}
+
+// Gaussians are later HW rasterized
 
 // Splat 3D gaussians onto the screen
 [numthreads(WAVE_SIZE, 1, 1)]

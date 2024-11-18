@@ -203,7 +203,7 @@ bool IsInFrustrum (
 	return true;
 }
 
-bool IsPointInFrustrum (CameraDescription C, float3 Position, bool Ortho = false, float Expand = 0.0f) {
+bool IsPointInFrustrum (CameraDescription C, float3 Position, bool Ortho = false, float NearClip = 0.f, float Expand = 0.f) {
     float3 ViewSpacePosition = mul(C.View, float4(Position, 1.0f)).xyz;
     float4 Homogeneous = mul(C.Projection, float4(ViewSpacePosition, 1.0f));
     if(Ortho) {
@@ -212,7 +212,7 @@ bool IsPointInFrustrum (CameraDescription C, float3 Position, bool Ortho = false
     } else {
         float InvW = 1.0f / (Homogeneous.w + 1e-7f);
         float3 Projected = Homogeneous.xyz * InvW;
-        return all(abs(Projected.xy) < 1.0f + Expand) && Projected.z >= 0.0f && Projected.z <= 1.0f + Expand;
+        return all(abs(Projected.xy) < 1.0f + Expand) && Projected.z >= NearClip && Projected.z <= 1.0f + Expand;
     }
 }
 

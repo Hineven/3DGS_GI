@@ -1,26 +1,14 @@
-float4 DrawActiveGaussians (uint VertexIndex : SV_VertexID) : SV_POSITION {
-    float2 Position2 = 0;
-    {
-        // 6 vertices (hexagon) for each gaussian
-        float XOffs = sqrt(3) / 2;
-        float2 Positions[6] = {
-            float2(0, 1),
-            float2(-XOffs, 0.5),
-            float2(-XOffs, -0.5),
-            float2(0, -1),
-            float2(XOffs, -0.5),
-            float2(XOffs, 0.5)
-        };
-        int3 Indices[4] = {
-            int3(0, 1, 2),
-            int3(0, 2, 3),
-            int3(0, 3, 4),
-            int3(0, 4, 5)
-        };
-        Position2 = Positions[Indices[VertexIndex / 3][VertexIndex % 3]];
-        float3 Transform = 
-    }
+struct DrawActiveGaussians_GSOutput
+{
+    float4 Position    : SV_POSITION;
+    float4 UVWActiveID : TEXCOORD0;
+};
 
+DrawActiveGaussians_GSOutput DrawActiveGaussians (
+    DrawActiveGaussians_GSOutput Input
+) {
+    // Fall through
+    return Input;
 }
 
 float4 TonemapAndDraw (uint VertexIndex : SV_VertexID) : SV_Position {
