@@ -7,6 +7,8 @@
 #ifndef INC_3DGS_ADVGI_COMMON_H
 #define INC_3DGS_ADVGI_COMMON_H
 
+#include "device_shared.hlsl"
+
 #include <iostream>
 
 #define app_assert(expr) if(!(expr)) { std::cerr << "[" << __FILE__ << ":" << __LINE__ << "] Assertion failed: " << #expr << std::endl; exit(1); }

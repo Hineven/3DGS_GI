@@ -30,30 +30,25 @@ void DestroyKernels ();
 
     void GenerateDispatchIndirect (const GfxBuffer & thread_count_buffer);
     void GenerateDispatchRaysIndirect (const GfxBuffer & thread_count_buffer);
+    void GenerateDrawIndirect (const GfxBuffer & vertex_count_buffer);
 
 
     struct {
         GfxBuffer dispatch_indirect_command;
         GfxBuffer dispatch_rays_indirect_command;
+        GfxBuffer draw_indirect_command;
 
-        GfxBuffer gaussian_active_count;
+        GfxBuffer active_gaussian_count;
+        GfxBuffer active_gaussian_src_list;
         GfxBuffer active_gaussian_list;
+        GfxBuffer active_gaussian_src_depth;
         GfxBuffer active_gaussian_depth;
-        GfxBuffer active_gaussian_screen_position;
-        GfxBuffer active_gaussian_screen_radius;
+
+        GfxBuffer active_gaussian_NDC_position;
+        GfxBuffer active_gaussian_quad_NDC_vector0;
+        GfxBuffer active_gaussian_quad_NDC_vector1;
+
         GfxBuffer active_gaussian_conic_w;
-        GfxBuffer active_gaussian_tile_count;
-        GfxBuffer active_gaussian_instance_base;
-        GfxBuffer active_gaussian_instance_count;
-        GfxBuffer active_gaussian_color;
-
-        GfxBuffer active_gaussian_instance_key;
-        GfxBuffer active_gaussian_instance_key_sorted;
-        GfxBuffer active_gaussian_instance_gaussian_index;
-        GfxBuffer active_gaussian_instance_gaussian_index_sorted;
-
-        GfxBuffer tile_gaussian_instance_start;
-        GfxBuffer tile_gaussian_instance_end;
 
         GfxBuffer ray_to_trace_count;
         GfxBuffer ray_to_trace_direction;
@@ -76,14 +71,11 @@ void DestroyKernels ();
         GfxKernel GenerateRTMesh;
 
         GfxKernel GenerateDispatchIndirect;
+        GfxKernel GenerateDrawIndirect;
 
         GfxKernel ClearCounters;
-        GfxKernel TransformAndSplatGaussians;
-        GfxKernel ShadeActiveGaussians;
-        GfxKernel SetActiveGaussianInstanceCount;
-        GfxKernel AssignGaussianInstanceKeys;
-        GfxKernel FindTileGaussianInstanceStarts;
-        GfxKernel RasterizeActiveGaussians;
+        GfxKernel FilterActiveGaussians;
+        GfxKernel ProjectActiveGaussians;
 
         GfxKernel Trace3DGSRays;
         GfxKernel SpawnCameraRays;
@@ -107,6 +99,7 @@ void DestroyKernels ();
         // Minimum opacity at the ray-gayssian intersection for 3DGS to be evaluated in ray tracing.
         // Otherwise, they are ignored.
         float min_alpha_for_gaussian_evaluation {0.01f};
+
     } options_;
 
     struct {

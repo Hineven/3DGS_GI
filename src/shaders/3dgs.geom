@@ -8,7 +8,8 @@ struct DrawActiveGaussians_GSInput
 struct DrawActiveGaussians_GSOutput
 {
     float4 Position    : SV_POSITION;
-    float4 UVWActiveID : TEXCOORD;
+    float4 UVWR : TEXCOORD0;
+    float4 GBMR : TEXCOORD1;
 };
 
 [maxvertexcount(4)]
@@ -30,22 +31,31 @@ void DrawActiveGaussians(point DrawActiveGaussians_GSInput Input[1], inout Trian
     float2 Left   = Center - Expand * Vec2;
     float2 Right  = Center + Expand * Vec2;
     
+    float Depth = g_RWActiveGaussianLinearDepthBuffer[ActiveListIndex];
+    int GaussianIndex = g_RWActiveGaussianListBuffer[ActiveListIndex];
+    Gaussian G = FetchGaussian(GaussianIndex);
+    SHCoefficents3 SH = FetchGaussianSHCoefficients(GaussianIndex, 0);
+
     DrawActiveGaussians_GSOutput Output;
     
-    Output.UVWActiveID = float4(-Expand, 0, Alpha, ActiveListIndex);
-    Output.Position = float4(Top, 0, 1);
+    Output.UVWR = float4(-Expand, 0, G.Alpha, SH.Low.Color.x);
+    Output.GBMR = float4(SH.Low.Color.yz, 0.xx);
+    Output.Position = float4(Top, Depth, 1);
     TriStream.Append(Output);
 
-    Output.UVWActiveID = float4(Expand, 0,  Alpha, ActiveListIndex);
-    Output.Position = float4(Bottom, 0, 1);
+    Output.UVWR = float4(Expand, 0,  G.Alpha, SH.Low.Color.x);
+    Output.GBMR = float4(SH.Low.Color.yz, 0.xx);
+    Output.Position = float4(Bottom, Depth, 1);
     TriStream.Append(Output);
 
-    Output.UVWActiveID = float4(0, -Expand, Alpha, ActiveListIndex);
-    Output.Position = float4(Left, 0, 1);
+    Output.UVWR = float4(0, -Expand, G.Alpha, SH.Low.Color.x);
+    Output.GBMR = float4(SH.Low.Color.yz, 0.xx);
+    Output.Position = float4(Left, Depth, 1);
     TriStream.Append(Output);
 
-    Output.UVWActiveID = float4(0, Expand,  Alpha, ActiveListIndex);
-    Output.Position = float4(Right, 0, 1);
+    Output.UVWR = float4(0, Expand,  G.Alpha, SH.Low.Color.x);
+    Output.GBMR = float4(SH.Low.Color.yz, 0.xx);
+    Output.Position = float4(Right, Depth, 1);
     TriStream.Append(Output);
     
     TriStream.RestartStrip();

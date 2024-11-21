@@ -71,6 +71,16 @@ void GenerateDispatchIndirect () {
 	g_RWDispatchIndirectCommandBuffer[0] = Cmd;
 }
 
+[numthreads(1, 1, 1)]
+void GenerateDrawIndirect () {
+	DrawIndirectCommand Cmd = (DrawIndirectCommand)0;
+	Cmd.VertexCount = g_VertexToDrawCountBuffer[0];
+	Cmd.InstanceCount = 1;
+	Cmd.StartVertex = 0;
+	Cmd.StartInstance = 0;
+	g_RWDrawIndirectCommandBuffer[0] = Cmd;
+}
+
 uint4 GetOverlappingTiles (float2 ScreenPosition, float Radius) {
 	float2 MinTexCoords = ScreenPosition - Radius;
 	float2 MaxTexCoords = ScreenPosition + Radius;
@@ -109,13 +119,16 @@ void FilterActiveGaussians (uint DispatchID : SV_DispatchThreadID) {
 		// Store the indices of active gaussians into a list.
 		int ActiveListIndex = GaussianBaseIndex + GaussianRank;
 
-		g_RWActiveGaussianListBuffer[ActiveListIndex] = GaussianIndex;
+		g_RWActiveGaussianListSrcBuffer[ActiveListIndex] = GaussianIndex;
 		// The view space align the view direction with the negative z axis
 		float LinearDepth = -ViewSpacePosition.z;
 		LinearDepth = saturateDown(LinearDepth);
-		g_RWActiveGaussianLinearDepthBuffer[ActiveListIndex] = LinearDepth;
+		g_RWActiveGaussianLinearDepthSrcBuffer[ActiveListIndex] = LinearDepth;
 	}
 }
+
+// The active indices are sorted according to their linear depth
+
 
 CameraDescription GetCameraDescription () {
     return UB.MainCamera;
@@ -180,7 +193,7 @@ void ProjectActiveGaussians (uint DispatchID : SV_DispatchThreadID) {
 }
 
 // Gaussians are later HW rasterized
-
+#ifdef _SW_RASTERIZATION
 // Splat 3D gaussians onto the screen
 [numthreads(WAVE_SIZE, 1, 1)]
 void TransformAndSplatGaussians (uint DispatchID : SV_DispatchThreadID) {
@@ -495,6 +508,8 @@ void RasterizeActiveGaussians (uint GroupID : SV_GroupID, uint LocalID : SV_Grou
 	}
 }
 
+
+#endif // _SW_RASTERIZATION
 
 // Spawn rays starting from the camera
 // For 3DGS HWRT testing purposes only.

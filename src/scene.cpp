@@ -160,3 +160,42 @@ glm::mat4x4 Camera::GetProjectionMatrix () const {
     auto projection_matrix = glm::perspective(fov_y, aspect, near, far);
     return projection_matrix;
 }
+
+CameraDescription Camera::PackDescription(int film_width, int film_height) const {
+    auto aspect = (double)film_width / film_height;
+    auto tan_fov_y = tan(fov_y / 2.0);
+    auto two_tan_fov_y = float(tan_fov_y * 2.0);
+
+    glm::vec3 axis_forward = direction;
+    // Camera forward is -z axis
+    glm::vec3 axis_right = glm::normalize(glm::cross(axis_forward, up));
+    glm::vec3 axis_up = glm::normalize(glm::cross(axis_right, axis_forward));
+    // Thus, normalize(axis_forward + axis_right * ndc.x + axis_up * ndc.y) is the camera ray direction
+    axis_up    *= tan_fov_y;
+    axis_right *= tan_fov_y * aspect;
+
+    CameraDescription ret = {};
+
+    ret.View = GetViewMatrix();
+    ret.Projection = GetProjectionMatrix();
+    ret.ViewProjection = ret.Projection * ret.View;
+
+    ret.Position = position;
+    ret.NearPlane = near;
+
+    ret.Direction = axis_forward;
+    ret.FarPlane  = far;
+
+    ret.Focal = glm::vec2(film_width, film_height) / two_tan_fov_y;
+    ret.FieldOfView = glm::vec2(aspect * two_tan_fov_y, two_tan_fov_y);
+
+    ret.FilmDimensions = glm::ivec2(film_width, film_height);
+    ret.InvFilmDimensions = glm::vec2(1.0 / film_width, 1.0 / film_height);
+
+    ret.Right = axis_right;
+    ret.Flags = 0;
+
+    ret.Up = axis_up;
+
+    return ret;
+}

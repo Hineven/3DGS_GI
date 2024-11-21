@@ -2,7 +2,9 @@
 
 struct DrawActiveGaussians_FSInput
 {
-    float4 UVWActiveID : TEXCOORD0;
+    float4 UVWR : TEXCOORD0;
+    float4 GBMR : TEXCOORD1;
+    float4 Position : SV_Position;
 };
 
 float Evaluate2DNormalizedGaussian (float2 P) {
@@ -11,12 +13,11 @@ float Evaluate2DNormalizedGaussian (float2 P) {
 }
 
 float4 DrawActiveGaussians (DrawActiveGaussians_FSInput Input) : SV_Target {
-    int ActiveListIndex = (int)Input.UVWActiveID.w;
-    float2 UV    = Input.UVWActiveID.xy;
-    float  Alpha = Input.UVWActiveID.z * Evaluate2DNormalizedGaussian(UV);
-    float3 Color = g_RWActiveGaussianColorBuffer[ActiveListIndex];
-    // ...
-    return float4(Color, Alpha);
+    float2 UV     =   Input.UVWR.xy;
+    float  Alpha  = Input.UVWR.z * Evaluate2DNormalizedGaussian(UV);
+    float3 Albedo = float3(Input.UVWR.w, Input.GBMR.xy);
+    float  LinearDepth  = Input.Position.z;
+    return float4(Albedo, Alpha);
 }
 
 float4 TonemapAndDraw (float4 InPosition : SV_Position) : SV_Target {

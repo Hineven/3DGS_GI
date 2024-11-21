@@ -11,6 +11,7 @@
 #include <filesystem>
 #include <glm/glm.hpp>
 #include "common.h"
+#include "3dgs_shared.hlsl"
 
 class DeviceScene;
 
@@ -19,6 +20,8 @@ class Camera {
 public:
     Camera() = default;
     ~Camera() = default;
+
+    CameraDescription PackDescription (int film_width, int film_height) const;
 
     glm::mat4x4 GetViewMatrix () const;
     glm::mat4x4 GetProjectionMatrix () const;

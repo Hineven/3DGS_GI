@@ -1,7 +1,7 @@
 #ifndef INC_3DGS_INC_HLSL
 #define INC_3DGS_INC_HLSL
 
-#include "3dgs_shared.hlsl"
+#include "../3dgs_shared.hlsl"
 
 #define INVALID_U32 (0xffffffffu)
 
@@ -57,15 +57,19 @@ StructuredBuffer<float3> g_GaussianSH3Buffer;
 RWStructuredBuffer<DispatchIndirectCommand> g_RWDispatchIndirectCommandBuffer;
 StructuredBuffer<uint> g_ThreadsToDispatchCountBuffer;
 
+RWStructuredBuffer<DrawIndirectCommand> g_RWDrawIndirectCommandBuffer;
+StructuredBuffer<uint> g_VertexToDrawCountBuffer;
+
 // Number of active gaussians. Updated every frame.
 RWStructuredBuffer<uint>  g_RWActiveGaussianCountBuffer;
-// List of active gaussian indices
-RWStructuredBuffer<uint>  g_RWActiveGaussianListBuffer;
+// List of active gaussian indices (unsorted)
+RWStructuredBuffer<uint>  g_RWActiveGaussianListSrcBuffer;
 // Depths of the active gaussians (used for sorting keys)
-RWStructuredBuffer<float> g_RWActiveGaussianLinearDepthBuffer;
+RWStructuredBuffer<float> g_RWActiveGaussianLinearDepthSrcBuffer;
 // RWStructuredBuffer<float> g_RWActiveGaussianLinearDepthSortedBuffer;
 // Sorted active gaussian list (sorted by depth)
-RWStructuredBuffer<float> g_RWActiveGaussianListSortedBuffer;
+RWStructuredBuffer<float> g_RWActiveGaussianListBuffer;
+RWStructuredBuffer<float> g_RWActiveGaussianLinearDepthBuffer;
 
 // Screen positions of the active gaussians, 1/2 packed (sorted)
 RWStructuredBuffer<uint>   g_RWActiveGaussianNDCPositionBuffer;

@@ -46,4 +46,42 @@ struct DispatchIndirectCommand {
     uint Padding0;
 };
 
+struct DeviceVirtualAddressRange
+{
+   uint2 StartAddress;
+   uint2 SizeInBytes;
+};
+
+typedef struct DeviceVirtualAddressRangeAndStride
+{
+    uint2 StartAddress;
+    uint2 SizeInBytes;
+    uint2 StrideInBytes;
+};
+
+struct DispatchRaysIndirectCommand
+{
+    DeviceVirtualAddressRange RayGenerationShaderRecord;
+
+    DeviceVirtualAddressRangeAndStride MissShaderTable;
+    DeviceVirtualAddressRangeAndStride HitGroupTable;
+
+    DeviceVirtualAddressRangeAndStride CallableShaderTable;
+    uint Width;
+    uint Height;
+
+    uint Depth;
+    uint Padding0;
+    uint Padding1;
+    uint Padding2;
+};
+
+struct DrawIndirectCommand
+{
+    uint VertexCount;
+    uint InstanceCount;
+    uint StartVertex;
+    uint StartInstance;
+};
+
 #endif

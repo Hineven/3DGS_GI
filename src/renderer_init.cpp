@@ -16,39 +16,38 @@ bool Renderer::CreateResources () {
     auto & gfx = AppInternal::GetInstance().GetGfx();
     buf_.dispatch_indirect_command = gfxCreateBuffer<DispatchIndirectCommand>(gfx, 1);
     buf_.dispatch_indirect_command.setName("DispatchIndirectCommand");
-    buf_.gaussian_active_count = gfxCreateBuffer<int>(gfx, 1);
-    buf_.gaussian_active_count.setName("GaussianActiveCount");
+    buf_.dispatch_rays_indirect_command = gfxCreateBuffer<DispatchRaysIndirectCommand>(gfx, 1);
+    buf_.dispatch_rays_indirect_command.setName("DispatchRaysIndirectCommand");
+    buf_.draw_indirect_command = gfxCreateBuffer<DrawIndirectCommand>(gfx, 1);
+    buf_.draw_indirect_command.setName("DrawIndirectCommand");
+    buf_.active_gaussian_count = gfxCreateBuffer<int>(gfx, 1);
+    buf_.active_gaussian_count.setName("GaussianActiveCount");
+    buf_.active_gaussian_src_list = gfxCreateBuffer<int>(gfx, max_num_gaussians);
+    buf_.active_gaussian_src_list.setName("ActiveGaussianSrcList");
     buf_.active_gaussian_list = gfxCreateBuffer<int>(gfx, max_num_gaussians);
     buf_.active_gaussian_list.setName("ActiveGaussianList");
+    buf_.active_gaussian_src_depth = gfxCreateBuffer<float>(gfx, max_num_gaussians);
+    buf_.active_gaussian_src_depth.setName("ActiveGaussianSrcDepth");
     buf_.active_gaussian_depth = gfxCreateBuffer<float>(gfx, max_num_gaussians);
     buf_.active_gaussian_depth.setName("ActiveGaussianDepth");
+
+    // 2x16  packed
+    buf_.active_gaussian_NDC_position = gfxCreateBuffer<uint>(gfx, max_num_gaussians);
+    buf_.active_gaussian_NDC_position.setName("ActiveGaussianNDCPosition");
+    // 2x16  packed
+    buf_.active_gaussian_quad_NDC_vector0 = gfxCreateBuffer<uint>(gfx, max_num_gaussians);
+    buf_.active_gaussian_quad_NDC_vector0.setName("ActiveGaussianQuadNDCVector0");
+    // 2x16  packed
+    buf_.active_gaussian_quad_NDC_vector1 = gfxCreateBuffer<uint>(gfx, max_num_gaussians);
+    buf_.active_gaussian_quad_NDC_vector1.setName("ActiveGaussianQuadNDCVector1");
     buf_.active_gaussian_screen_position = gfxCreateBuffer<glm::vec2>(gfx, max_num_gaussians);
     buf_.active_gaussian_screen_position.setName("ActiveGaussianScreenPosition");
-    buf_.active_gaussian_screen_radius = gfxCreateBuffer<float>(gfx, max_num_gaussians);
-    buf_.active_gaussian_screen_radius.setName("ActiveGaussianScreenRadius");
+
     buf_.active_gaussian_conic_w = gfxCreateBuffer<glm::vec4>(gfx, max_num_gaussians);
     buf_.active_gaussian_conic_w.setName("ActiveGaussianConicW");
-    buf_.active_gaussian_tile_count = gfxCreateBuffer<int>(gfx, max_num_gaussians);
-    buf_.active_gaussian_tile_count.setName("ActiveGaussianTileCount");
-    buf_.active_gaussian_instance_base = gfxCreateBuffer<int>(gfx, max_num_gaussians);
-    buf_.active_gaussian_instance_base.setName("ActiveGaussianInstanceBase");
-    buf_.active_gaussian_instance_count = gfxCreateBuffer<int>(gfx, 1);
-    buf_.active_gaussian_instance_count.setName("ActiveGaussianInstanceCount");
-    buf_.active_gaussian_color = gfxCreateBuffer<glm::vec3>(gfx, max_num_gaussians);
-    buf_.active_gaussian_color.setName("ActiveGaussianColor");
-    buf_.active_gaussian_instance_key = gfxCreateBuffer<int>(gfx, max_num_gaussian_instances);
-    buf_.active_gaussian_instance_key.setName("ActiveGaussianInstanceKey");
-    buf_.active_gaussian_instance_key_sorted = gfxCreateBuffer<int>(gfx, max_num_gaussian_instances);
-    buf_.active_gaussian_instance_key_sorted.setName("ActiveGaussianInstanceKeySorted");
-    buf_.active_gaussian_instance_gaussian_index = gfxCreateBuffer<int>(gfx, max_num_gaussian_instances);
-    buf_.active_gaussian_instance_gaussian_index.setName("ActiveGaussianInstanceGaussianIndex");
-    buf_.active_gaussian_instance_gaussian_index_sorted = gfxCreateBuffer<int>(gfx, max_num_gaussian_instances);
-    buf_.active_gaussian_instance_gaussian_index_sorted.setName("ActiveGaussianInstanceGaussianIndexSorted");
+
     int num_tiles = divideAndRoundUp(width, TILE_SIZE) * divideAndRoundUp(height, TILE_SIZE);
-    buf_.tile_gaussian_instance_start = gfxCreateBuffer<int>(gfx, num_tiles);
-    buf_.tile_gaussian_instance_start.setName("TileGaussianInstanceStart");
-    buf_.tile_gaussian_instance_end = gfxCreateBuffer<int>(gfx, num_tiles);
-    buf_.tile_gaussian_instance_end.setName("TileGaussianInstanceEnd");
+
 
     int max_num_rays = options_.max_num_rays;
 
@@ -80,22 +79,19 @@ bool Renderer::CreateResources () {
 void Renderer::DestroyResources() {
     auto & gfx = AppInternal::GetInstance().GetGfx();
     gfxDestroyBuffer(gfx, buf_.dispatch_indirect_command);
-    gfxDestroyBuffer(gfx, buf_.gaussian_active_count);
+    gfxDestroyBuffer(gfx, buf_.dispatch_rays_indirect_command);
+    gfxDestroyBuffer(gfx, buf_.draw_indirect_command);
+    gfxDestroyBuffer(gfx, buf_.active_gaussian_count);
+    gfxDestroyBuffer(gfx, buf_.active_gaussian_src_list);
     gfxDestroyBuffer(gfx, buf_.active_gaussian_list);
+    gfxDestroyBuffer(gfx, buf_.active_gaussian_src_depth);
     gfxDestroyBuffer(gfx, buf_.active_gaussian_depth);
+    gfxDestroyBuffer(gfx, buf_.active_gaussian_NDC_position);
+    gfxDestroyBuffer(gfx, buf_.active_gaussian_quad_NDC_vector0);
+    gfxDestroyBuffer(gfx, buf_.active_gaussian_quad_NDC_vector1);
     gfxDestroyBuffer(gfx, buf_.active_gaussian_screen_position);
-    gfxDestroyBuffer(gfx, buf_.active_gaussian_screen_radius);
     gfxDestroyBuffer(gfx, buf_.active_gaussian_conic_w);
-    gfxDestroyBuffer(gfx, buf_.active_gaussian_tile_count);
-    gfxDestroyBuffer(gfx, buf_.active_gaussian_instance_base);
-    gfxDestroyBuffer(gfx, buf_.active_gaussian_instance_count);
-    gfxDestroyBuffer(gfx, buf_.active_gaussian_color);
-    gfxDestroyBuffer(gfx, buf_.active_gaussian_instance_key);
-    gfxDestroyBuffer(gfx, buf_.active_gaussian_instance_key_sorted);
-    gfxDestroyBuffer(gfx, buf_.active_gaussian_instance_gaussian_index);
-    gfxDestroyBuffer(gfx, buf_.active_gaussian_instance_gaussian_index_sorted);
-    gfxDestroyBuffer(gfx, buf_.tile_gaussian_instance_start);
-    gfxDestroyBuffer(gfx, buf_.tile_gaussian_instance_end);
+
     gfxDestroyBuffer(gfx, buf_.ray_to_trace_count);
     gfxDestroyBuffer(gfx, buf_.ray_to_trace_direction);
     gfxDestroyBuffer(gfx, buf_.ray_to_trace_origin);
@@ -149,20 +145,14 @@ bool Renderer::CreateKernels () {
 
         kernel_.GenerateDispatchIndirect = gfxCreateComputeKernel(gfx, program_, "GenerateDispatchIndirect",
                                                                   defines_c.get(), define_count);
+        kernel_.GenerateDrawIndirect = gfxCreateComputeKernel(gfx, program_, "GenerateDrawIndirect",
+                                                              defines_c.get(), define_count);
 
         kernel_.ClearCounters = gfxCreateComputeKernel(gfx, program_, "ClearCounters", defines_c.get(), define_count);
-        kernel_.TransformAndSplatGaussians = gfxCreateComputeKernel(gfx, program_, "TransformAndSplatGaussians",
-                                                                    defines_c.get(), define_count);
-        kernel_.ShadeActiveGaussians = gfxCreateComputeKernel(gfx, program_, "ShadeActiveGaussians", defines_c.get(),
-                                                              define_count);
-        kernel_.SetActiveGaussianInstanceCount = gfxCreateComputeKernel(gfx, program_, "SetActiveGaussianInstanceCount",
-                                                                        defines_c.get(), define_count);
-        kernel_.AssignGaussianInstanceKeys = gfxCreateComputeKernel(gfx, program_, "AssignGaussianInstanceKeys",
-                                                                    defines_c.get(), define_count);
-        kernel_.FindTileGaussianInstanceStarts = gfxCreateComputeKernel(gfx, program_, "FindTileGaussianInstanceStarts",
-                                                                        defines_c.get(), define_count);
-        kernel_.RasterizeActiveGaussians = gfxCreateComputeKernel(gfx, program_, "RasterizeActiveGaussians",
-                                                                  defines_c.get(), define_count);
+        kernel_.FilterActiveGaussians = gfxCreateComputeKernel(gfx, program_, "FilterActiveGaussians",
+                                                               defines_c.get(), define_count);
+        kernel_.ProjectActiveGaussians = gfxCreateComputeKernel(gfx, program_, "ProjectActiveGaussians",
+                                                                defines_c.get(), define_count);
 
         kernel_.SpawnCameraRays = gfxCreateComputeKernel(gfx, program_, "SpawnCameraRays", defines_c.get(),
                                                          define_count);
@@ -216,6 +206,7 @@ bool Renderer::CreateKernels () {
                                  D3D12_BLEND_SRC_ALPHA, D3D12_BLEND_INV_SRC_ALPHA, D3D12_BLEND_OP_ADD,
                                  D3D12_BLEND_SRC_ALPHA, D3D12_BLEND_DEST_ALPHA, D3D12_BLEND_OP_ADD);
         gfxDrawStateEnableAlphaBlending(draw_state);
+        gfxDrawStateSetPrimitiveTopologyType(draw_state, D3D12_PRIMITIVE_TOPOLOGY_TYPE_POINT);
         kernel_.DrawActiveGaussians = gfxCreateGraphicsKernel(
                 gfx, program_, draw_state, "DrawActiveGaussians", defines_c.get(), define_count);
     }
@@ -232,14 +223,11 @@ void Renderer::DestroyKernels () {
     gfxDestroyKernel(gfx, kernel_.GenerateRTMesh);
 
     gfxDestroyKernel(gfx, kernel_.GenerateDispatchIndirect);
+    gfxDestroyKernel(gfx, kernel_.GenerateDrawIndirect);
 
     gfxDestroyKernel(gfx, kernel_.ClearCounters);
-    gfxDestroyKernel(gfx, kernel_.TransformAndSplatGaussians);
-    gfxDestroyKernel(gfx, kernel_.ShadeActiveGaussians);
-    gfxDestroyKernel(gfx, kernel_.SetActiveGaussianInstanceCount);
-    gfxDestroyKernel(gfx, kernel_.AssignGaussianInstanceKeys);
-    gfxDestroyKernel(gfx, kernel_.FindTileGaussianInstanceStarts);
-    gfxDestroyKernel(gfx, kernel_.RasterizeActiveGaussians);
+    gfxDestroyKernel(gfx, kernel_.FilterActiveGaussians);
+    gfxDestroyKernel(gfx, kernel_.ProjectActiveGaussians);
 
     gfxDestroyKernel(gfx, kernel_.Trace3DGSRays);
     gfxDestroyKernel(gfx, kernel_.SpawnCameraRays);

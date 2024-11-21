@@ -25,6 +25,13 @@ void Renderer::GenerateDispatchIndirect (const GfxBuffer & thread_count_buffer) 
     gfxCommandDispatch(gfx, 1, 1, 1);
 }
 
+void Renderer::GenerateDrawIndirect(const GfxBuffer &vertex_count_buffer) {
+    auto & gfx = AppInternal::GetInstance().GetGfx();
+    gfxProgramSetParameter(gfx, program_, "g_VertexToDrawCountBuffer", vertex_count_buffer);
+    gfxCommandBindKernel(gfx, kernel_.GenerateDrawIndirect);
+    gfxCommandDispatch(gfx, 1, 1, 1);
+}
+
 void Renderer::RenderUI () {
     if(ImGui::CollapsingHeader("Renderer")) {
         ImGui::Checkbox("Show HWRT Color", &options_.show_HWRT_color);
@@ -40,50 +47,23 @@ void Renderer::Render() {
 
     UniformBlock UB = {};
     {
-        UB.View = camera.GetViewMatrix();
-        UB.Projection = camera.GetProjectionMatrix();
-        UB.ViewProjection = UB.Projection * UB.View;
-
-        UB.CameraPosition = camera.position;
-
-        UB.NumGaussians     = scene.GetNumGaussians();
-
         glm::ivec2 resolution = {
                 AppInternal::GetInstance().GetWindowWidth(),
                 AppInternal::GetInstance().GetWindowHeight()
         };
-        auto tan_fov_y = tan(camera.fov_y / 2.0);
-        auto two_tan_fov_y = float(tan_fov_y * 2.0);
-        UB.CameraFocal = glm::vec2(resolution) / two_tan_fov_y;
-        auto Aspect = float(double(resolution.x) / resolution.y);
-        UB.CameraFieldOfView = glm::vec2(Aspect * two_tan_fov_y, two_tan_fov_y);
+        assert(UB.TileDimensions.x * TILE_SIZE == resolution.x);
+        assert(UB.TileDimensions.y * TILE_SIZE == resolution.y);
+        UB.MainCamera = camera.PackDescription(resolution.x, resolution.y);
 
-        glm::vec3 axis_forward = camera.direction;
-        // Camera forward is -z axis
-        glm::vec3 axis_right = glm::normalize(glm::cross(axis_forward, camera.up));
-        glm::vec3 axis_up = glm::normalize(glm::cross(axis_right, axis_forward));
-        // Thus, normalize(axis_forward + axis_right * ndc.x + axis_up * ndc.y) is the camera ray direction
-        axis_up    *= tan_fov_y;
-        axis_right *= tan_fov_y * Aspect;
-
-        UB.CameraRight = axis_right;
-        UB.CameraNearPlane = camera.near;
-
-        UB.CameraUp = axis_up;
-        UB.CameraFarPlane  = camera.far;
-
-        UB.CameraDirection = axis_forward;
+        UB.NumGaussians     = scene.GetNumGaussians();
         UB.GaussianRTProxyGeometrySigma = options_.gaussian_RT_proxy_geometry_sigma;
+        UB.IndirectThreadGroupSize = cfg_.wave_lane_count;
+        UB.MinAlphaForGaussianEvaluation = options_.min_alpha_for_gaussian_evaluation;
 
         UB.ScreenDimensions = resolution;
         UB.TileDimensions   = resolution / TILE_SIZE;
 
-        assert(UB.TileDimensions.x * TILE_SIZE == resolution.x);
-        assert(UB.TileDimensions.y * TILE_SIZE == resolution.y);
-        UB.IndirectThreadGroupSize = cfg_.wave_lane_count;
-        UB.MinAlphaForGaussianEvaluation = options_.min_alpha_for_gaussian_evaluation;
         UB.SmallTileDimensions = resolution / SMALL_TILE_SIZE;
-
         UB.RT_AlphaMultiplier = 2.f;
     }
     gfxBufferGetData<UniformBlock>(gfx, buf_.UB)[frame_index_ & 1] = UB;
@@ -93,25 +73,19 @@ void Renderer::Render() {
     device_scene.Bind(program_);
 
     gfxProgramSetParameter(gfx, program_, "g_RWDispatchIndirectCommandBuffer", buf_.dispatch_indirect_command);
+    gfxProgramSetParameter(gfx, program_, "g_RWDispatchRaysIndirectCommandBuffer", buf_.dispatch_rays_indirect_command);
+    gfxProgramSetParameter(gfx, program_, "g_RWDrawIndirectCommandBuffer", buf_.draw_indirect_command);
 
-    gfxProgramSetParameter(gfx, program_, "g_RWGaussianActiveCountBuffer", buf_.gaussian_active_count);
+    gfxProgramSetParameter(gfx, program_, "g_RWGaussianActiveCountBuffer", buf_.active_gaussian_count);
+    gfxProgramSetParameter(gfx, program_, "g_RWActiveGaussianSrcListBuffer", buf_.active_gaussian_src_list);
     gfxProgramSetParameter(gfx, program_, "g_RWActiveGaussianListBuffer", buf_.active_gaussian_list);
+    gfxProgramSetParameter(gfx, program_, "g_RWActiveGaussianSrcDepthBuffer", buf_.active_gaussian_src_depth);
     gfxProgramSetParameter(gfx, program_, "g_RWActiveGaussianDepthBuffer", buf_.active_gaussian_depth);
-    gfxProgramSetParameter(gfx, program_, "g_RWActiveGaussianScreenPositionBuffer", buf_.active_gaussian_screen_position);
-    gfxProgramSetParameter(gfx, program_, "g_RWActiveGaussianScreenRadiusBuffer", buf_.active_gaussian_screen_radius);
+
+    gfxProgramSetParameter(gfx, program_, "g_RWActiveGaussianNDCPositionBuffer", buf_.active_gaussian_NDC_position);
+    gfxProgramSetParameter(gfx, program_, "g_RWActiveGaussianQuadNDCVector0Buffer", buf_.active_gaussian_quad_NDC_vector0);
+    gfxProgramSetParameter(gfx, program_, "g_RWActiveGaussianQuadNDCVector1Buffer", buf_.active_gaussian_quad_NDC_vector1);
     gfxProgramSetParameter(gfx, program_, "g_RWActiveGaussianConicWBuffer", buf_.active_gaussian_conic_w);
-    gfxProgramSetParameter(gfx, program_, "g_RWActiveGaussianTileCountBuffer", buf_.active_gaussian_tile_count);
-    gfxProgramSetParameter(gfx, program_, "g_RWActiveGaussianInstanceBaseBuffer", buf_.active_gaussian_instance_base);
-    gfxProgramSetParameter(gfx, program_, "g_RWActiveGaussianInstanceCountBuffer", buf_.active_gaussian_instance_count);
-    gfxProgramSetParameter(gfx, program_, "g_RWActiveGaussianColorBuffer", buf_.active_gaussian_color);
-
-    gfxProgramSetParameter(gfx, program_, "g_RWActiveGaussianInstanceKeyBuffer", buf_.active_gaussian_instance_key);
-    gfxProgramSetParameter(gfx, program_, "g_RWActiveGaussianInstanceKeySortedBuffer", buf_.active_gaussian_instance_key_sorted);
-    gfxProgramSetParameter(gfx, program_, "g_RWActiveGaussianInstanceGaussianIndexBuffer", buf_.active_gaussian_instance_gaussian_index);
-    gfxProgramSetParameter(gfx, program_, "g_RWActiveGaussianInstanceGaussianIndexSortedBuffer", buf_.active_gaussian_instance_gaussian_index_sorted);
-
-    gfxProgramSetParameter(gfx, program_, "g_RWTileGaussianInstanceStartBuffer", buf_.tile_gaussian_instance_start);
-    gfxProgramSetParameter(gfx, program_, "g_RWTileGaussianInstanceEndBuffer", buf_.tile_gaussian_instance_end);
 
     gfxProgramSetParameter(gfx, program_, "g_RWRayToTraceCountBuffer", buf_.ray_to_trace_count);
     gfxProgramSetParameter(gfx, program_, "g_RWRayToTraceDirectionBuffer", buf_.ray_to_trace_direction);
@@ -230,91 +204,30 @@ void Renderer::Render() {
     } else {
         // Rasterization pipeline
 
-        // Transform and first cull all gaussians outside of the view frustum
+        // Filter active gaussians
         {
-            auto section = TimedSection(*this, "TransformAndSplatGaussians");
-            gfxCommandBindKernel(gfx, kernel_.TransformAndSplatGaussians);
-            auto num_threads = gfxKernelGetNumThreads(gfx, kernel_.TransformAndSplatGaussians);
-            gfxCommandDispatch(gfx, divideAndRoundUp(scene.GetNumGaussians(), (int) num_threads[0]), 1, 1);
+            auto section = TimedSection(*this, "FilterActiveGaussians");
+            gfxCommandBindKernel(gfx, kernel_.FilterActiveGaussians);
+            auto num_threads = gfxKernelGetNumThreads(gfx, kernel_.FilterActiveGaussians);
+            uint num_groups = divideAndRoundUp((uint)scene.GetNumGaussians(), num_threads[0]);
+            gfxCommandDispatch(gfx, num_groups, 1, 1);
         }
 
-        // Compute the color for each gaussian with the current view direction using SH
+        // Project active gaussians
         {
-            auto section = TimedSection(*this, "ShadeActiveGaussians");
-            GenerateDispatchIndirect(buf_.gaussian_active_count);
-            gfxCommandBindKernel(gfx, kernel_.ShadeActiveGaussians);
+            auto section = TimedSection(*this, "ProjectActiveGaussians");
+            GenerateDispatchIndirect(buf_.active_gaussian_count);
+            gfxCommandBindKernel(gfx, kernel_.ProjectActiveGaussians);
             gfxCommandDispatchIndirect(gfx, buf_.dispatch_indirect_command);
         }
 
-        if(options_.tiled_rasterization) {
-            // Use the tiled implementation from the original 3DGS paper
-
-            // Scan sum all tiles to get total number of gaussian instances.
-            // A gaussian instance is spawned per each unique overlapping tile-gaussian pair.
-            {
-                auto section = TimedSection(*this, "ScanSumTileGaussianInstances");
-                gfxCommandScanSum(gfx, kGfxDataType_Uint,
-                                  buf_.active_gaussian_instance_base,
-                                  buf_.active_gaussian_tile_count,
-                                  &buf_.gaussian_active_count);
-            }
-
-            // Sum the number of active gaussian instances into a counter buffer for further processing.
-            {
-                auto section = TimedSection(*this, "SetActiveGaussianInstanceCount");
-                gfxCommandBindKernel(gfx, kernel_.SetActiveGaussianInstanceCount);
-                gfxCommandDispatch(gfx, 1, 1, 1);
-            }
-
-            // Assign a sort key to each active gaussian instance.
-            {
-                auto section = TimedSection(*this, "AssignGaussianInstanceKeys");
-                GenerateDispatchIndirect(buf_.active_gaussian_instance_count);
-                gfxCommandBindKernel(gfx, kernel_.AssignGaussianInstanceKeys);
-                gfxCommandDispatchIndirect(gfx, buf_.dispatch_indirect_command);
-            }
-
-            // Sort the active gaussian instances by their sort key.
-            {
-                auto section = TimedSection(*this, "SortActiveGaussianInstances");
-                //        gfxCommandBindKernel(gfx, kernel_.SetRadixSortDispatchParams);
-                //        gfxCommandBindKernel(gfx, kernel_.RadixSort);
-                gfxCommandSortRadix(gfx,
-                                    buf_.active_gaussian_instance_key_sorted,
-                                    buf_.active_gaussian_instance_key,
-                                    &buf_.active_gaussian_instance_gaussian_index_sorted,
-                                    &buf_.active_gaussian_instance_gaussian_index,
-                                    &buf_.active_gaussian_instance_count);
-            }
-
-            {
-                auto section = TimedSection(*this, "ClearTileGaussianInstanceStartsEnds");
-                gfxCommandClearBuffer(gfx, buf_.tile_gaussian_instance_start, 0xffffffffu);
-                gfxCommandClearBuffer(gfx, buf_.tile_gaussian_instance_end, 0xffffffffu);
-            }
-
-            {
-                assert(DEFAULT_REPEAT == 1);
-                auto section = TimedSection(*this, "FindTileGaussianInstanceStarts");
-                gfxCommandBindKernel(gfx, kernel_.FindTileGaussianInstanceStarts);
-                gfxCommandDispatchIndirect(gfx, buf_.dispatch_indirect_command);
-            }
-
-            {
-                auto section = TimedSection(*this, "RasterizeActiveGaussians");
-                gfxCommandBindKernel(gfx, kernel_.RasterizeActiveGaussians);
-                int tile_count = UB.TileDimensions.x * UB.TileDimensions.y;
-                gfxCommandDispatch(gfx, tile_count, 1, 1);
-            }
-        } else {
-            // Use HW rasterization pipeline
-
-            {
-                auto section = TimedSection(*this, "DrawActiveGaussians");
-                gfxCommandBindKernel(gfx, kernel_.DrawActiveGaussians);
-                gfxCommandBindVertexBuffer()
-            }
+        {
+            auto section = TimedSection(*this, "DrawActiveGaussians");
+            GenerateDrawIndirect(buf_.active_gaussian_count);
+            gfxCommandBindKernel(gfx, kernel_.DrawActiveGaussians);
+            gfxCommandMultiDrawIndirect(gfx, buf_.draw_indirect_command, 1);
         }
+
     }
 
     {

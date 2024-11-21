@@ -1,7 +1,8 @@
 struct DrawActiveGaussians_GSOutput
 {
     float4 Position    : SV_POSITION;
-    float4 UVWActiveID : TEXCOORD0;
+    float4 UVWR : TEXCOORD0;
+    float4 GBMR : TEXCOORD1;
 };
 
 DrawActiveGaussians_GSOutput DrawActiveGaussians (
