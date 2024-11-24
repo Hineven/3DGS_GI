@@ -8,7 +8,7 @@
 #include "gfx_imgui.h"
 #include "renderer.h"
 #include "device_scene.h"
-#include "shaders/3dgs_shared.hlsl"
+#include "3dgs_shared.hlsl"
 
 Renderer::Renderer () : Timed("Renderer") {
 
@@ -51,8 +51,6 @@ void Renderer::Render() {
                 AppInternal::GetInstance().GetWindowWidth(),
                 AppInternal::GetInstance().GetWindowHeight()
         };
-        assert(UB.TileDimensions.x * TILE_SIZE == resolution.x);
-        assert(UB.TileDimensions.y * TILE_SIZE == resolution.y);
         UB.MainCamera = camera.PackDescription(resolution.x, resolution.y);
 
         UB.NumGaussians     = scene.GetNumGaussians();
@@ -62,6 +60,8 @@ void Renderer::Render() {
 
         UB.ScreenDimensions = resolution;
         UB.TileDimensions   = resolution / TILE_SIZE;
+        assert(UB.TileDimensions.x * TILE_SIZE == resolution.x);
+        assert(UB.TileDimensions.y * TILE_SIZE == resolution.y);
 
         UB.SmallTileDimensions = resolution / SMALL_TILE_SIZE;
         UB.RT_AlphaMultiplier = 2.f;
@@ -76,11 +76,11 @@ void Renderer::Render() {
     gfxProgramSetParameter(gfx, program_, "g_RWDispatchRaysIndirectCommandBuffer", buf_.dispatch_rays_indirect_command);
     gfxProgramSetParameter(gfx, program_, "g_RWDrawIndirectCommandBuffer", buf_.draw_indirect_command);
 
-    gfxProgramSetParameter(gfx, program_, "g_RWGaussianActiveCountBuffer", buf_.active_gaussian_count);
-    gfxProgramSetParameter(gfx, program_, "g_RWActiveGaussianSrcListBuffer", buf_.active_gaussian_src_list);
+    gfxProgramSetParameter(gfx, program_, "g_RWActiveGaussianCountBuffer", buf_.active_gaussian_count);
+    gfxProgramSetParameter(gfx, program_, "g_RWActiveGaussianListSrcBuffer", buf_.active_gaussian_list_src);
     gfxProgramSetParameter(gfx, program_, "g_RWActiveGaussianListBuffer", buf_.active_gaussian_list);
-    gfxProgramSetParameter(gfx, program_, "g_RWActiveGaussianSrcDepthBuffer", buf_.active_gaussian_src_depth);
-    gfxProgramSetParameter(gfx, program_, "g_RWActiveGaussianDepthBuffer", buf_.active_gaussian_depth);
+    gfxProgramSetParameter(gfx, program_, "g_RWActiveGaussianLinearDepthSrcBuffer", buf_.active_gaussian_linear_depth_src);
+    gfxProgramSetParameter(gfx, program_, "g_RWActiveGaussianLinearDepthBuffer", buf_.active_gaussian_linear_depth);
 
     gfxProgramSetParameter(gfx, program_, "g_RWActiveGaussianNDCPositionBuffer", buf_.active_gaussian_NDC_position);
     gfxProgramSetParameter(gfx, program_, "g_RWActiveGaussianQuadNDCVector0Buffer", buf_.active_gaussian_quad_NDC_vector0);
@@ -96,6 +96,11 @@ void Renderer::Render() {
 
     gfxProgramSetParameter(gfx, program_, "g_RW_GColorTexture", tex_.G_color);
     gfxProgramSetParameter(gfx, program_, "g_GColorTexture", tex_.G_color);
+    gfxProgramSetParameter(gfx, program_, "g_RW_GMomentumTexture", tex_.G_momentum);
+    gfxProgramSetParameter(gfx, program_, "g_GMomentumTexture", tex_.G_momentum);
+
+    gfxProgramSetParameter(gfx, program_, "g_RW_Radiance", tex_.radiance);
+    gfxProgramSetParameter(gfx, program_, "g_Radiance", tex_.radiance);
 
     auto & samplers = AppInternal::GetInstance().GetSamplers();
     gfxProgramSetParameter(gfx, program_, "g_LinearClampSampler", samplers.linear_clamp);
@@ -213,6 +218,13 @@ void Renderer::Render() {
             gfxCommandDispatch(gfx, num_groups, 1, 1);
         }
 
+        // Sort active gaussians
+        {
+            auto section = TimedSection(*this, "SortActiveGaussians");
+            gfxCommandSortRadix(gfx, buf_.active_gaussian_linear_depth, buf_.active_gaussian_linear_depth_src,
+                                &buf_.active_gaussian_list, &buf_.active_gaussian_list_src, &buf_.active_gaussian_count);
+        }
+
         // Project active gaussians
         {
             auto section = TimedSection(*this, "ProjectActiveGaussians");
@@ -223,9 +235,24 @@ void Renderer::Render() {
 
         {
             auto section = TimedSection(*this, "DrawActiveGaussians");
+            // Cleared to (0, 0, 0, 0)
+            gfxCommandClearTexture(gfx, tex_.G_color);
+            gfxCommandClearTexture(gfx, tex_.G_momentum);
             GenerateDrawIndirect(buf_.active_gaussian_count);
             gfxCommandBindKernel(gfx, kernel_.DrawActiveGaussians);
+            gfxCommandBindColorTarget(gfx, 0, tex_.G_color);
+            gfxCommandBindColorTarget(gfx, 1, tex_.G_momentum);
             gfxCommandMultiDrawIndirect(gfx, buf_.draw_indirect_command, 1);
+        }
+
+        {
+            auto section = TimedSection(*this, "ResolveDepth");
+            gfxCommandBindKernel(gfx, kernel_.ResolveDepth);
+            auto num_threads = gfxKernelGetNumThreads(gfx, kernel_.ResolveDepth);
+            assert(UB.ScreenDimensions.x % num_threads[0] == 0 && UB.ScreenDimensions.y % num_threads[1] == 0);
+            uint num_groups_x = divideAndRoundUp((uint)UB.ScreenDimensions.x, num_threads[0]);
+            uint num_groups_y = divideAndRoundUp((uint)UB.ScreenDimensions.y, num_threads[1]);
+            gfxCommandDispatch(gfx, num_groups_x, num_groups_y, 1);
         }
 
     }

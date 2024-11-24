@@ -68,7 +68,7 @@ RWStructuredBuffer<uint>  g_RWActiveGaussianListSrcBuffer;
 RWStructuredBuffer<float> g_RWActiveGaussianLinearDepthSrcBuffer;
 // RWStructuredBuffer<float> g_RWActiveGaussianLinearDepthSortedBuffer;
 // Sorted active gaussian list (sorted by depth)
-RWStructuredBuffer<float> g_RWActiveGaussianListBuffer;
+RWStructuredBuffer<uint>  g_RWActiveGaussianListBuffer;
 RWStructuredBuffer<float> g_RWActiveGaussianLinearDepthBuffer;
 
 // Screen positions of the active gaussians, 1/2 packed (sorted)
@@ -77,7 +77,7 @@ RWStructuredBuffer<uint>   g_RWActiveGaussianQuadNDCVector0Buffer;
 RWStructuredBuffer<uint>   g_RWActiveGaussianQuadNDCVector1Buffer;
 
 // NDC space Conic W values of the active gaussians
-RWStructuredBuffer<float>  g_RWActiveGaussianConicWBuffer;
+RWStructuredBuffer<float4>  g_RWActiveGaussianConicWBuffer;
 
 
 // Raytracing related stuff
@@ -107,11 +107,13 @@ RWStructuredBuffer<uint2> g_RWRayToTraceResultBuffer;
 
 // G-Buffers
 RWTexture2D<float4>      g_RW_GColorTexture;
-// Linear depth texture, which is dot(HitPosition - CameraPosition, CameraDirection)
-RWTexture2D<float>       g_RW_GLinearDepthTexture;
-RWTexture2D<float4>      g_RW_GAlbedoTexture;
-
 Texture2D<float4>        g_GColorTexture;
+RWTexture2D<float2>      g_RW_GMomentumTexture;
+Texture2D<float2>        g_GMomentumTexture;
+// Output buffers
+RWTexture2D<float4>      g_RW_Radiance;
+Texture2D<float4>        g_Radiance;
+
 
 // All non-resource uniforms
 ConstantBuffer<UniformBlock> UB;

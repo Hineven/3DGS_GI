@@ -12,10 +12,10 @@
 #endif
 
 #ifdef __cplusplus
-
-#include <glm/glm.hpp>
+#define GLM_ENABLE_EXPERIMENTAL
+#include <glm/gtx/compatibility.hpp>
 // Make hlsl compile with c++ compiler.
-// I dont really care about project arch and maintainability.
+// I don't really care about project arch and maintainability.
 // So just leave these typedefs inside root namespace.
 typedef glm::vec2 float2;
 typedef glm::vec3 float3;
@@ -52,7 +52,7 @@ struct DeviceVirtualAddressRange
    uint2 SizeInBytes;
 };
 
-typedef struct DeviceVirtualAddressRangeAndStride
+struct DeviceVirtualAddressRangeAndStride
 {
     uint2 StartAddress;
     uint2 SizeInBytes;

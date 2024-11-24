@@ -39,10 +39,10 @@ void DestroyKernels ();
         GfxBuffer draw_indirect_command;
 
         GfxBuffer active_gaussian_count;
-        GfxBuffer active_gaussian_src_list;
+        GfxBuffer active_gaussian_list_src;
         GfxBuffer active_gaussian_list;
-        GfxBuffer active_gaussian_src_depth;
-        GfxBuffer active_gaussian_depth;
+        GfxBuffer active_gaussian_linear_depth_src;
+        GfxBuffer active_gaussian_linear_depth;
 
         GfxBuffer active_gaussian_NDC_position;
         GfxBuffer active_gaussian_quad_NDC_vector0;
@@ -62,7 +62,13 @@ void DestroyKernels ();
     } buf_ {};
 
     struct {
+
+        // fp32x2 (LinearDepth, LinearDepth^2)
+        GfxTexture G_momentum;
+        // fp16x4
         GfxTexture G_color;
+
+        GfxTexture radiance;
 //        GfxTexture output;
     } tex_ {};
 
@@ -76,6 +82,7 @@ void DestroyKernels ();
         GfxKernel ClearCounters;
         GfxKernel FilterActiveGaussians;
         GfxKernel ProjectActiveGaussians;
+        GfxKernel ResolveDepth;
 
         GfxKernel Trace3DGSRays;
         GfxKernel SpawnCameraRays;

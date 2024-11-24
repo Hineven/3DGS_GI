@@ -1,14 +1,16 @@
-struct DrawActiveGaussians_GSOutput
+#include "3dgs.hlsl"
+
+struct DrawActiveGaussians_GSInput
 {
-    float4 Position    : SV_POSITION;
-    float4 UVWR : TEXCOORD0;
-    float4 GBMR : TEXCOORD1;
+    uint PrimitiveIndex : TEXCOORD0;
 };
 
-DrawActiveGaussians_GSOutput DrawActiveGaussians (
-    DrawActiveGaussians_GSOutput Input
+DrawActiveGaussians_GSInput DrawActiveGaussians (
+    uint VertexIndex : SV_VertexID
 ) {
-    // Fall through
+    DrawActiveGaussians_GSInput Input;
+    // In reverse order (farthest to nearest)
+    Input.PrimitiveIndex = g_RWActiveGaussianCountBuffer[0] - VertexIndex - 1;
     return Input;
 }
 

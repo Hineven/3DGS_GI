@@ -1,7 +1,7 @@
 #ifndef INC_3DGS_SHARED_HLSL
 #define INC_3DGS_SHARED_HLSL
 
-#include "../device_shared.hlsl"
+#include "device_shared.hlsl"
 
 #define TILE_SIZE 16
 
@@ -12,7 +12,7 @@ struct CameraDescription {
     float4x4 View;
     // NDC: lhs, camera direction aligned to z, [-1, 1]*[-1, 1]*[0, 1]
     float4x4 Projection;
-    float4x4 ViewProjection;
+    float4x4 ProjectionView;
 
     float3 Position;
     float  NearPlane;

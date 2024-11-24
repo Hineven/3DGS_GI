@@ -31,6 +31,7 @@ int AppInternal::Run () {
 #endif
     );
 
+    glm::vec3 absolute_up = glm::vec3(0, 1, 0);
 
     // ImGui
     {
@@ -87,7 +88,7 @@ int AppInternal::Run () {
 
     // Load scene
     {
-        scene_.LoadGaussians(root_path + "data/counter/point_cloud/iteration_7000/point_cloud.ply");
+        scene_.LoadGaussians(root_path + "data/truck/point_cloud/iteration_7000/point_cloud.ply");
         scene_.UpdateDeviceScene();
     }
 
@@ -101,6 +102,15 @@ int AppInternal::Run () {
     double last_frame_time = std::chrono::duration<double>(clock.now().time_since_epoch()).count();
 
     std::vector<std::pair<std::string, float>> last_frame_timed_sections;
+
+    {
+        auto & camera = scene_.GetCamera();
+        auto abs_up = glm::normalize(glm::vec3{0, -1, 0.00});
+        camera.direction = glm::normalize(glm::vec3{0.86, 0.24, 0.45});
+        camera.position  = glm::vec3{-4.01, -0.75, -1.30};
+        auto right = glm::normalize(glm::cross(camera.direction, abs_up));
+        camera.up = glm::normalize(glm::cross(right, camera.direction));
+    }
 
     // Main loop
     while(!gfxWindowIsCloseRequested(window_)) {
@@ -195,6 +205,7 @@ int AppInternal::Run () {
             if (roll != 0.f)
             {
                 glm::quat rotation = glm::angleAxis(roll * delta_tick * 0.4f, camera.direction);
+                absolute_up = glm::normalize(rotation * absolute_up);
                 camera.up = glm::normalize(rotation * camera.up);
             }
             auto acceleration = glm::vec2(0.0f);
@@ -224,19 +235,19 @@ int AppInternal::Run () {
             {
                 // Update translation
 
-                glm::vec3 up = camera.up;
-                glm::vec3 right = glm::normalize(glm::cross(camera.direction, up));
+                glm::vec3 right = glm::normalize(glm::cross(camera.direction, absolute_up));
+                glm::vec3 up    = glm::normalize(glm::cross(right, camera.direction));
 
                 // Rotate camera
-                glm::quat rotationX = glm::angleAxis(-rotation.x, up);
-                glm::quat rotationY = glm::angleAxis(rotation.y, right);
+                glm::quat rotationX = glm::angleAxis(-rotation.x, absolute_up);
+                glm::quat rotationY = glm::angleAxis(-rotation.y, right);
 
                 const glm::vec3 newForward = normalize(camera.direction * rotationX * rotationY);
                 if (abs(dot(newForward, glm::vec3(0.0f, 1.0f, 0.0f))) < 0.9f)
                 {
                     // Prevent view and up direction becoming parallel (this uses a FPS style camera)
                     camera.direction   = newForward;
-                    const glm::vec3 newRight = normalize(cross(camera.direction, up));
+                    const glm::vec3 newRight = normalize(cross(camera.direction, absolute_up));
                     camera.up          = normalize(cross(newRight, newForward));
                 }
             }

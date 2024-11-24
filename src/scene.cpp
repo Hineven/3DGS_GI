@@ -108,7 +108,7 @@ bool Scene::LoadGaussians (std::filesystem::path path) {
     }
 
     // Limit the number to 10 for now
-//    num_gaussians_ = 50;
+    // num_gaussians_ = 50;
 
     // We assume that there're only 1 instance for now
     num_instances_ = 1;
@@ -178,7 +178,7 @@ CameraDescription Camera::PackDescription(int film_width, int film_height) const
 
     ret.View = GetViewMatrix();
     ret.Projection = GetProjectionMatrix();
-    ret.ViewProjection = ret.Projection * ret.View;
+    ret.ProjectionView = ret.Projection * ret.View;
 
     ret.Position = position;
     ret.NearPlane = near;

@@ -203,16 +203,21 @@ bool IsInFrustrum (
 	return true;
 }
 
-bool IsPointInFrustrum (CameraDescription C, float3 Position, bool Ortho = false, float NearClip = 0.f, float Expand = 0.f) {
-    float3 ViewSpacePosition = mul(C.View, float4(Position, 1.0f)).xyz;
+bool IsPointInFrustrum (CameraDescription C, float3 Position, out float3 ViewSpacePosition, bool Ortho = false, float NearClip = 0.f, float Expand = 0.f) {
+    ViewSpacePosition = mul(C.View, float4(Position, 1.0f)).xyz;
     float4 Homogeneous = mul(C.Projection, float4(ViewSpacePosition, 1.0f));
+    // -z axis is aligned with camera direction
+    if(ViewSpacePosition.z > 0) return false;
     if(Ortho) {
         // FIXME
         return false;
     } else {
-        float InvW = 1.0f / (Homogeneous.w + 1e-7f);
-        float3 Projected = Homogeneous.xyz * InvW;
-        return all(abs(Projected.xy) < 1.0f + Expand) && Projected.z >= NearClip && Projected.z <= 1.0f + Expand;
+        if(Homogeneous.w) {
+            float3 Projected = Homogeneous.xyz / Homogeneous.w;
+            return all(abs(Projected.xy) < 1.0f + Expand) && Projected.z >= NearClip && Projected.z <= 1.0f + Expand;
+        } else {
+            return false;
+        }
     }
 }
 
@@ -359,7 +364,7 @@ float saturateDown (float Value) {
     return clamp(Value, 0.0f, 1.f - FLT_EPSILON);
 }
 float2 saturateDown (float2 Value) {
-    return clamp(Value, 0.0f, 1.f - FLT_EPSILON);
+    return clamp(Value, 0.0f.xx, 1.f.xx - FLT_EPSILON.xx);
 }
 
 // Clamp to (0, 1]
@@ -537,31 +542,31 @@ float3 RadianceToColor (float3 Radiance, float Gamma = 2.2f) {
 }
 
 // Map (film space) NDC to a direction in world space
-float3 NDC2ToCameraDirectionUnnormalized (float2 NDC2) {
-    float3 UnnormalizedDirection = UB.CameraRight * NDC2.x + UB.CameraUp * NDC2.y + UB.CameraDirection;
+float3 NDC2ToCameraDirectionUnnormalized (CameraDescription Camera, float2 NDC2) {
+    float3 UnnormalizedDirection = Camera.Right * NDC2.x + Camera.Up * NDC2.y + Camera.Direction;
     return UnnormalizedDirection;
 }
 
-float3 NDC2ToCameraDirection (float2 NDC2) {
-    return normalize(NDC2ToCameraDirectionUnnormalized(NDC2));
+float3 NDC2ToCameraDirection (CameraDescription Camera, float2 NDC2) {
+    return normalize(NDC2ToCameraDirectionUnnormalized(Camera, NDC2));
 }
 
 // Spawn a camera ray from the screen position
-RayToTrace SpawnCameraRay (float2 ScreenPosition) {
+RayToTrace SpawnCameraRay (CameraDescription Camera, float2 ScreenPosition) {
     RayToTrace Ray = InitRayToTrace();
-    Ray.Origin = UB.CameraPosition;
+    Ray.Origin = Camera.Position;
     float2 NDC2 = ScreenToNDC2(ScreenPosition);
-    float3 DirectionUnnormalized = NDC2ToCameraDirectionUnnormalized(NDC2);
+    float3 DirectionUnnormalized = NDC2ToCameraDirectionUnnormalized(Camera, NDC2);
     float  Length = length(DirectionUnnormalized);
-    Ray.RayTMin = Length * UB.CameraNearPlane;
-    Ray.RayTMax = Length * UB.CameraFarPlane;
+    Ray.RayTMin = Length * Camera.NearPlane;
+    Ray.RayTMax = Length * Camera.FarPlane;
     Ray.Direction = normalize(DirectionUnnormalized);
     return Ray;
 }
 
-uint PackPadScreenPosition (float2 ScreenPosition) {
+uint PackPadScreenPosition (float2 ScreenPosition, float2 InvScreenDimensions) {
     // Scale and pad the borders of the screen space position to make sure it's in the range [0, 1]
-    float ScaledScreenPosition = saturateDown(.5f * ScreenPosition * UB.InvScreenDimensions + 0.25f);
+    float2 ScaledScreenPosition = saturateDown(.5f * ScreenPosition * InvScreenDimensions + 0.25f);
     return PackUnorm16x2(ScaledScreenPosition);
 }
 
@@ -593,6 +598,12 @@ float3 DebugColorHeatMap (float h) {
     float G = saturate(min(H - 0.5f, 3.5f - H));
     float B = saturate(min(H + 0.5f, 2.5f - H));
     return float3(R, G, B);
+}
+
+// Get the current active camera description
+CameraDescription GetCameraDescription () {
+    // TODO meshcards
+    return UB.MainCamera;
 }
 
 #endif // INC_3DGS_HLSL

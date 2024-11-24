@@ -22,19 +22,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ****************************************************************************/
 
-struct PSInput {
-    float4 position : SV_POSITION;
-    float4 color : COLOR;
-};
-
-float3 Color1;
-float3 Color2;
-float Dist;
-
-PSInput main(float3 pos : Position, uint iid : SV_InstanceID)
+float4 main(float3 pos : Position) : SV_Position
 {
-PSInput o;
-    o.position = float4(pos.xy, iid == 0 ? 1.f : 0.5f, 1);
-    o.color = float4(iid == 1 ? float3(1, 0, 0) : float3(0, 1, 0), 1);
-return o;
+    return float4(pos, 1.0f);
 }

@@ -4,7 +4,7 @@
  * See LICENSE for licensing.
  */
 #include "renderer.h"
-#include "shaders/3dgs_shared.hlsl"
+#include "3dgs_shared.hlsl"
 
 
 bool Renderer::CreateResources () {
@@ -22,14 +22,14 @@ bool Renderer::CreateResources () {
     buf_.draw_indirect_command.setName("DrawIndirectCommand");
     buf_.active_gaussian_count = gfxCreateBuffer<int>(gfx, 1);
     buf_.active_gaussian_count.setName("GaussianActiveCount");
-    buf_.active_gaussian_src_list = gfxCreateBuffer<int>(gfx, max_num_gaussians);
-    buf_.active_gaussian_src_list.setName("ActiveGaussianSrcList");
+    buf_.active_gaussian_list_src = gfxCreateBuffer<int>(gfx, max_num_gaussians);
+    buf_.active_gaussian_list_src.setName("ActiveGaussianSrcList");
     buf_.active_gaussian_list = gfxCreateBuffer<int>(gfx, max_num_gaussians);
     buf_.active_gaussian_list.setName("ActiveGaussianList");
-    buf_.active_gaussian_src_depth = gfxCreateBuffer<float>(gfx, max_num_gaussians);
-    buf_.active_gaussian_src_depth.setName("ActiveGaussianSrcDepth");
-    buf_.active_gaussian_depth = gfxCreateBuffer<float>(gfx, max_num_gaussians);
-    buf_.active_gaussian_depth.setName("ActiveGaussianDepth");
+    buf_.active_gaussian_linear_depth_src = gfxCreateBuffer<float>(gfx, max_num_gaussians);
+    buf_.active_gaussian_linear_depth_src.setName("ActiveGaussianSrcDepth");
+    buf_.active_gaussian_linear_depth = gfxCreateBuffer<float>(gfx, max_num_gaussians);
+    buf_.active_gaussian_linear_depth.setName("ActiveGaussianDepth");
 
     // 2x16  packed
     buf_.active_gaussian_NDC_position = gfxCreateBuffer<uint>(gfx, max_num_gaussians);
@@ -40,8 +40,6 @@ bool Renderer::CreateResources () {
     // 2x16  packed
     buf_.active_gaussian_quad_NDC_vector1 = gfxCreateBuffer<uint>(gfx, max_num_gaussians);
     buf_.active_gaussian_quad_NDC_vector1.setName("ActiveGaussianQuadNDCVector1");
-    buf_.active_gaussian_screen_position = gfxCreateBuffer<glm::vec2>(gfx, max_num_gaussians);
-    buf_.active_gaussian_screen_position.setName("ActiveGaussianScreenPosition");
 
     buf_.active_gaussian_conic_w = gfxCreateBuffer<glm::vec4>(gfx, max_num_gaussians);
     buf_.active_gaussian_conic_w.setName("ActiveGaussianConicW");
@@ -68,8 +66,13 @@ bool Renderer::CreateResources () {
     buf_.UB.setName("UniformBlock");
     buf_.UB.setStride(sizeof(UniformBlock));
 
-    tex_.G_color = gfxCreateTexture2D(gfx, width, height, DXGI_FORMAT_R16G16B16A16_FLOAT);
+    float zero_clear_value[4] = {0, 0, 0, 0};
+    tex_.G_momentum = gfxCreateTexture2D(gfx, width, height, DXGI_FORMAT_R32G32_FLOAT, 1, zero_clear_value);
+    tex_.G_momentum.setName("G_momentum");
+    tex_.G_color = gfxCreateTexture2D(gfx, width, height, DXGI_FORMAT_R8G8B8A8_UNORM, 1, zero_clear_value);
     tex_.G_color.setName("G_color");
+
+    tex_.radiance = gfxCreateTexture2D(gfx, width, height, DXGI_FORMAT_R16G16B16A16_FLOAT, 1, zero_clear_value);
 
 //    tex_.output = gfxCreateTexture2D(gfx, width, height, DXGI_FORMAT_R8G8B8A8_UNORM);
 
@@ -82,14 +85,13 @@ void Renderer::DestroyResources() {
     gfxDestroyBuffer(gfx, buf_.dispatch_rays_indirect_command);
     gfxDestroyBuffer(gfx, buf_.draw_indirect_command);
     gfxDestroyBuffer(gfx, buf_.active_gaussian_count);
-    gfxDestroyBuffer(gfx, buf_.active_gaussian_src_list);
+    gfxDestroyBuffer(gfx, buf_.active_gaussian_list_src);
     gfxDestroyBuffer(gfx, buf_.active_gaussian_list);
-    gfxDestroyBuffer(gfx, buf_.active_gaussian_src_depth);
-    gfxDestroyBuffer(gfx, buf_.active_gaussian_depth);
+    gfxDestroyBuffer(gfx, buf_.active_gaussian_linear_depth_src);
+    gfxDestroyBuffer(gfx, buf_.active_gaussian_linear_depth);
     gfxDestroyBuffer(gfx, buf_.active_gaussian_NDC_position);
     gfxDestroyBuffer(gfx, buf_.active_gaussian_quad_NDC_vector0);
     gfxDestroyBuffer(gfx, buf_.active_gaussian_quad_NDC_vector1);
-    gfxDestroyBuffer(gfx, buf_.active_gaussian_screen_position);
     gfxDestroyBuffer(gfx, buf_.active_gaussian_conic_w);
 
     gfxDestroyBuffer(gfx, buf_.ray_to_trace_count);
@@ -99,6 +101,8 @@ void Renderer::DestroyResources() {
     gfxDestroyBuffer(gfx, buf_.ray_to_trace_flags);
     gfxDestroyBuffer(gfx, buf_.ray_to_trace_result);
     gfxDestroyBuffer(gfx, buf_.UB);
+
+    gfxDestroyTexture(gfx, tex_.G_momentum);
     gfxDestroyTexture(gfx, tex_.G_color);
 //    gfxDestroyTexture(gfx, tex_.output);
 }
@@ -153,6 +157,7 @@ bool Renderer::CreateKernels () {
                                                                defines_c.get(), define_count);
         kernel_.ProjectActiveGaussians = gfxCreateComputeKernel(gfx, program_, "ProjectActiveGaussians",
                                                                 defines_c.get(), define_count);
+        kernel_.ResolveDepth = gfxCreateComputeKernel(gfx, program_, "ResolveDepth", defines_c.get(), define_count);
 
         kernel_.SpawnCameraRays = gfxCreateComputeKernel(gfx, program_, "SpawnCameraRays", defines_c.get(),
                                                          define_count);
@@ -202,17 +207,24 @@ bool Renderer::CreateKernels () {
     {
         GfxDrawState draw_state = {};
         gfxDrawStateSetDepthStencilTarget(draw_state, DXGI_FORMAT_UNKNOWN);
+        // This function will reset the blend mode...D
+        // gfxDrawStateEnableAlphaBlending(draw_state);
         gfxDrawStateSetBlendMode(draw_state,
-                                 D3D12_BLEND_SRC_ALPHA, D3D12_BLEND_INV_SRC_ALPHA, D3D12_BLEND_OP_ADD,
-                                 D3D12_BLEND_SRC_ALPHA, D3D12_BLEND_DEST_ALPHA, D3D12_BLEND_OP_ADD);
-        gfxDrawStateEnableAlphaBlending(draw_state);
+                                         D3D12_BLEND_SRC_ALPHA, D3D12_BLEND_INV_SRC_ALPHA, D3D12_BLEND_OP_ADD,
+                                         D3D12_BLEND_ONE, D3D12_BLEND_INV_SRC_ALPHA, D3D12_BLEND_OP_ADD);
+        gfxDrawStateSetColorTarget(draw_state, 0, DXGI_FORMAT_R8G8B8A8_UNORM);
+        gfxDrawStateSetColorTarget(draw_state, 1, DXGI_FORMAT_R32G32_FLOAT);
         gfxDrawStateSetPrimitiveTopologyType(draw_state, D3D12_PRIMITIVE_TOPOLOGY_TYPE_POINT);
+        gfxDrawStateSetCullMode(draw_state, D3D12_CULL_MODE_NONE);
         kernel_.DrawActiveGaussians = gfxCreateGraphicsKernel(
-                gfx, program_, draw_state, "DrawActiveGaussians", defines_c.get(), define_count);
+                gfx, program_, draw_state, "DrawActiveGaussians", defines_c.get(), define_count
+        );
     }
     {
+        GfxDrawState draw_state = {};
+        gfxDrawStateDisableGeometryShader(draw_state);
         kernel_.TonemapAndDraw = gfxCreateGraphicsKernel(
-                gfx, program_, "TonemapAndDraw", defines_c.get(), define_count);
+                gfx, program_, draw_state, "TonemapAndDraw", defines_c.get(), define_count);
     }
 
     return true;
@@ -228,6 +240,7 @@ void Renderer::DestroyKernels () {
     gfxDestroyKernel(gfx, kernel_.ClearCounters);
     gfxDestroyKernel(gfx, kernel_.FilterActiveGaussians);
     gfxDestroyKernel(gfx, kernel_.ProjectActiveGaussians);
+    gfxDestroyKernel(gfx, kernel_.ResolveDepth);
 
     gfxDestroyKernel(gfx, kernel_.Trace3DGSRays);
     gfxDestroyKernel(gfx, kernel_.SpawnCameraRays);

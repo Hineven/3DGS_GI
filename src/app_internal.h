@@ -21,8 +21,8 @@ public:
     inline GfxContext& GetGfx() { return gfx_; }
     inline std::string GetRootPath() { return root_path_; }
 
-    inline int GetWindowWidth() { return 1280; }
-    inline int GetWindowHeight() { return 720; }
+    inline int GetWindowWidth() { return 1920; }
+    inline int GetWindowHeight() { return 1088; }
 
     inline Scene & GetScene () { return scene_; }
 

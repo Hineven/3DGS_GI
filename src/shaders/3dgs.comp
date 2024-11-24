@@ -108,7 +108,7 @@ void FilterActiveGaussians (uint DispatchID : SV_DispatchThreadID) {
     Gaussian G = FetchGaussian(GaussianIndex);
 
 	float3 ViewSpacePosition = 0;
-	if(IsPointInFrustrum(UB.MainCamera, G.Position, false, 0.2f, 0.2f)) {
+	if(IsPointInFrustrum(UB.MainCamera, G.Position, ViewSpacePosition, false, 0.2f, 0.2f)) {
 		int GaussianCount = WaveActiveSum(1);
 		int GaussianRank  = WavePrefixSum(1);
 		int GaussianBaseIndex = 0;
@@ -122,17 +122,11 @@ void FilterActiveGaussians (uint DispatchID : SV_DispatchThreadID) {
 		g_RWActiveGaussianListSrcBuffer[ActiveListIndex] = GaussianIndex;
 		// The view space align the view direction with the negative z axis
 		float LinearDepth = -ViewSpacePosition.z;
-		LinearDepth = saturateDown(LinearDepth);
 		g_RWActiveGaussianLinearDepthSrcBuffer[ActiveListIndex] = LinearDepth;
 	}
 }
 
 // The active indices are sorted according to their linear depth
-
-
-CameraDescription GetCameraDescription () {
-    return UB.MainCamera;
-}
 
 [numthreads(WAVE_SIZE, 1, 1)]
 void ProjectActiveGaussians (uint DispatchID : SV_DispatchThreadID) {
@@ -151,7 +145,7 @@ void ProjectActiveGaussians (uint DispatchID : SV_DispatchThreadID) {
 #if !(RASTERIZATION_IS_ORTHO_CAMERA)
     J = EWAJacobian(G.Position, C.FieldOfView, C.View);
 #endif
-    float4 HomogeneousW = mul(C.ViewProjection, float4(G.Position, 1.f));
+    float4 HomogeneousW = mul(C.ProjectionView, float4(G.Position, 1.f));
     float3 Homogeneous = HomogeneousW.xyz / HomogeneousW.w;
 
     // Get the covariance matrix in NDC space ([-1, 1] ^ 2)
@@ -159,14 +153,15 @@ void ProjectActiveGaussians (uint DispatchID : SV_DispatchThreadID) {
         J, Cov3D, C.View
     );
 
-    // Expand the variance magnitude (screen space) to be conservative
     float  Det           = Cov2D.x * Cov2D.z - Cov2D.y * Cov2D.y;
-    if(Det < 0.0001f) return ;
     
     float  InvDet = 1.f / Det;
-    float3 Conic  = float3(Cov2D.z * InvDet, -Cov2D.y * InvDet, Cov2D.x * InvDet);
+    // float3 Conic  = float3(Cov2D.z * InvDet, -Cov2D.y * InvDet, Cov2D.x * InvDet);
 
-	g_RWActiveGaussianConicWBuffer[DispatchID] = float4(Conic, G.Alpha);
+	SHCoefficents3 SH3 = FetchGaussianSHCoefficients(GaussianIndex, 3);
+	float3 ViewDirection = normalize(C.Position - G.Position);
+	float3 Color = SH3Evaluate(ViewDirection, SH3, 3);
+	g_RWActiveGaussianConicWBuffer[DispatchID] = float4(Color, G.Alpha);//float4(Conic, G.Alpha);
 
     // Compute extent in screen space (by finding eigenvalues of
     // 2D covariance matrix). Use extent to compute a bounding rectangle
@@ -176,8 +171,9 @@ void ProjectActiveGaussians (uint DispatchID : SV_DispatchThreadID) {
     // Gaussian in the directions of the eigenvectors, which are the
     // principal axes of the Gaussian. 
     float Mean    = 0.5f * (Cov2D.x + Cov2D.z);
-    float Lambda1 = Mean + sqrt(max(0.1f, Mean * Mean - Det));
-    float Lambda2 = Mean - sqrt(max(0.1f, Mean * Mean - Det));
+	float Discriminant = sqrt(max(0.0f, Mean * Mean - Det));
+    float Lambda1 = Mean + Discriminant;
+    float Lambda2 = Mean - Discriminant;
     // Find the eigenvectors of the covariance matrix
     float2 Eigenvector1 = float2(Cov2D.y, Lambda1 - Cov2D.x);
     float2 Eigenvector2 = float2(Cov2D.y, Lambda2 - Cov2D.x);
@@ -185,11 +181,20 @@ void ProjectActiveGaussians (uint DispatchID : SV_DispatchThreadID) {
     Eigenvector2 = normalize(Eigenvector2);
 	// Output the projected quad vectors
 	float2 ClampedPosition = saturateDown(Homogeneous.xy * 0.25 + 0.5f);
-	g_RWActiveGaussianNDCPositionBuffer[DispatchID] = PackUnorm16x2(Homogeneous.xy);
-    float2 ClampedVector1 = saturateDown(Eigenvector1 * Lambda1 * 0.5 + 0.5);
+	g_RWActiveGaussianNDCPositionBuffer[DispatchID] = PackUnorm16x2(ClampedPosition);
+    float2 ClampedVector1 = saturateDown(Eigenvector1 * sqrt(abs(Lambda1)) * 0.5 + 0.5);
 	g_RWActiveGaussianQuadNDCVector0Buffer[DispatchID] = PackUnorm16x2(ClampedVector1);
-	float2 ClampedVector2 = saturateDown(Eigenvector2 * Lambda2 * 0.5 + 0.5);
+	float2 ClampedVector2 = saturateDown(Eigenvector2 * sqrt(abs(Lambda2)) * 0.5 + 0.5);
 	g_RWActiveGaussianQuadNDCVector1Buffer[DispatchID] = PackUnorm16x2(ClampedVector2);
+}
+
+[numthreads(TILE_SIZE, TILE_SIZE, 1)]
+void ResolveDepth (uint2 DispatchID : SV_DispatchThreadID) {
+	if(DispatchID.x >= UB.ScreenDimensions.x || DispatchID.y >= UB.ScreenDimensions.y) return;
+	float2 MomentumUnnormalized = g_RW_GMomentumTexture[DispatchID].xy;
+	float  Weight = g_RW_GColorTexture[DispatchID].w;
+	float2 Momentum = MomentumUnnormalized / max(Weight, 1e-6f);
+	g_RW_GMomentumTexture[DispatchID].xy = Momentum;
 }
 
 // Gaussians are later HW rasterized
@@ -239,7 +244,7 @@ void TransformAndSplatGaussians (uint DispatchID : SV_DispatchThreadID) {
 		float Radius  = ceil(3.f * sqrt(max(Lambda1, Lambda2)));
 		// Reject tiny Gaussians
 		if(Radius < 0.5f) return ;
-		float4 HomogeneousW   = mul(UB.ViewProjection, float4(G.Position, 1));
+		float4 HomogeneousW   = mul(UB.ProjectionView, float4(G.Position, 1));
 		float3 Homogeneous    = HomogeneousW.xyz / float(HomogeneousW.w +  + 1e-7f);
 		float2 ScreenPosition = NDC2ToScreen(Homogeneous.xy);
 
@@ -273,7 +278,7 @@ void TransformAndSplatGaussians (uint DispatchID : SV_DispatchThreadID) {
 		g_RWActiveGaussianTileCountBuffer[ActiveListIndex] =
 			(MinMaxTileCoords.z - MinMaxTileCoords.x) * (MinMaxTileCoords.w - MinMaxTileCoords.y);
 #else
-		g_RWActiveGaussianScreenPositionBuffer[ActiveListIndex] = PackPadScreenPosition(ScreenPosition);
+		g_RWActiveGaussianScreenPositionBuffer[ActiveListIndex] = PackPadScreenPosition(ScreenPosition, UB.InvScreenDimensions);
 #endif 
 	}
 }
@@ -531,7 +536,7 @@ void SpawnCameraRays (uint GroupID : SV_GroupID, uint LocalID : SV_GroupThreadID
 		
 		float2 ScreenPosition = float2(TexelCoords) + 0.5f;
 
-		RayToTrace Ray = SpawnCameraRay(ScreenPosition);
+		RayToTrace Ray = SpawnCameraRay(UB.MainCamera, ScreenPosition);
 		int RayIndex = TexelCoords.x + TexelCoords.y * UB.ScreenDimensions.x;
 		WriteRayToTrace(RayIndex, Ray);
 	}
