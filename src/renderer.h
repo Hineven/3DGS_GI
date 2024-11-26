@@ -65,9 +65,11 @@ void DestroyKernels ();
 
         // fp32x2 (LinearDepth, LinearDepth^2)
         GfxTexture G_momentum;
-        // fp16x4
-        GfxTexture G_color;
+        // fp8x4
+        GfxTexture G_albedo_alpha;
+        GfxTexture G_normal;
 
+        // fp16x4
         GfxTexture radiance;
 //        GfxTexture output;
     } tex_ {};

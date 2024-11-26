@@ -77,12 +77,20 @@ void UnpackGaussianHit (uint Packed, out uint InstanceIndex, out uint GaussianIn
 }
 
 
-Gaussian FetchGaussian(uint Index) {
+Gaussian FetchGaussian (uint Index) {
     float3 Position = g_GaussianPositionBuffer[Index];
-    float  Alpha = g_GaussianAlphaBuffer[Index];
+    float  Alpha    = g_GaussianAlphaBuffer[Index];
     float4 Rotation = g_GaussianRotationBuffer[Index];
-    float3 Scale = g_GaussianScaleBuffer[Index];
-    Gaussian GaussianData = { Position, Alpha, Rotation, Scale };
+    float3 Scale    = g_GaussianScaleBuffer[Index];
+    Gaussian GaussianData = { Position, Alpha, Rotation, Scale};
+    return GaussianData;
+}
+
+GaussianPBR FetchGaussianPBR (uint Index) {
+    float3 Normal   = g_GaussianNormalBuffer[Index];
+    float3 Albedo   = g_GaussianAlbedoBuffer[Index];
+    float  Roughness = g_GaussianRoughnessBuffer[Index];
+    GaussianPBR GaussianData = { Normal, Albedo, Roughness };
     return GaussianData;
 }
 
@@ -306,12 +314,12 @@ float3x3 EWAJacobian (float3 Mean, float2 TanFoV, float4x4 View) {
     const float txtz = P.x / P.z;
     const float tytz = P.y / P.z;
     // Clamp to (fov expanded) frustum
-    P.x = clamp(txtz, -limx, limx) * P.z;
-    P.y = clamp(tytz, -limy, limy) * P.z;
+    // P.x = clamp(txtz, -limx, limx) * P.z;
+    // P.y = clamp(tytz, -limy, limy) * P.z;
 
     float3x3 J = float3x3(
-        1 / P.z, 0.0f, - P.x / (P.z * P.z),
-        0.0f, 1 / P.z, - P.y / (P.z * P.z),
+        (2 / TanFoV.x) / P.z, 0.0f, - (2 / TanFoV.x) * P.x / (P.z * P.z),
+        0.0f, (2 / TanFoV.y) / P.z, - (2 / TanFoV.y) * P.y / (P.z * P.z),
         0.0f, 0.0f, 0.0f);
     return J;
 }
@@ -365,6 +373,12 @@ float saturateDown (float Value) {
 }
 float2 saturateDown (float2 Value) {
     return clamp(Value, 0.0f.xx, 1.f.xx - FLT_EPSILON.xx);
+}
+float3 saturateDown (float3 Value) {
+    return clamp(Value, 0.0f.xxx, 1.f.xxx - FLT_EPSILON.xxx);
+}
+float4 saturateDown (float4 Value) {
+    return clamp(Value, 0.0f.xxxx, 1.f.xxxx - FLT_EPSILON.xxxx);
 }
 
 // Clamp to (0, 1]
@@ -445,10 +459,27 @@ uint2 PackRGBA16 (float4 Unpacked) {
     );
 }
 
-float4 UnpackRGBA16 (uint2 Packed) {
+float4 UnpackRadianceA16 (uint2 Packed) {
     float3 RGBUnpacked = UnpackFp16x3(Packed);
     float AUnpacked = UnpackUnorm16(Packed.y >> 16);
     return float4(RGBUnpacked, AUnpacked);
+}
+
+uint PackRGBA8 (float4 Unpacked) {
+    Unpacked = saturateDown(Unpacked);
+    return uint(Unpacked.x * 256.0f) 
+        | (uint(Unpacked.y * 256.0f) << 8)
+        | (uint(Unpacked.z * 256.0f) << 16)
+        | (uint(Unpacked.w * 256.0f) << 24);
+}
+
+float4 UnpackRGBA8 (uint Packed) {
+    return float4(
+        (Packed & 0xFF) / 256.0f,
+        ((Packed >> 8) & 0xFF) / 256.0f,
+        ((Packed >> 16) & 0xFF) / 256.0f,
+        ((Packed >> 24) & 0xFF) / 256.0f
+    );
 }
 
 struct RayToTrace {
@@ -500,7 +531,7 @@ void WriteRayToTrace (int RayIndex, RayToTrace Ray) {
 }
 
 float4 FetchRayTraceResult (int RayIndex) {
-    return UnpackRGBA16(g_RWRayToTraceResultBuffer[RayIndex]);
+    return UnpackRadianceA16(g_RWRayToTraceResultBuffer[RayIndex]);
 }
 
 // Compute the ray t to evaluate max respose of a ray-gaussian intersection according to the paper.

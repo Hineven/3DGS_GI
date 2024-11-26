@@ -44,7 +44,8 @@ public:
     Scene();
 
     // Clear and load gaussians from some .ply file.
-    bool LoadGaussians (std::filesystem::path path) ;
+    // If the gaussians are PBR ready, we won't load the SH coeffs and colors.
+    bool LoadGaussians (std::filesystem::path path, bool always_load_sh = false) ;
 
     // Synchronize the data on host to device.
     void UpdateDeviceScene () ;
@@ -76,6 +77,10 @@ protected:
     // 3DGS datasets use 4-word quaternions directly for rotation
     std::vector<glm::vec4> gs_rotations_;
     std::vector<glm::vec3> gs_scales_;
+    std::vector<glm::vec3> gs_normals_;
+
+    std::vector<glm::vec3> gs_albedos_;
+    std::vector<float>     gs_roughnesses_;
 
     int num_instances_;
     // GS instance transforms

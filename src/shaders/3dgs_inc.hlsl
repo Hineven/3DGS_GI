@@ -15,6 +15,11 @@
 // Consistent with the paper.
 #define HIT_BUFFER_SIZE 16
 
+
+// Bitpack the vertex attributes when transfering them to the fragment shader
+#define BITPACK_VERTEX_ATTRIBUTES
+
+
 // Acceleration structure for hardware ray tracing
 //                      TLAS
 // BLAS0(GS Group), BLAS1(GS Group), BLAS2(Mesh), ... 
@@ -52,6 +57,12 @@ StructuredBuffer<float3> g_GaussianSH1Buffer;
 StructuredBuffer<float3> g_GaussianSH2Buffer;
 // Stride 7
 StructuredBuffer<float3> g_GaussianSH3Buffer;
+
+// PBR related stuff
+StructuredBuffer<float3> g_GaussianAlbedoBuffer;
+StructuredBuffer<float>  g_GaussianRoughnessBuffer;
+
+StructuredBuffer<float3> g_GaussianNormalBuffer;
 
 // Store indirect dispatch commands
 RWStructuredBuffer<DispatchIndirectCommand> g_RWDispatchIndirectCommandBuffer;
@@ -108,6 +119,8 @@ RWStructuredBuffer<uint2> g_RWRayToTraceResultBuffer;
 // G-Buffers
 RWTexture2D<float4>      g_RW_GColorTexture;
 Texture2D<float4>        g_GColorTexture;
+RWTexture2D<float4>      g_RW_GNormalTexture;
+Texture2D<float4>        g_GNormalTexture;
 RWTexture2D<float2>      g_RW_GMomentumTexture;
 Texture2D<float2>        g_GMomentumTexture;
 // Output buffers

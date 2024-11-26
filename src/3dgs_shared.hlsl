@@ -75,6 +75,14 @@ struct Gaussian {
     float3 Scale;
 };
 
+struct GaussianPBR {
+    // Normal
+    float3 Normal;
+    // PBR related stuff
+    float3 Albedo;
+    float  Roughness;
+};
+
 struct GaussianPrecomputed {
     // Spatial position
     float3 Position;

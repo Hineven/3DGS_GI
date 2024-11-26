@@ -155,13 +155,13 @@ void ProjectActiveGaussians (uint DispatchID : SV_DispatchThreadID) {
 
     float  Det           = Cov2D.x * Cov2D.z - Cov2D.y * Cov2D.y;
     
-    float  InvDet = 1.f / Det;
+    // float  InvDet = 1.f / Det;
     // float3 Conic  = float3(Cov2D.z * InvDet, -Cov2D.y * InvDet, Cov2D.x * InvDet);
 
-	SHCoefficents3 SH3 = FetchGaussianSHCoefficients(GaussianIndex, 3);
-	float3 ViewDirection = normalize(C.Position - G.Position);
-	float3 Color = SH3Evaluate(ViewDirection, SH3, 3);
-	g_RWActiveGaussianConicWBuffer[DispatchID] = float4(Color, G.Alpha);//float4(Conic, G.Alpha);
+	SHCoefficents3 SH3 = FetchGaussianSHCoefficients(GaussianIndex, 0);
+	// float3 ViewDirection = normalize(C.Position - G.Position);
+	// float3 Color = SH3Evaluate(ViewDirection, SH3, 0);
+	// g_RWActiveGaussianConicWBuffer[DispatchID] = float4(Color, G.Alpha);//float4(Conic, G.Alpha);
 
     // Compute extent in screen space (by finding eigenvalues of
     // 2D covariance matrix). Use extent to compute a bounding rectangle

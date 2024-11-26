@@ -67,10 +67,11 @@ bool Renderer::CreateResources () {
     buf_.UB.setStride(sizeof(UniformBlock));
 
     float zero_clear_value[4] = {0, 0, 0, 0};
-    tex_.G_momentum = gfxCreateTexture2D(gfx, width, height, DXGI_FORMAT_R32G32_FLOAT, 1, zero_clear_value);
+    tex_.G_momentum = gfxCreateTexture2D(gfx, width, height, DXGI_FORMAT_R16G16_FLOAT, 1, zero_clear_value);
     tex_.G_momentum.setName("G_momentum");
-    tex_.G_color = gfxCreateTexture2D(gfx, width, height, DXGI_FORMAT_R8G8B8A8_UNORM, 1, zero_clear_value);
-    tex_.G_color.setName("G_color");
+    tex_.G_albedo_alpha = gfxCreateTexture2D(gfx, width, height, DXGI_FORMAT_R8G8B8A8_UNORM, 1, zero_clear_value);
+    tex_.G_albedo_alpha.setName("G_albedo_alpha");
+    tex_.G_normal = gfxCreateTexture2D(gfx, width, height, DXGI_FORMAT_R8G8B8A8_SNORM, 1, zero_clear_value);
 
     tex_.radiance = gfxCreateTexture2D(gfx, width, height, DXGI_FORMAT_R16G16B16A16_FLOAT, 1, zero_clear_value);
 
@@ -103,7 +104,10 @@ void Renderer::DestroyResources() {
     gfxDestroyBuffer(gfx, buf_.UB);
 
     gfxDestroyTexture(gfx, tex_.G_momentum);
-    gfxDestroyTexture(gfx, tex_.G_color);
+    gfxDestroyTexture(gfx, tex_.G_albedo_alpha);
+    gfxDestroyTexture(gfx, tex_.G_normal);
+
+    gfxDestroyTexture(gfx, tex_.radiance);
 //    gfxDestroyTexture(gfx, tex_.output);
 }
 
@@ -212,8 +216,9 @@ bool Renderer::CreateKernels () {
         gfxDrawStateSetBlendMode(draw_state,
                                          D3D12_BLEND_SRC_ALPHA, D3D12_BLEND_INV_SRC_ALPHA, D3D12_BLEND_OP_ADD,
                                          D3D12_BLEND_ONE, D3D12_BLEND_INV_SRC_ALPHA, D3D12_BLEND_OP_ADD);
-        gfxDrawStateSetColorTarget(draw_state, 0, DXGI_FORMAT_R8G8B8A8_UNORM);
-        gfxDrawStateSetColorTarget(draw_state, 1, DXGI_FORMAT_R32G32_FLOAT);
+        gfxDrawStateSetColorTarget(draw_state, 0, tex_.G_albedo_alpha.getFormat());
+        gfxDrawStateSetColorTarget(draw_state, 1, tex_.G_normal.getFormat());
+        gfxDrawStateSetColorTarget(draw_state, 2, tex_.G_momentum.getFormat());
         gfxDrawStateSetPrimitiveTopologyType(draw_state, D3D12_PRIMITIVE_TOPOLOGY_TYPE_POINT);
         gfxDrawStateSetCullMode(draw_state, D3D12_CULL_MODE_NONE);
         kernel_.DrawActiveGaussians = gfxCreateGraphicsKernel(

@@ -94,8 +94,8 @@ void Renderer::Render() {
     gfxProgramSetParameter(gfx, program_, "g_RWRayToTraceFlagsBuffer", buf_.ray_to_trace_flags);
     gfxProgramSetParameter(gfx, program_, "g_RWRayToTraceResultBuffer", buf_.ray_to_trace_result);
 
-    gfxProgramSetParameter(gfx, program_, "g_RW_GColorTexture", tex_.G_color);
-    gfxProgramSetParameter(gfx, program_, "g_GColorTexture", tex_.G_color);
+    gfxProgramSetParameter(gfx, program_, "g_RW_GColorTexture", tex_.G_albedo_alpha);
+    gfxProgramSetParameter(gfx, program_, "g_GColorTexture", tex_.G_albedo_alpha);
     gfxProgramSetParameter(gfx, program_, "g_RW_GMomentumTexture", tex_.G_momentum);
     gfxProgramSetParameter(gfx, program_, "g_GMomentumTexture", tex_.G_momentum);
 
@@ -180,7 +180,7 @@ void Renderer::Render() {
 
     {
         auto section = TimedSection(*this, "ClearTextures");
-        gfxCommandClearTexture(gfx, tex_.G_color);
+        gfxCommandClearTexture(gfx, tex_.G_albedo_alpha);
     }
 
     {
@@ -236,12 +236,14 @@ void Renderer::Render() {
         {
             auto section = TimedSection(*this, "DrawActiveGaussians");
             // Cleared to (0, 0, 0, 0)
-            gfxCommandClearTexture(gfx, tex_.G_color);
+            gfxCommandClearTexture(gfx, tex_.G_albedo_alpha);
+            gfxCommandClearTexture(gfx, tex_.G_normal);
             gfxCommandClearTexture(gfx, tex_.G_momentum);
             GenerateDrawIndirect(buf_.active_gaussian_count);
             gfxCommandBindKernel(gfx, kernel_.DrawActiveGaussians);
-            gfxCommandBindColorTarget(gfx, 0, tex_.G_color);
-            gfxCommandBindColorTarget(gfx, 1, tex_.G_momentum);
+            gfxCommandBindColorTarget(gfx, 0, tex_.G_albedo_alpha);
+            gfxCommandBindColorTarget(gfx, 1, tex_.G_normal);
+            gfxCommandBindColorTarget(gfx, 2, tex_.G_momentum);
             gfxCommandMultiDrawIndirect(gfx, buf_.draw_indirect_command, 1);
         }
 

@@ -19,6 +19,8 @@ public:
 
     void Bind  (const GfxProgram & program) ;
 
+    // TODO compressed format
+
     GfxBuffer gaussian_position;
     GfxBuffer gaussian_alpha;
     GfxBuffer gaussian_rotation;
@@ -27,6 +29,10 @@ public:
     GfxBuffer gaussian_sh1;
     GfxBuffer gaussian_sh2;
     GfxBuffer gaussian_sh3;
+
+    GfxBuffer gaussian_normal;
+    GfxBuffer gaussian_albedo;
+    GfxBuffer gaussian_roughness;
 
     GfxAccelerationStructure acceleration_structure_;
     // Each primitive is a GS instance (group)

@@ -14,11 +14,12 @@ Scene::Scene () {
     device_scene_ = std::make_unique<DeviceScene>();
 }
 
-bool Scene::LoadGaussians (std::filesystem::path path) {
+bool Scene::LoadGaussians (std::filesystem::path path, bool always_load_sh) {
     if(path.extension() != ".ply") {
         app_warning("only .ply files are supported.");
         return false;
     }
+
     happly::PLYData plyIn(path.string());
     auto & element = plyIn.getElement("vertex");
     // Positions
@@ -32,34 +33,67 @@ bool Scene::LoadGaussians (std::filesystem::path path) {
             gs_positions_[i] = glm::vec3(x[i], y[i], z[i]);
         }
     }
-    // Colors
-    {
-        auto r = element.getProperty<float>("f_dc_0");
-        auto g = element.getProperty<float>("f_dc_1");
-        auto b = element.getProperty<float>("f_dc_2");
-        gs_colors_.resize(num_gaussians_);
-        for(int i = 0; i < r.size(); i++) {
-            gs_colors_[i] = glm::vec3(r[i], g[i], b[i]);
+    bool load_sh = true;
+    if (element.hasProperty("base_color_0")) {
+        load_sh = false;
+
+        // Try to load attributes from the format specified by paper from Nanking Univ
+        // [ECCV2024] Relightable 3D Gaussian: Real-time Point Cloud Relighting with BRDF Decomposition and Ray Tracing
+
+        // Albedo
+        {
+            auto r = element.getProperty<float>("base_color_0");
+            auto g = element.getProperty<float>("base_color_1");
+            auto b = element.getProperty<float>("base_color_2");
+            gs_albedos_.resize(num_gaussians_);
+            for (int i = 0; i < r.size(); i++) {
+                auto raw = glm::vec3(r[i], g[i], b[i]);
+                // activation: scaled sigmoid
+                gs_albedos_[i] = 0.03f + 0.77f / (1.f + exp(-raw));
+            }
         }
+        // Roughness
+        {
+            auto r = element.getProperty<float>("roughness");
+            gs_roughnesses_.resize(num_gaussians_);
+            for (int i = 0; i < r.size(); i++) {
+                // activation: sigmoid
+                gs_roughnesses_[i] = 0.09f + 0.9f / (1.f + exp(-r[i]));
+            }
+        }
+
+        // No lambertian term involved in their bsdf model. So they are always 'metals' (that is, metallic == 1).
     }
-    // SH
-    {
-        gs_sh1_.resize(num_gaussians_ * 3);
-        gs_sh2_.resize(num_gaussians_ * 5);
-        gs_sh3_.resize(num_gaussians_ * 7);
-        std::reference_wrapper<std::vector<glm::vec3>> arr[] = {gs_sh1_, gs_sh2_, gs_sh3_};
-        int coeff_top = 0;
-        for(int degree = 1; degree <= 3; degree ++) {
-            int num_coeff = degree * 2 + 1;
-            for(int coeff = 0; coeff < num_coeff; coeff ++) {
-                for (int ch = 0; ch < 3; ch++) {
-                    std::string name = "f_rest_" + std::to_string(coeff_top);
-                    auto data = element.getProperty<float>(name);
-                    for(int i = 0; i < data.size(); i++) {
-                        auto & v = arr[degree - 1];
-                        v.get()[i * num_coeff + coeff][ch] = data[i];
+    if (load_sh || always_load_sh) {
+        // Colors
+        {
+            auto r = element.getProperty<float>("f_dc_0");
+            auto g = element.getProperty<float>("f_dc_1");
+            auto b = element.getProperty<float>("f_dc_2");
+            gs_colors_.resize(num_gaussians_);
+            for(int i = 0; i < r.size(); i++) {
+                gs_colors_[i] = glm::vec3(r[i], g[i], b[i]);
+            }
+        }
+        // SH
+        {
+            gs_sh1_.resize(num_gaussians_ * 3);
+            gs_sh2_.resize(num_gaussians_ * 5);
+            gs_sh3_.resize(num_gaussians_ * 7);
+            std::reference_wrapper<std::vector<glm::vec3>> arr[] = {gs_sh1_, gs_sh2_, gs_sh3_};
+            int coeff_top = 0;
+            for(int degree = 1; degree <= 3; degree ++) {
+                int num_coeff = degree * 2 + 1;
+                for(int coeff = 0; coeff < num_coeff; coeff ++) {
+                    for (int ch = 0; ch < 3; ch++) {
+                        std::string name = "f_rest_" + std::to_string(coeff_top);
+                        auto data = element.getProperty<float>(name);
+                        for(int i = 0; i < data.size(); i++) {
+                            auto & v = arr[degree - 1];
+                            v.get()[i * num_coeff + coeff][ch] = data[i];
+                        }
+                        coeff_top++;
                     }
-                    coeff_top++;
                 }
             }
         }
@@ -106,11 +140,22 @@ bool Scene::LoadGaussians (std::filesystem::path path) {
             q /= len;
         }
     }
+    // Normals
+    {
+        auto nx = element.getProperty<float>("nx");
+        auto ny = element.getProperty<float>("ny");
+        auto nz = element.getProperty<float>("nz");
+        gs_normals_.resize(num_gaussians_);
+        for(int i = 0; i < nx.size(); i++) {
+            // activation: normalize
+            gs_normals_[i] = normalize(glm::vec3(nx[i], ny[i], nz[i]));
+        }
+    }
 
     // Limit the number to 10 for now
     // num_gaussians_ = 50;
 
-    // We assume that there're only 1 instance for now
+    // We assume that there is only 1 instance for now
     num_instances_ = 1;
     gsi_transforms_.resize(1);
     gsi_transforms_[0] = glm::mat4x3(1.f);

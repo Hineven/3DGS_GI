@@ -7,6 +7,9 @@
 
 int main()
 {
+    printf("%d\n", _MSC_VER);
+    return 0;
+
     auto window = gfxCreateWindow(1280, 720, "gfx - Hello, triangle!");
     auto gfx = gfxCreateContext(window);
 
