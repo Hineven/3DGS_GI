@@ -154,14 +154,13 @@ void ProjectActiveGaussians (uint DispatchID : SV_DispatchThreadID) {
     );
 
     float  Det           = Cov2D.x * Cov2D.z - Cov2D.y * Cov2D.y;
-    
-    // float  InvDet = 1.f / Det;
-    // float3 Conic  = float3(Cov2D.z * InvDet, -Cov2D.y * InvDet, Cov2D.x * InvDet);
 
-	SHCoefficents3 SH3 = FetchGaussianSHCoefficients(GaussianIndex, 0);
-	// float3 ViewDirection = normalize(C.Position - G.Position);
-	// float3 Color = SH3Evaluate(ViewDirection, SH3, 0);
-	// g_RWActiveGaussianConicWBuffer[DispatchID] = float4(Color, G.Alpha);//float4(Conic, G.Alpha);
+#ifdef OUTPUT_COLORED_GAUSSIANS
+	SHCoefficents3 SH3 = FetchGaussianSHCoefficients(GaussianIndex, 3);
+	float3 ViewDirection = normalize(C.Position - G.Position);
+	float3 Color = SH3Evaluate(ViewDirection, SH3, 3);
+	g_RWActiveGaussianColorBuffer[DispatchID] = Color;
+#endif
 
     // Compute extent in screen space (by finding eigenvalues of
     // 2D covariance matrix). Use extent to compute a bounding rectangle
@@ -189,332 +188,145 @@ void ProjectActiveGaussians (uint DispatchID : SV_DispatchThreadID) {
 }
 
 [numthreads(TILE_SIZE, TILE_SIZE, 1)]
-void ResolveDepth (uint2 DispatchID : SV_DispatchThreadID) {
-	if(DispatchID.x >= UB.ScreenDimensions.x || DispatchID.y >= UB.ScreenDimensions.y) return;
-	float2 MomentumUnnormalized = g_RW_GMomentumTexture[DispatchID].xy;
-	float  Weight = g_RW_GColorTexture[DispatchID].w;
+void ResolveGBuffers (uint2 DispatchID : SV_DispatchThreadID) {
+	CameraDescription C = GetCameraDescription();
+	if(IsOutOfFilm(C, DispatchID)) return;
+	float2 MomentumUnnormalized = GetRWMomentumTexture(C)[DispatchID].xy;
+	float  Weight = GetRWColorTexture(C)[DispatchID].w;
 	float2 Momentum = MomentumUnnormalized / max(Weight, 1e-6f);
-	g_RW_GMomentumTexture[DispatchID].xy = Momentum;
-}
-
-// Gaussians are later HW rasterized
-#ifdef _SW_RASTERIZATION
-// Splat 3D gaussians onto the screen
-[numthreads(WAVE_SIZE, 1, 1)]
-void TransformAndSplatGaussians (uint DispatchID : SV_DispatchThreadID) {
-	uint GaussianIndex = DispatchID;
-	
-	if(GaussianIndex >= UB.NumGaussians) return ;
-
-    Gaussian G = FetchGaussian(GaussianIndex);
-
-	float3 ViewSpacePosition = 0;
-	if(IsInFrustrum(G.Position, UB.View, UB.Projection, ViewSpacePosition)) {
-
-		SymmetricMatrix Cov3D = ComputeCovarianceMatrix(G.Scale, G.Rotation);
-		// Project to pixel space 2D covariance
-
-		float3 Cov2D = ProjectCovarianceMatrixToScreen(
-			G.Position, UB.CameraFocal, UB.CameraFieldOfView, Cov3D, UB.View);
-
-		// Expand the variance magnitude (screen space) to be conservative
-		float  Expand        = 0.01f;
-		float  Det           = Cov2D.x * Cov2D.z - Cov2D.y * Cov2D.y;
-		float3 Cov2DExpanded = float3(Cov2D.x + Expand, Cov2D.y, Cov2D.z + Expand);
-		float  DetExpanded   = Cov2DExpanded.x * Cov2DExpanded.z - Cov2DExpanded.y * Cov2DExpanded.y;
-		// Reduce the opacity of the projected 2d gaussian (because we expanded the variance, ie. size of the gaussian)
-		float  Scaling       =  sqrt(max(0.000025f, Det / DetExpanded));
-
-		if (DetExpanded <= 0.0f) return;
-
-		float  InvDet = 1.f / DetExpanded;
-		float3 Conic  = float3(Cov2DExpanded.z * InvDet, -Cov2DExpanded.y * InvDet, Cov2DExpanded.x * InvDet);
-
-		// Compute extent in screen space (by finding eigenvalues of
-		// 2D covariance matrix). Use extent to compute a bounding rectangle
-		// of screen-space tiles that this Gaussian overlaps with. Quit if
-		// rectangle covers 0 tiles. 
-		// Eigenvalues of 2D covariance matrix denotes the variance of the 
-		// Gaussian in the directions of the eigenvectors, which are the
-		// principal axes of the Gaussian. 
-		float Mean    = 0.5f * (Cov2DExpanded.x + Cov2DExpanded.z);
-		float Lambda1 = Mean + sqrt(max(0.1f, Mean * Mean - DetExpanded));
-		float Lambda2 = Mean - sqrt(max(0.1f, Mean * Mean - DetExpanded));
-		// Heuristic: use 3 * sigma (>= 99.7% of the Gaussian) as the radius
-		float Radius  = ceil(3.f * sqrt(max(Lambda1, Lambda2)));
-		// Reject tiny Gaussians
-		if(Radius < 0.5f) return ;
-		float4 HomogeneousW   = mul(UB.ProjectionView, float4(G.Position, 1));
-		float3 Homogeneous    = HomogeneousW.xyz / float(HomogeneousW.w +  + 1e-7f);
-		float2 ScreenPosition = NDC2ToScreen(Homogeneous.xy);
-
-		uint4 MinMaxTileCoords = GetOverlappingTiles(ScreenPosition, Radius);
-		// Reject Gaussians that are completely outside the screen 
-		if(any(MinMaxTileCoords.xy == MinMaxTileCoords.zw)) return;
-	
-		int GaussianCount = WaveActiveSum(1);
-		int GaussianRank  = WavePrefixSum(1);
-		int GaussianBaseIndex = 0;
-		if(WaveIsFirstLane()) {
-			InterlockedAdd(g_RWGaussianActiveCountBuffer[0], GaussianCount, GaussianBaseIndex);
-		}
-		GaussianBaseIndex = WaveReadLaneFirst(GaussianBaseIndex);
-
-		// Store the indices of active gaussians into a list.
-		int ActiveListIndex = GaussianBaseIndex + GaussianRank;
-
-		g_RWActiveGaussianListBuffer[ActiveListIndex] = GaussianIndex;
-		// The view space align the view direction with the negative z axis
-		float SortingDepth = (-ViewSpacePosition.z - UB.CameraNearPlane) / (UB.CameraFarPlane - UB.CameraNearPlane);
-		SortingDepth = saturateDown(SortingDepth);
-		g_RWActiveGaussianDepthBuffer[ActiveListIndex] = SortingDepth;
-#ifdef HW_RASTERIZATION
-		g_RWActiveGaussianLambdaBuffer[ActiveListIndex] = PackFp16x2(float2(Lambda1, Lambda2));
+	// Depth
+	GetRWMomentumTexture(C)[DispatchID].xy = Momentum;
+	// If the normals are reconstructed from the depth, they are not rendered to the GBuffer
+#ifndef RECONSTRUCT_NORMALS_FROM_DEPTH
+	// Normal
+	float3 Normal = GetRWNormalTexture(C)[DispatchID].xyz / max(Weight, 1e-6f);
+	Normal = Normal * 2 - 1;
+	if(any(Normal != -1)) {
+		Normal = normalize(Normal);
+	}
+	GetRWNormalTexture(C)[DispatchID] = float4(Normal * 0.5 + 0.5, 1);
 #endif
-#ifndef HW_RASTERIZATION
-		g_RWActiveGaussianScreenPositionBuffer[ActiveListIndex] = ScreenPosition;
-		g_RWActiveGaussianScreenRadiusBuffer[ActiveListIndex] = Radius;
-		g_RWActiveGaussianConicWBuffer[ActiveListIndex] = float4(Conic, G.Alpha * Scaling);	
-		g_RWActiveGaussianTileCountBuffer[ActiveListIndex] =
-			(MinMaxTileCoords.z - MinMaxTileCoords.x) * (MinMaxTileCoords.w - MinMaxTileCoords.y);
-#else
-		g_RWActiveGaussianScreenPositionBuffer[ActiveListIndex] = PackPadScreenPosition(ScreenPosition, UB.InvScreenDimensions);
-#endif 
-	}
 }
 
-[numthreads(WAVE_SIZE, 1, 1)]
-void ShadeActiveGaussians (uint DispatchID : SV_DispatchThreadID) {
-
-	if(DispatchID >= g_RWGaussianActiveCountBuffer[0]) return;
-
-	int ActiveListIndex = DispatchID;
-	int GaussianIndex   = g_RWActiveGaussianListBuffer[ActiveListIndex];
-
-	float3 GaussianPosition = FetchGaussian(GaussianIndex).Position;
-	float3 ViewDirection = normalize(UB.CameraPosition - GaussianPosition);
-	SHCoefficents3 SH3 = FetchGaussianSHCoefficients(GaussianIndex, 3);
-	g_RWActiveGaussianColorBuffer[ActiveListIndex] = SH3Evaluate(ViewDirection, SH3, 3);
+float TapDepth (CameraDescription C, int2 TapCoords) {
+	TapCoords = clamp(TapCoords, 0, C.FilmDimensions - 1);
+	return GetMomentumTexture(C).Load(int3(TapCoords, 0)).r;
 }
-
-// scan sum g_RWActiveGaussianTileCountBuffer into g_RWActiveGaussianInstanceBaseBuffer
-
-[numthreads(1, 1, 1)]
-void SetActiveGaussianInstanceCount () {
-	int ActiveGaussianCount = g_RWGaussianActiveCountBuffer[0];
-	g_RWActiveGaussianInstanceCountBuffer[0] =
-	 g_RWActiveGaussianInstanceBaseBuffer[ActiveGaussianCount - 1] 
-	 + g_RWActiveGaussianTileCountBuffer[ActiveGaussianCount - 1];
-}
-
-uint MakeKey(int TileIndex, float Depth) {
-	return (TileIndex << 19) | (0x7ffffu & (asuint(Depth) >> 4));
-}
-
-int GetTileIndexFromKey(uint Key) {
-	return int(Key >> 19);
-}
-
-[numthreads(WAVE_SIZE, 1, 1)]
-void AssignGaussianInstanceKeys (uint DispatchID : SV_DispatchThreadID) {
-	if(DispatchID >= g_RWGaussianActiveCountBuffer[0]) return;
-	int Base       = g_RWActiveGaussianInstanceBaseBuffer[DispatchID];
-
-	float2 ScreenPosition = g_RWActiveGaussianScreenPositionBuffer[DispatchID];
-	float  ScreenRadius   = g_RWActiveGaussianScreenRadiusBuffer[DispatchID];
-	uint4  MinMaxTileCoords = GetOverlappingTiles(ScreenPosition, ScreenRadius);
-	int    Count = (MinMaxTileCoords.z - MinMaxTileCoords.x) * (MinMaxTileCoords.w - MinMaxTileCoords.y);
-	int MaxCount = WaveActiveMax(Count);
-
-	for(int i = 0; i < MaxCount; i++) {
-		if(i < Count) {
-			int2 TileCoords = int2(
-				MinMaxTileCoords.x + i % (MinMaxTileCoords.z - MinMaxTileCoords.x),
-				MinMaxTileCoords.y + i / (MinMaxTileCoords.z - MinMaxTileCoords.x)
-			);
-			uint TileIndex = TileCoords.y * UB.TileDimensions.x + TileCoords.x;
-			// Key: | TileIndex (13 bits) | Depth (19 bits) |
-			// IEEE float has 23 bits for mantissa, we drop 4 bits of precision
-			// So that we can stuff everything into a uint
-			uint Key = MakeKey(TileIndex, g_RWActiveGaussianDepthBuffer[DispatchID]);
-			g_RWActiveGaussianInstanceKeyBuffer[Base + i]           = Key;
-			// g_RWActiveGaussianInstanceSortIndexBuffer[Base + i]     = Base + i;
-			g_RWActiveGaussianInstanceGaussianIndexBuffer[Base + i] = DispatchID;
-		}
-	}	
-}
-
-// sort g_RWActiveGaussianInstanceIndexBuffer with g_RWActiveGaussianInstanceKeyBuffer as keys
-// into g_RWActiveGaussianInstanceKeySortedBuffer and g_RWActiveGaussianInstanceGaussianIndexSortedBuffer
-
-// g_RWTileGaussianInstanceStartBuffer is cleared into 0xffffffff
-
-[numthreads(WAVE_SIZE, 1, 1)]
-void FindTileGaussianInstanceStarts (uint DispatchID : SV_DispatchThreadID) {
-	for(int i = 0; i < DEFAULT_REPEAT; i++) {
-		int Rank  = DispatchID + i * WAVE_SIZE;
-		if(Rank < g_RWActiveGaussianInstanceCountBuffer[0]) {
-			int TileIndex     = GetTileIndexFromKey(g_RWActiveGaussianInstanceKeySortedBuffer[Rank]);
-			int PrevIndex = (Rank == 0) ? -1 : g_RWActiveGaussianInstanceKeySortedBuffer[Rank - 1];
-			// -1 produces all 1s, so we can use it as a sentinel
-			int PrevTileIndex = GetTileIndexFromKey(PrevIndex);
-			if(TileIndex != PrevTileIndex) {
-				g_RWTileGaussianInstanceStartBuffer[TileIndex] = Rank;
-				if(0 <= PrevTileIndex && PrevTileIndex < UB.TileDimensions.x * UB.TileDimensions.y) {
-					g_RWTileGaussianInstanceEndBuffer[PrevTileIndex] = Rank;
-				}
-			}
-		}
-	}
-}
-
-int GetGaussianInstanceCount () {
-	return g_RWActiveGaussianInstanceCountBuffer[0];
-}
-
-// Okay we're prepared to rasterize tiles.
-// Dispatch a wave for each tile.
-// TODO i think i can do this with a better implementation...
-
-// Process a batch of 32 gaussians at a time
-#define GAUSSIAN_BATCH_SIZE 32
-groupshared float4 LocalGsConicWBuffer[GAUSSIAN_BATCH_SIZE];
-groupshared float3 LocalGsColorBuffer[GAUSSIAN_BATCH_SIZE];
-groupshared float2 LocalGsScreenPositionBuffer[GAUSSIAN_BATCH_SIZE];
-
-// Keep track of the accumulated transparency of pixels in this tile
-groupshared float  LocalTransparencyBuffer[TILE_SIZE * TILE_SIZE];
-groupshared float3 LocalColorBuffer[TILE_SIZE * TILE_SIZE];
-
-[numthreads(WAVE_SIZE, 1, 1)]
-void RasterizeActiveGaussians (uint GroupID : SV_GroupID, uint LocalID : SV_GroupThreadID) {
+// Reconstruct the normal texture from depth texture, so we dont have to rasterize normals.
+// Overdraws from 3DGS are huge burdens on output mergers.
+[numthreads(TILE_SIZE, TILE_SIZE, 1)]
+void ReconstructNormals (uint2 DispatchID : SV_DispatchThreadID) {
+	CameraDescription C = GetCameraDescription();
+	if(IsOutOfFilm(C, DispatchID)) return;
+	int2   TexCoords = int2(DispatchID);
+	float  Depth = TapDepth(C, TexCoords);
+	float3 CameraDirection = NDC2ToCameraDirection(C, FilmToNDC2(C, TexCoords + 0.5f.xx));
 	
-	// return ;
-	int  TileIndex  = GroupID;
-	int2 TileCoords = int2(TileIndex % UB.TileDimensions.x, TileIndex / UB.TileDimensions.x);
-	int  GaussianInstanceStart = g_RWTileGaussianInstanceStartBuffer[TileIndex];
-	int  GaussianInstanceEnd   = g_RWTileGaussianInstanceEndBuffer[TileIndex];
-	if(GaussianInstanceStart == GaussianInstanceEnd) {
-		// No gaussians to rasterize
-		return;
-	}
-	// For the last tile, we don't have a sentinel
-	if(GaussianInstanceEnd == -1) GaussianInstanceEnd = GetGaussianInstanceCount();
-	int REPEAT = (GaussianInstanceEnd - GaussianInstanceStart + GAUSSIAN_BATCH_SIZE - 1) / GAUSSIAN_BATCH_SIZE;
 
-	// float V = clamp((GaussianInstanceEnd - GaussianInstanceStart) / 10, 0, 1);
-	// float3 DebugColor = GaussianInstanceEnd - GaussianInstanceStart;//DebugColorHeatMap(V);
-	// for(int BaseTexelIndex = 0; BaseTexelIndex < TILE_SIZE * TILE_SIZE; BaseTexelIndex += WAVE_SIZE) {
-	// 	int  TexelIndex = BaseTexelIndex + LocalID;
-	// 	int2 TexelCoords = int2(
-	// 		TexelIndex % TILE_SIZE,
-	// 		TexelIndex / TILE_SIZE
-	// 	) + TileCoords * TILE_SIZE;
-	// 	g_RW_GColorTexture[TexelCoords] = float4(DebugColor, 1);
+	float4 Depths = float4(
+		TapDepth(C, TexCoords - int2(1, 0)),
+		TapDepth(C, TexCoords + int2(1, 0)),
+		TapDepth(C, TexCoords - int2(0, 1)),
+		TapDepth(C, TexCoords + int2(0, 1))
+	);
+	float3 Left = RecoverWorldSpacePosition(C, TexCoords - int2(1, 0) + 0.5f.xx, Depths.x);
+	float3 Right = RecoverWorldSpacePosition(C, TexCoords + int2(1, 0) + 0.5f.xx, Depths.y);
+	float3 Up = RecoverWorldSpacePosition(C, TexCoords - int2(0, 1) + 0.5f.xx, Depths.z);
+	float3 Down = RecoverWorldSpacePosition(C, TexCoords + int2(0, 1) + 0.5f.xx, Depths.w);
+	float3 HorizontalDerivative = normalize(Right - Left);
+	float3 VerticalDerivative = normalize(Down - Up);
+	float3 Normal = normalize(cross(HorizontalDerivative, VerticalDerivative));
+	if(dot(Normal, CameraDirection) > 0) {
+		Normal = -Normal;
+	}
+	GetRWNormalTexture(C)[DispatchID] = float4(Normal * 0.5 + 0.5, 1);
+	return;
+
+	// // Reference: https://atyuwen.github.io/posts/normal-reconstruction/
+	// // Horizontal 4 points
+	// float4 H = float4(
+	// 	TapDepth(C, TexCoords - int2(1, 0)),
+	// 	TapDepth(C, TexCoords + int2(1, 0)),
+	// 	TapDepth(C, TexCoords - int2(2, 0)),
+	// 	TapDepth(C, TexCoords + int2(2, 0))
+	// );
+	// float2 HError = abs(2 * H.xy - H.zw - Depth);
+	// float3 HDerivative = 0;
+	// if(H.x && H.z && HError.x < HError.y) {
+	// 	float3 A = RecoverWorldSpacePosition(C, TexCoords - int2(1, 0) + 0.5f.xx, H.x);
+	// 	float3 B = RecoverWorldSpacePosition(C, TexCoords - int2(2, 0) + 0.5f.xx, H.z);
+	// 	HDerivative = normalize(B - A);
+	// } else {
+	// 	float3 A = RecoverWorldSpacePosition(C, TexCoords + int2(1, 0) + 0.5f.xx, H.y);
+	// 	float3 B = RecoverWorldSpacePosition(C, TexCoords + int2(2, 0) + 0.5f.xx, H.w);
+	// 	HDerivative = normalize(A - B); 
 	// }
-	// return ;
-
-#if (TILE_SIZE * TILE_SIZE) % WAVE_SIZE != 0
-// For maximum concurrency
-#error "TILE_SIZE^2 should be a multiple of WAVE_SIZE"
-#endif
-	// Set the transparency of texels within this tile to 1.0
-	for(int BaseTexelIndex = 0; BaseTexelIndex < TILE_SIZE * TILE_SIZE; BaseTexelIndex += WAVE_SIZE) {
-		LocalTransparencyBuffer[BaseTexelIndex + LocalID] = 1.0f;
-		LocalColorBuffer[BaseTexelIndex + LocalID] = 0.f;
-	}
-
-	for(int Round = 0; Round < REPEAT; Round ++) {
-		// Process GAUSSIAN_BATCH_SIZE gaussians at a time
-		// Load them into shared memory
-		// Barrier reads from the previous iteration
-		GroupMemoryBarrierWithGroupSync();
-		int REPEAT_INNER = (GAUSSIAN_BATCH_SIZE + WAVE_SIZE - 1) / WAVE_SIZE;
-		int GaussianBatchBase = GaussianInstanceStart + Round * GAUSSIAN_BATCH_SIZE;
-		for(int Round_Inner = 0; Round_Inner < REPEAT_INNER; Round_Inner ++) {
-			int GaussianRankInBatch = Round_Inner * WAVE_SIZE + LocalID;
-			int GaussianInstanceRank = GaussianBatchBase + GaussianRankInBatch;
-			if(GaussianInstanceRank < GaussianInstanceEnd) {
-				int ActiveGaussianIndex   = g_RWActiveGaussianInstanceGaussianIndexSortedBuffer[GaussianInstanceRank];
-
-				float4 ConicW = g_RWActiveGaussianConicWBuffer[ActiveGaussianIndex];
-				float3 Color  = g_RWActiveGaussianColorBuffer[ActiveGaussianIndex];
-				float2 ScreenPosition = g_RWActiveGaussianScreenPositionBuffer[ActiveGaussianIndex];
-				LocalGsConicWBuffer[GaussianRankInBatch] = ConicW;
-				LocalGsColorBuffer[GaussianRankInBatch]  = Color;
-				LocalGsScreenPositionBuffer[GaussianRankInBatch] = ScreenPosition;
-			}
-		}
-		GroupMemoryBarrierWithGroupSync();
-		// Rasterize the batch
-		int NumGaussians = min(GAUSSIAN_BATCH_SIZE, GaussianInstanceEnd - GaussianBatchBase);
-		// Enumerate each pixel in the tile, and process 1 pixel per thread
-		int TexelCount = TILE_SIZE * TILE_SIZE;
-		for(int TexelBaseRank = 0; TexelBaseRank < TexelCount; TexelBaseRank += WAVE_SIZE) {
-			int TexelTileIndex = TexelBaseRank + LocalID;
-			int2 TexelCoords = int2(
-				TexelTileIndex % TILE_SIZE,
-				TexelTileIndex / TILE_SIZE
-			) + TileCoords * TILE_SIZE;
-			float2 TexelScreenPosition = float2(TexelCoords) + 0.5f;
-			float  Transparency        = LocalTransparencyBuffer[TexelTileIndex];
-			float3 Color               = LocalColorBuffer[TexelTileIndex];
-			bool   PixelCompleted      = Transparency < 0.0001f;
-			if(WaveActiveAllTrue(PixelCompleted)) {
-				// All threads finished rendering their pixel. Skip to the next ones.
-				continue;
-			}
-
-			// Enumerate all gaussians in the batch
-			[unroll(GAUSSIAN_BATCH_SIZE)]
-			for(int GaussianBatchRank = 0; GaussianBatchRank < min(GAUSSIAN_BATCH_SIZE, NumGaussians); GaussianBatchRank ++) {
-				// Resample using conic matrix (cf. "Surface 
-				// Splatting" by Zwicker et al., 2001)
-				float2 GaussianScreenPosition = LocalGsScreenPositionBuffer[GaussianBatchRank];
-				float4 ConicW                 = LocalGsConicWBuffer[GaussianBatchRank];
-				float3 GaussianColor          = LocalGsColorBuffer[GaussianBatchRank];
-				float2 D                      = GaussianScreenPosition - TexelScreenPosition;
-				float Power = -0.5f * (ConicW.x * D.x * D.x + ConicW.z * D.y * D.y) - ConicW.y * D.x * D.y;
-				if (Power <= 0.f) {
-					// Eq. (2) from 3D Gaussian splatting paper.
-					// Obtain alpha by multiplying with Gaussian opacity
-					// and its exponential falloff from mean.
-					// Avoid numerical instabilities (see paper appendix). 
-					float Alpha = min(0.99f, ConicW.w * exp(Power));
-					if (Alpha >= 1.0f / 255.0f) {
-
-						// Eq. (3) from 3D Gaussian splatting paper.
-						Color +=  GaussianColor * Alpha * Transparency;
-
-						// if(invdepth)
-						// expected_invdepth += (1 / depths[collected_id[j]]) * alpha * T;
-
-						Transparency *= (1 - Alpha);
-					}
-				}
-			}
-			// Write back the results
-			LocalTransparencyBuffer[TexelTileIndex] = Transparency;
-			LocalColorBuffer[TexelTileIndex] = Color;
-		}
-	}
-
-	// Write the results back to the global buffers
-	for(int TexelBaseRank = 0; TexelBaseRank < TILE_SIZE * TILE_SIZE; TexelBaseRank += WAVE_SIZE) {
-		int TexelTileIndex = TexelBaseRank + LocalID;
-		int2 TexelCoords = int2(
-			TexelTileIndex % TILE_SIZE,
-			TexelTileIndex / TILE_SIZE
-		) + TileCoords * TILE_SIZE;
-		int PixelIndex = TexelCoords.y * UB.ScreenDimensions.x + TexelCoords.x;
-		// Gamma correct to HDR
-		float3 Radiance = ColorToRadiance(LocalColorBuffer[TexelTileIndex]);
-		g_RW_GColorTexture[TexelCoords] = float4(Radiance, LocalTransparencyBuffer[TexelTileIndex]);
-	}
+	// // Vertical 4 points
+	// float4 V = float4(
+	// 	TapDepth(C, TexCoords - int2(0, 1)),
+	// 	TapDepth(C, TexCoords + int2(0, 1)),
+	// 	TapDepth(C, TexCoords - int2(0, 2)),
+	// 	TapDepth(C, TexCoords + int2(0, 2))
+	// );
+	// float2 VError = abs(2 * V.xy - V.zw - Depth);
+	// float3 VDerivative = 0;
+	// if(V.x && V.z && VError.x < VError.y) {
+	// 	float3 A = RecoverWorldSpacePosition(C, TexCoords - int2(0, 1) + 0.5f.xx, V.x);
+	// 	float3 B = RecoverWorldSpacePosition(C, TexCoords - int2(0, 2) + 0.5f.xx, V.z);
+	// 	VDerivative = normalize(B - A);
+	// } else {
+	// 	float3 A = RecoverWorldSpacePosition(C, TexCoords + int2(0, 1) + 0.5f.xx, V.y);
+	// 	float3 B = RecoverWorldSpacePosition(C, TexCoords + int2(0, 2) + 0.5f.xx, V.w);
+	// 	VDerivative = normalize(A - B); 
+	// }
+	// float3 Normal = normalize(cross(HDerivative, VDerivative));
+	// if(dot(Normal, CameraDirection) > 0) {
+	// 	Normal = -Normal;
+	// }
+	// GetRWNormalTexture(C)[DispatchID] = float4(Normal * 0.5 + 0.5, 1);
 }
 
+// [numthreads(TILE_SIZE, TILE_SIZE, 1)]
+// void FinetuneNormals (uint2 DispatchID : SV_DispatchThreadID) {
+// 	if(DispatchID.x >= UB.ScreenDimensions.x || DispatchID.y >= UB.ScreenDimensions.y) return;
+// 	int2 TexelCoords = int2(DispatchID);
+// 	float3 Depth012  = 
+// }
 
-#endif // _SW_RASTERIZATION
+// [numthreads(TILE_SIZE, TILE_SIZE, 1)]
+// void TemporalDenoise (uint2 DispatchID : SV_DispatchThreadID) {
+// 	if(DispatchID.x >= UB.ScreenDimensions.x || DispatchID.y >= UB.ScreenDimensions.y) return;
+// 	float2 Momentum = g_RW_GMomentumTexture[DispatchID].xy;
+// 	CameraDescription C = GetCameraDescription();
+// 	float3 WorldPosition = 
+// }
+
+[numthreads(TILE_SIZE, TILE_SIZE, 1)]
+void FinalComposition (uint2 DispatchID : SV_DispatchThreadID) {
+	CameraDescription C = GetCameraDescription();
+	if(IsOutOfFilm(C, DispatchID)) return;
+	// TODO
+	// I simply copy the color buffer to the final buffer
+	// for now.
+	float4 Color = GetRWColorTexture(C)[DispatchID];
+	if(UB.DebugMode == 1) {
+		
+    } else if(UB.DebugMode == 2) {
+        Color.rgb = g_GMaterialTexture.Load(int3(DispatchID, 0)).rrr;
+    } else if(UB.DebugMode == 3) {
+        Color.rgb = g_GNormalTexture.Load(int3(DispatchID, 0)).xyz;
+    } else if(UB.DebugMode == 4) {
+        float Depth = g_GMomentumTexture.Load(int3(DispatchID, 0)).x * 0.25;
+        float Momentum = g_GMomentumTexture.Load(int3(DispatchID, 0)).y;
+        float NormVariance = sqrt(max(Momentum - Depth * Depth, 0)) / max(Depth, 1e-6f);
+        Color = float4(Depth.xxx, 1);//RadianceToColor(float3(Depth, NormVariance, 0) * 0.02), 1);
+    } else if(UB.DebugMode == 4) {
+        float Alpha = g_GColorTexture.Load(int3(DispatchID, 0)).a;
+        Color = float4(Alpha.xxx, 1);
+    }
+	GetRWRadianceTexture(C)[DispatchID] = Color;
+}
+
 
 // Spawn rays starting from the camera
 // For 3DGS HWRT testing purposes only.
@@ -537,10 +349,10 @@ void SpawnCameraRays (uint GroupID : SV_GroupID, uint LocalID : SV_GroupThreadID
 		float2 ScreenPosition = float2(TexelCoords) + 0.5f;
 
 		RayToTrace Ray = SpawnCameraRay(UB.MainCamera, ScreenPosition);
+		// Ray.Seed = BlueNoise_Sample(TileTexelIndex, UB.FrameIndex);
 		int RayIndex = TexelCoords.x + TexelCoords.y * UB.ScreenDimensions.x;
 		WriteRayToTrace(RayIndex, Ray);
 	}
-
 }
 
 // Display the camera rays trace results on the screen
@@ -555,8 +367,13 @@ void DisplayCameraRays (uint GroupID : SV_GroupID, uint LocalID : SV_GroupThread
 		) + TileCoords * SMALL_TILE_SIZE;
 		
 		int RayIndex = TexelCoords.x + TexelCoords.y * UB.ScreenDimensions.x;
-		float4 RayResult = FetchRayTraceResult(RayIndex);
-		g_RW_GColorTexture[TexelCoords] = float4(RayResult.xyz, 1);
+		if(UB.VisualizeShadingRays) {
+			float4 RayResult = FetchRayTraceResult(RayIndex);
+			g_RW_Radiance[TexelCoords] = float4(RayResult.xyz, 1);
+		} else {
+			float  RayT = FetchRayTraceHitT(RayIndex);
+			g_RW_Radiance[TexelCoords] = float4(RayT.xxx, 1);
+		}
 	}
 }
 

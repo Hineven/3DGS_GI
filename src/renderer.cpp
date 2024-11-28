@@ -34,13 +34,44 @@ void Renderer::GenerateDrawIndirect(const GfxBuffer &vertex_count_buffer) {
 
 void Renderer::RenderUI () {
     if(ImGui::CollapsingHeader("Renderer")) {
-        ImGui::Checkbox("Show HWRT Color", &options_.show_HWRT_color);
+        ImGui::Checkbox("Show HWRT Color", &options_.visualize_HWRT);
         ImGui::SliderFloat("Gaussian RT Proxy Geometry Sigma", &options_.gaussian_RT_proxy_geometry_sigma, 0.01f, 1.0f);
         ImGui::SliderFloat("Min Alpha For Gaussian Evaluation", &options_.min_alpha_for_gaussian_evaluation, 0.0f, 0.5f);
+        const char * debug_modes[] = {
+            "Default",
+            "Albedo/Color",
+            "Roughness",
+            "Normal",
+            "Momentum",
+            "Alpha"
+        };
+        if (ImGui::BeginCombo("DebugMode", debug_modes[options_.debug_mode])) {
+            for (int i = 0; i < IM_ARRAYSIZE(debug_modes); i++) {
+                if (ImGui::Selectable(debug_modes[i])) {
+                    options_.debug_mode = i;
+                }
+            }
+            ImGui::EndCombo();
+        }
+        if (ImGui::Checkbox("Render Color Only", &options_.no_G_buffers)) {
+            need_reload_shaders_ = true;
+        }
+        if (ImGui::Checkbox("Reconstruct Normals", &options_.reconstruct_normals)) {
+            need_reload_shaders_ = true;
+        }
     }
 }
 
 void Renderer::Render() {
+
+    if (need_reload_shaders_) {
+        Destroy();
+        if (!Initialize()) {
+            return;
+        }
+        need_reload_shaders_ = false;
+    }
+
     auto & gfx = AppInternal::GetInstance().GetGfx();
     auto & scene = AppInternal::GetInstance().GetScene();
     auto & camera = scene.GetCamera();
@@ -65,6 +96,10 @@ void Renderer::Render() {
 
         UB.SmallTileDimensions = resolution / SMALL_TILE_SIZE;
         UB.RT_AlphaMultiplier = 2.f;
+        UB.FrameIndex = frame_index_;
+
+        UB.DebugMode = options_.debug_mode;
+        UB.VisualizeShadingRays = false;
     }
     gfxBufferGetData<UniformBlock>(gfx, buf_.UB)[frame_index_ & 1] = UB;
     gfxProgramSetParameter(gfx, program_, "UB", buf_.UB);
@@ -85,7 +120,7 @@ void Renderer::Render() {
     gfxProgramSetParameter(gfx, program_, "g_RWActiveGaussianNDCPositionBuffer", buf_.active_gaussian_NDC_position);
     gfxProgramSetParameter(gfx, program_, "g_RWActiveGaussianQuadNDCVector0Buffer", buf_.active_gaussian_quad_NDC_vector0);
     gfxProgramSetParameter(gfx, program_, "g_RWActiveGaussianQuadNDCVector1Buffer", buf_.active_gaussian_quad_NDC_vector1);
-    gfxProgramSetParameter(gfx, program_, "g_RWActiveGaussianConicWBuffer", buf_.active_gaussian_conic_w);
+    gfxProgramSetParameter(gfx, program_, "g_RWActiveGaussianColorBuffer", buf_.active_gaussian_color);
 
     gfxProgramSetParameter(gfx, program_, "g_RWRayToTraceCountBuffer", buf_.ray_to_trace_count);
     gfxProgramSetParameter(gfx, program_, "g_RWRayToTraceDirectionBuffer", buf_.ray_to_trace_direction);
@@ -98,6 +133,11 @@ void Renderer::Render() {
     gfxProgramSetParameter(gfx, program_, "g_GColorTexture", tex_.G_albedo_alpha);
     gfxProgramSetParameter(gfx, program_, "g_RW_GMomentumTexture", tex_.G_momentum);
     gfxProgramSetParameter(gfx, program_, "g_GMomentumTexture", tex_.G_momentum);
+    gfxProgramSetParameter(gfx, program_, "g_RW_GMaterialTexture", tex_.G_material);
+    gfxProgramSetParameter(gfx, program_, "g_GMaterialTexture", tex_.G_material);
+    // Not rasterized, but derived from depth buffer (overdraw is too severe for 3dgs)
+    gfxProgramSetParameter(gfx, program_, "g_RW_GNormalTexture", tex_.G_normal);
+    gfxProgramSetParameter(gfx, program_, "g_GNormalTexture", tex_.G_normal);
 
     gfxProgramSetParameter(gfx, program_, "g_RW_Radiance", tex_.radiance);
     gfxProgramSetParameter(gfx, program_, "g_Radiance", tex_.radiance);
@@ -189,7 +229,7 @@ void Renderer::Render() {
         gfxCommandDispatch(gfx, 1, 1, 1);
     }
 
-    if(options_.show_HWRT_color) {
+    if(options_.visualize_HWRT) {
         // HWRT pipeline
 
         auto section = TimedSection(*this, "HWRT Color");
@@ -203,14 +243,10 @@ void Renderer::Render() {
         gfxCommandBindKernel(gfx, kernel_.Trace3DGSRays);
         gfxCommandDispatchRays(gfx, sbt_, num_rays, 1, 1);
 
-        gfxCommandBindKernel(gfx, kernel_.DisplayCameraRays);
-        gfxCommandDispatch(gfx, num_groups, 1, 1);
-
     } else {
         // Rasterization pipeline
-
-        // Filter active gaussians
         {
+            // Filter active gaussians, crop gaussians outside the view frustrum
             auto section = TimedSection(*this, "FilterActiveGaussians");
             gfxCommandBindKernel(gfx, kernel_.FilterActiveGaussians);
             auto num_threads = gfxKernelGetNumThreads(gfx, kernel_.FilterActiveGaussians);
@@ -218,15 +254,17 @@ void Renderer::Render() {
             gfxCommandDispatch(gfx, num_groups, 1, 1);
         }
 
-        // Sort active gaussians
         {
+            // Sort active gaussians according to their depth values.
+            // So we can later draw them in order.
             auto section = TimedSection(*this, "SortActiveGaussians");
             gfxCommandSortRadix(gfx, buf_.active_gaussian_linear_depth, buf_.active_gaussian_linear_depth_src,
                                 &buf_.active_gaussian_list, &buf_.active_gaussian_list_src, &buf_.active_gaussian_count);
         }
 
-        // Project active gaussians
         {
+            // Project active gaussians, compute the 2-dimensional gaussian distribution
+            // Save the eigen vectors for later rasterization.
             auto section = TimedSection(*this, "ProjectActiveGaussians");
             GenerateDispatchIndirect(buf_.active_gaussian_count);
             gfxCommandBindKernel(gfx, kernel_.ProjectActiveGaussians);
@@ -234,29 +272,51 @@ void Renderer::Render() {
         }
 
         {
+            // Rasterize the G-Buffers
             auto section = TimedSection(*this, "DrawActiveGaussians");
             // Cleared to (0, 0, 0, 0)
             gfxCommandClearTexture(gfx, tex_.G_albedo_alpha);
-            gfxCommandClearTexture(gfx, tex_.G_normal);
+            gfxCommandClearTexture(gfx, tex_.G_material);
             gfxCommandClearTexture(gfx, tex_.G_momentum);
+            gfxCommandClearTexture(gfx, tex_.G_normal);
             GenerateDrawIndirect(buf_.active_gaussian_count);
             gfxCommandBindKernel(gfx, kernel_.DrawActiveGaussians);
             gfxCommandBindColorTarget(gfx, 0, tex_.G_albedo_alpha);
-            gfxCommandBindColorTarget(gfx, 1, tex_.G_normal);
+            gfxCommandBindColorTarget(gfx, 1, tex_.G_material);
             gfxCommandBindColorTarget(gfx, 2, tex_.G_momentum);
+            if (!options_.reconstruct_normals) {
+                gfxCommandBindColorTarget(gfx, 3, tex_.G_normal);
+            }
             gfxCommandMultiDrawIndirect(gfx, buf_.draw_indirect_command, 1);
         }
 
         {
-            auto section = TimedSection(*this, "ResolveDepth");
-            gfxCommandBindKernel(gfx, kernel_.ResolveDepth);
-            auto num_threads = gfxKernelGetNumThreads(gfx, kernel_.ResolveDepth);
+            auto section = TimedSection(*this, "ResolveGBuffers");
+            gfxCommandBindKernel(gfx, kernel_.ResolveGBuffers);
+            auto num_threads = gfxKernelGetNumThreads(gfx, kernel_.ResolveGBuffers);
             assert(UB.ScreenDimensions.x % num_threads[0] == 0 && UB.ScreenDimensions.y % num_threads[1] == 0);
             uint num_groups_x = divideAndRoundUp((uint)UB.ScreenDimensions.x, num_threads[0]);
             uint num_groups_y = divideAndRoundUp((uint)UB.ScreenDimensions.y, num_threads[1]);
             gfxCommandDispatch(gfx, num_groups_x, num_groups_y, 1);
         }
 
+        if (options_.reconstruct_normals) {
+            // Reconstruct normals from depth buffer if required
+            auto section = TimedSection(*this, "ReconstructNormals");
+            gfxCommandBindKernel(gfx, kernel_.ReconstructNormals);
+            gfxCommandDispatch(gfx, UB.TileDimensions.x, UB.TileDimensions.y, 1);
+        }
+
+    }
+
+    if (!options_.visualize_HWRT) {
+        auto section = TimedSection(*this, "FinalComposition");
+        gfxCommandBindKernel(gfx, kernel_.FinalComposition);
+        gfxCommandDispatch(gfx, UB.TileDimensions.x, UB.TileDimensions.y, 1);
+    } else {
+        int num_groups = UB.SmallTileDimensions.x * UB.SmallTileDimensions.y;
+        gfxCommandBindKernel(gfx, kernel_.DisplayCameraRays);
+        gfxCommandDispatch(gfx, num_groups, 1, 1);
     }
 
     {

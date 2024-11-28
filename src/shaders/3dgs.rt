@@ -29,6 +29,12 @@ struct Trace3DGSPayload {
     float HitGaussianDepths[HIT_BUFFER_SIZE];
 };
 
+struct Trace3DGSShadowPayload {
+    float Seed;
+    float HitDist;
+};
+
+// Trace shading rays and shade them according to "3DGS Ray Tracing" in the paper
 [shader("raygeneration")]
 void Trace3DGSRaygen ()
 {
@@ -43,10 +49,6 @@ void Trace3DGSRaygen ()
         Ray.TMin = RayData.RayTMin;
         Ray.TMax = RayData.RayTMax;
     }
-
-    
-    // g_RWRayToTraceResultBuffer[RayIndex] = PackRGBA16(float4(Ray.Direction, 1.f));
-    // return ;
     
     float3 AccumulatedColor = 0;
     float  Transparency = 1.f;
@@ -84,9 +86,10 @@ void Trace3DGSRaygen ()
             int  InstanceIndex;
             UnpackGaussianHit(HitPacked, InstanceIndex, GaussianIndex);
             Gaussian G   = FetchGaussian(GaussianIndex);
-            RayDesc LocalRay = GaussianInstance_TransformWorldToLocal(Ray, InstanceIndex);
+            float RayScaler = 1, RayT = 0;
+            RayDesc LocalRay = GaussianInstance_TransformWorldToLocal(Ray, InstanceIndex, RayScaler);
             float Alpha = saturate(
-                EvaluateGaussianResponse(LocalRay.Origin, LocalRay.Direction, G)
+                EvaluateGaussianResponse(LocalRay.Origin, LocalRay.Direction, G, RayT)
             );
             if(Alpha >= UB.MinAlphaForGaussianEvaluation) {
                 SHCoefficents3 SH = FetchGaussianSHCoefficients(GaussianIndex, 1);
@@ -110,7 +113,40 @@ void Trace3DGSRaygen ()
     // Write the result to the output buffer
     float3 AccumulatedRadiance = ColorToRadiance(AccumulatedColor);
     float4 Result = float4(AccumulatedRadiance, Transparency);
-    g_RWRayToTraceResultBuffer[RayIndex] = PackRGBA16(Result);
+    g_RWRayToTraceResultBuffer[RayIndex] = PackRadianceA16(Result);
+}
+
+// Trace shadow rays. We only get the stochastic hit distances.
+[shader("raygeneration")]
+void Trace3DGSShadowRaygen ()
+{
+    int RayIndex = DispatchRaysIndex().x;
+    if(RayIndex >= g_RWRayToTraceCountBuffer[0]) return ;
+    Trace3DGSShadowPayload Payload = (Trace3DGSShadowPayload) 0;
+    RayDesc Ray;
+    {
+        RayToTrace RayData = FetchRayToTrace(RayIndex);
+        Ray.Origin = RayData.Origin;
+        Ray.Direction = RayData.Direction;
+        Ray.TMin = RayData.RayTMin;
+        Ray.TMax = RayData.RayTMax;
+    }
+    
+    // launch only 1 ray
+    TraceRay(
+        g_HWRT_AccelerationStructure,
+        // We dont want back face hits (they are already counted by front face hits)
+        RAY_FLAG_CULL_BACK_FACING_TRIANGLES,
+        0xff, // All instances
+        1, // Hit group index. 1 is the hit group for shadow rays
+        0, // No multiplier for geometry index indexing into the hitgroup
+        1, // Shadow ray miss shader 0
+        Ray,
+        Payload
+    );
+    
+    // Write the result to the output buffer
+    g_RWRayToTraceHitTBuffer[RayIndex] = Payload.HitDist;
 }
 
 int GetHitGaussianIndex (int HitInstance, int HitPrimitiveIndex, BuiltInTriangleIntersectionAttributes HitAttr) {
@@ -127,7 +163,6 @@ void Trace3DGSAnyHit (inout Trace3DGSPayload Payload, in BuiltInTriangleIntersec
     int HitInstance  = InstanceIndex();
     int HitPrimitive = PrimitiveIndex();
     
-    // 20 faces per icosaedron
     int  HitGaussianIndex = GetHitGaussianIndex(HitInstance, HitPrimitive, HitAttr);
     uint HitPacked = PackGaussianHit(HitInstance, HitGaussianIndex);
     float HitDepth = RayTCurrent();
@@ -147,12 +182,40 @@ void Trace3DGSAnyHit (inout Trace3DGSPayload Payload, in BuiltInTriangleIntersec
 
 }
 
-
+RayDesc GetRayDesc () {
+    RayDesc Ray;
+    Ray.Origin = WorldRayOrigin();
+    Ray.Direction = WorldRayDirection();
+    Ray.TMin = RayTMin();
+    Ray.TMax = RayTCurrent();
+    return Ray;
+}
 
 [shader("anyhit")]
-void Trace3DGSShadowAnyHit (inout Trace3DGSPayload Payload, in BuiltInTriangleIntersectionAttributes HitAttr)
+void Trace3DGSShadowAnyHit (inout Trace3DGSShadowPayload Payload, in BuiltInTriangleIntersectionAttributes HitAttr)
 {
+    // Duplicate the payload, and copy back the updated payload
+    // This is necessary to get rid of a compiler bug... 
+    // See: https://github.com/microsoft/DirectXShaderCompiler/issues/5158
+    Trace3DGSShadowPayload InPayload = Payload;
+    int HitInstance  = InstanceIndex();
+    int HitPrimitive = PrimitiveIndex();
 
+    int  HitGaussianIndex = GetHitGaussianIndex(HitInstance, HitPrimitive, HitAttr);
+    Gaussian G = FetchGaussian(HitGaussianIndex);
+    RayDesc Ray = GetRayDesc();
+    float RayScaler = 1, RayT = 0;
+    RayDesc LocalRay = GaussianInstance_TransformWorldToLocal(Ray, HitInstance, RayScaler);
+    float Alpha = saturate(
+        EvaluateGaussianResponse(LocalRay.Origin, LocalRay.Direction, G, RayT)
+    );
+    // Stochastically ignore the hit according to the gaussian response (opacity along the ray)
+    bool ShouldIgnore = Alpha < InPayload.Seed;
+    if(ShouldIgnore) {
+        Payload.Seed = (Payload.Seed - Alpha) / (1 - Alpha);
+    } else Payload.HitDist = RayT / max(1e-6, RayScaler); // Use the max response T as reply
+    Payload = InPayload;
+    if(ShouldIgnore) IgnoreHit();
 }
 
 [shader("miss")]
@@ -164,7 +227,7 @@ void Trace3DGSMiss(inout Trace3DGSPayload Payload)
 }
 
 [shader("miss")]
-void Trace3DGSShadowMiss(inout Trace3DGSPayload Payload)
+void Trace3DGSShadowMiss(inout Trace3DGSShadowPayload Payload)
 {
     // Do nothing
 }

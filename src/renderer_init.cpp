@@ -41,8 +41,8 @@ bool Renderer::CreateResources () {
     buf_.active_gaussian_quad_NDC_vector1 = gfxCreateBuffer<uint>(gfx, max_num_gaussians);
     buf_.active_gaussian_quad_NDC_vector1.setName("ActiveGaussianQuadNDCVector1");
 
-    buf_.active_gaussian_conic_w = gfxCreateBuffer<glm::vec4>(gfx, max_num_gaussians);
-    buf_.active_gaussian_conic_w.setName("ActiveGaussianConicW");
+    buf_.active_gaussian_color = gfxCreateBuffer<glm::vec3>(gfx, max_num_gaussians);
+    buf_.active_gaussian_color.setName("ActiveGaussianColor");
 
     int num_tiles = divideAndRoundUp(width, TILE_SIZE) * divideAndRoundUp(height, TILE_SIZE);
 
@@ -71,7 +71,10 @@ bool Renderer::CreateResources () {
     tex_.G_momentum.setName("G_momentum");
     tex_.G_albedo_alpha = gfxCreateTexture2D(gfx, width, height, DXGI_FORMAT_R8G8B8A8_UNORM, 1, zero_clear_value);
     tex_.G_albedo_alpha.setName("G_albedo_alpha");
-    tex_.G_normal = gfxCreateTexture2D(gfx, width, height, DXGI_FORMAT_R8G8B8A8_SNORM, 1, zero_clear_value);
+    tex_.G_material = gfxCreateTexture2D(gfx, width, height, DXGI_FORMAT_R8_UNORM, 1, zero_clear_value);
+    tex_.G_material.setName("G_material");
+    tex_.G_normal = gfxCreateTexture2D(gfx, width, height, DXGI_FORMAT_R8G8B8A8_UNORM, 1, zero_clear_value);
+    tex_.G_normal.setName("G_normal");
 
     tex_.radiance = gfxCreateTexture2D(gfx, width, height, DXGI_FORMAT_R16G16B16A16_FLOAT, 1, zero_clear_value);
 
@@ -93,7 +96,7 @@ void Renderer::DestroyResources() {
     gfxDestroyBuffer(gfx, buf_.active_gaussian_NDC_position);
     gfxDestroyBuffer(gfx, buf_.active_gaussian_quad_NDC_vector0);
     gfxDestroyBuffer(gfx, buf_.active_gaussian_quad_NDC_vector1);
-    gfxDestroyBuffer(gfx, buf_.active_gaussian_conic_w);
+    gfxDestroyBuffer(gfx, buf_.active_gaussian_color);
 
     gfxDestroyBuffer(gfx, buf_.ray_to_trace_count);
     gfxDestroyBuffer(gfx, buf_.ray_to_trace_direction);
@@ -105,6 +108,7 @@ void Renderer::DestroyResources() {
 
     gfxDestroyTexture(gfx, tex_.G_momentum);
     gfxDestroyTexture(gfx, tex_.G_albedo_alpha);
+    gfxDestroyTexture(gfx, tex_.G_material);
     gfxDestroyTexture(gfx, tex_.G_normal);
 
     gfxDestroyTexture(gfx, tex_.radiance);
@@ -138,6 +142,13 @@ bool Renderer::CreateKernels () {
         }
         cfg_.wave_lane_count = 32;
         defines.push_back("WAVE_SIZE=32");
+
+        if (!options_.no_G_buffers) {
+            defines.push_back("OUTPUT_PBR_G_BUFFER");
+        }
+        if (options_.reconstruct_normals) {
+            defines.push_back("RECONSTRUCT_NORMALS_FROM_DEPTH");
+        }
     }
 
     auto defines_c = std::make_unique<const char*[]>(defines.size());
@@ -161,7 +172,10 @@ bool Renderer::CreateKernels () {
                                                                defines_c.get(), define_count);
         kernel_.ProjectActiveGaussians = gfxCreateComputeKernel(gfx, program_, "ProjectActiveGaussians",
                                                                 defines_c.get(), define_count);
-        kernel_.ResolveDepth = gfxCreateComputeKernel(gfx, program_, "ResolveDepth", defines_c.get(), define_count);
+        kernel_.ResolveGBuffers = gfxCreateComputeKernel(gfx, program_, "ResolveGBuffers", defines_c.get(), define_count);
+        kernel_.ReconstructNormals = gfxCreateComputeKernel(gfx, program_, "ReconstructNormals", defines_c.get(), define_count);
+
+        kernel_.FinalComposition = gfxCreateComputeKernel(gfx, program_, "FinalComposition", defines_c.get(), define_count);
 
         kernel_.SpawnCameraRays = gfxCreateComputeKernel(gfx, program_, "SpawnCameraRays", defines_c.get(),
                                                          define_count);
@@ -217,8 +231,13 @@ bool Renderer::CreateKernels () {
                                          D3D12_BLEND_SRC_ALPHA, D3D12_BLEND_INV_SRC_ALPHA, D3D12_BLEND_OP_ADD,
                                          D3D12_BLEND_ONE, D3D12_BLEND_INV_SRC_ALPHA, D3D12_BLEND_OP_ADD);
         gfxDrawStateSetColorTarget(draw_state, 0, tex_.G_albedo_alpha.getFormat());
-        gfxDrawStateSetColorTarget(draw_state, 1, tex_.G_normal.getFormat());
-        gfxDrawStateSetColorTarget(draw_state, 2, tex_.G_momentum.getFormat());
+        if (!options_.no_G_buffers) {
+            gfxDrawStateSetColorTarget(draw_state, 1, tex_.G_material.getFormat());
+            gfxDrawStateSetColorTarget(draw_state, 2, tex_.G_momentum.getFormat());
+            if (!options_.reconstruct_normals) {
+                gfxDrawStateSetColorTarget(draw_state, 3, tex_.G_normal.getFormat());
+            }
+        }
         gfxDrawStateSetPrimitiveTopologyType(draw_state, D3D12_PRIMITIVE_TOPOLOGY_TYPE_POINT);
         gfxDrawStateSetCullMode(draw_state, D3D12_CULL_MODE_NONE);
         kernel_.DrawActiveGaussians = gfxCreateGraphicsKernel(
@@ -245,7 +264,9 @@ void Renderer::DestroyKernels () {
     gfxDestroyKernel(gfx, kernel_.ClearCounters);
     gfxDestroyKernel(gfx, kernel_.FilterActiveGaussians);
     gfxDestroyKernel(gfx, kernel_.ProjectActiveGaussians);
-    gfxDestroyKernel(gfx, kernel_.ResolveDepth);
+    gfxDestroyKernel(gfx, kernel_.ResolveGBuffers);
+    gfxDestroyKernel(gfx, kernel_.ReconstructNormals);
+    gfxDestroyKernel(gfx, kernel_.FinalComposition);
 
     gfxDestroyKernel(gfx, kernel_.Trace3DGSRays);
     gfxDestroyKernel(gfx, kernel_.SpawnCameraRays);

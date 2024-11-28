@@ -24,10 +24,18 @@ float2 NDC2ToScreen(float2 NDC2) {
     return 0.5f * UB.ScreenDimensions * (NDC2 + 1.0f);
 }
 
+float2 NDC2ToFilm (CameraDescription C, float2 NDC2) {
+    return 0.5f * float2(C.FilmDimensions) * (NDC2 + 1.0f);
+}
+
 // Convert screen position to NDC2
 // Screen: [0, ScreenDimensions] -> NDC2: [-1, 1]
 float2 ScreenToNDC2(float2 Screen) {
     return 2.0f * Screen / UB.ScreenDimensions - 1.0f;
+}
+
+float2 FilmToNDC2(CameraDescription C, float2 Film) {
+    return 2.f * Film / float2(C.FilmDimensions) - 1.f;
 }
 
 float3x4 FetchInstanceTransform (int Index) {
@@ -46,6 +54,11 @@ float3 GaussianInstance_TransformWorldToLocal (float3 Position, int InstanceInde
     return mul(Transform, float4(Position, 1.0f)).xyz;
 }
 
+float3 GaussianInstance_TransformLocalToWorld_Normal (float3 Normal, int InstanceIndex) {
+    float3x3 Transform = g_InstanceNormalTransformBuffer[InstanceIndex];
+    return mul(Transform, Normal);
+}
+
 float3 GaussianInstance_TransformLocalToWorld_Vector (float3 Vector, int InstanceIndex) {
     float3x4 Transform = FetchInstanceTransform(InstanceIndex);
     return mul(Transform, float4(Vector, 0.0f)).xyz;
@@ -56,13 +69,13 @@ float3 GaussianInstance_TransformWorldToLocal_Vector (float3 Vector, int Instanc
     return mul(Transform, float4(Vector, 0.0f)).xyz;
 }
 
-RayDesc GaussianInstance_TransformWorldToLocal (RayDesc Ray, int InstanceIndex) {
+RayDesc GaussianInstance_TransformWorldToLocal (RayDesc Ray, int InstanceIndex, out float RayScaler) {
     RayDesc LocalRay = Ray;
     LocalRay.Origin = GaussianInstance_TransformWorldToLocal(Ray.Origin, InstanceIndex);
     float3 LocalDirection = GaussianInstance_TransformWorldToLocal_Vector(Ray.Direction, InstanceIndex);
-    float  Length = length(LocalDirection);
-    LocalRay.TMin = Ray.TMin * Length;
-    LocalRay.TMax = Ray.TMax * Length;
+    RayScaler = length(LocalDirection);
+    LocalRay.TMin = Ray.TMin * RayScaler;
+    LocalRay.TMax = Ray.TMax * RayScaler;
     LocalRay.Direction = normalize(LocalDirection);
     return LocalRay;
 }
@@ -87,8 +100,8 @@ Gaussian FetchGaussian (uint Index) {
 }
 
 GaussianPBR FetchGaussianPBR (uint Index) {
-    float3 Normal   = g_GaussianNormalBuffer[Index];
-    float3 Albedo   = g_GaussianAlbedoBuffer[Index];
+    float3 Normal    = g_GaussianNormalBuffer[Index];
+    float3 Albedo    = g_GaussianAlbedoBuffer[Index];
     float  Roughness = g_GaussianRoughnessBuffer[Index];
     GaussianPBR GaussianData = { Normal, Albedo, Roughness };
     return GaussianData;
@@ -314,8 +327,8 @@ float3x3 EWAJacobian (float3 Mean, float2 TanFoV, float4x4 View) {
     const float txtz = P.x / P.z;
     const float tytz = P.y / P.z;
     // Clamp to (fov expanded) frustum
-    // P.x = clamp(txtz, -limx, limx) * P.z;
-    // P.y = clamp(tytz, -limy, limy) * P.z;
+    P.x = clamp(txtz, -limx, limx) * P.z;
+    P.y = clamp(tytz, -limy, limy) * P.z;
 
     float3x3 J = float3x3(
         (2 / TanFoV.x) / P.z, 0.0f, - (2 / TanFoV.x) * P.x / (P.z * P.z),
@@ -451,7 +464,7 @@ float3 UnpackFp16x3 (uint2 Packed) {
     return Unpacked;
 }
 
-uint2 PackRGBA16 (float4 Unpacked) {
+uint2 PackRadianceA16 (float4 Unpacked) {
     uint2 RGBPacked = PackFp16x3Safe(Unpacked.xyz);
     return uint2(
         RGBPacked.x,
@@ -475,10 +488,10 @@ uint PackRGBA8 (float4 Unpacked) {
 
 float4 UnpackRGBA8 (uint Packed) {
     return float4(
-        (Packed & 0xFF) / 256.0f,
-        ((Packed >> 8) & 0xFF) / 256.0f,
-        ((Packed >> 16) & 0xFF) / 256.0f,
-        ((Packed >> 24) & 0xFF) / 256.0f
+        (Packed & 0xFFu) / 256.0f,
+        ((Packed >> 8u) & 0xFF) / 256.0f,
+        ((Packed >> 16u) & 0xFFu) / 256.0f,
+        ((Packed >> 24u) & 0xFFu) / 256.0f
     );
 }
 
@@ -491,8 +504,8 @@ struct RayToTrace {
     bool   bHit;
     // Specifies if the hit found is sure to be the closest hit
     bool   bCompleted;
-    // The accumulated opacity of the ray traveled so far
-    float  AccumulatedOpacity;
+    // Ray seed when performing stochastic operations
+    float  Seed;
 };
 
 // Initialize the ray to trace struct
@@ -513,7 +526,7 @@ RayToTrace FetchRayToTrace (int RayIndex) {
     uint Flags = g_RWRayFlagsBuffer[RayIndex];
     Ray.bHit = (Flags & RAY_FLAG_HIT_FOUND_BIT) != 0;
     Ray.bCompleted = (Flags & RAY_FLAG_COMPLETED_BIT) != 0;
-    Ray.AccumulatedOpacity = (Flags & RAY_FLAG_OPACITY_MASK) / (RAY_FLAG_OPACITY_MASK + 1.f);
+    Ray.Seed = float(Flags & RAY_FLAG_SEED_MASK) / (RAY_FLAG_SEED_MASK + 1);
     return Ray;
 }
 
@@ -526,12 +539,16 @@ void WriteRayToTrace (int RayIndex, RayToTrace Ray) {
     uint Flags = 0;
     Flags |= Ray.bHit ? RAY_FLAG_HIT_FOUND_BIT : 0;
     Flags |= Ray.bCompleted ? RAY_FLAG_COMPLETED_BIT : 0;
-    Flags |= uint(saturateDown(Ray.AccumulatedOpacity) * (RAY_FLAG_OPACITY_MASK + 1.f));
+    Flags |= uint(saturateDown(Ray.Seed) * (RAY_FLAG_SEED_MASK + 1));
     g_RWRayFlagsBuffer[RayIndex] = Flags;
 }
 
 float4 FetchRayTraceResult (int RayIndex) {
     return UnpackRadianceA16(g_RWRayToTraceResultBuffer[RayIndex]);
+}
+
+float FetchRayTraceHitT (int RayIndex) {
+    return g_RWRayToTraceHitTBuffer[RayIndex];
 }
 
 // Compute the ray t to evaluate max respose of a ray-gaussian intersection according to the paper.
@@ -555,10 +572,10 @@ float EvaluateGaussianResponseRayT (float3 Origin, float3 Direction, Gaussian G,
 }
 
 // Evaluate the gaussian response along the ray
-float EvaluateGaussianResponse (float3 Origin, float3 Direction, Gaussian G) {
+float EvaluateGaussianResponse (float3 Origin, float3 Direction, Gaussian G, out float RayMaxResponseT) {
     float3x3 InvCov;
-    float RayT = EvaluateGaussianResponseRayT(Origin, Direction, G, InvCov);
-    float3 Position = Origin + RayT * Direction;
+    RayMaxResponseT = EvaluateGaussianResponseRayT(Origin, Direction, G, InvCov);
+    float3 Position = Origin + RayMaxResponseT * Direction;
     return exp(dot(G.Position - Position, mul(InvCov, Position - G.Position))) * G.Alpha;//EvaluateGaussian(G, Position);
 }
 
@@ -601,6 +618,27 @@ uint PackPadScreenPosition (float2 ScreenPosition, float2 InvScreenDimensions) {
     return PackUnorm16x2(ScaledScreenPosition);
 }
 
+float squared (float Value) {
+    return Value * Value;
+}
+
+void GetOrthoVectors(in float3 n, out float3 b1, out float3 b2)
+{
+    bool sel = abs(n.z) > 0;
+    float3 p2 = sel ? n : n.zyx;
+    float k = 1.0f / sqrt(squared(p2.z) + squared(n.y));
+    b1 = float3(0.0f, -p2.z * k, n.y * k);
+    b1 = sel ? b1 : b1.zyx;
+    b2 = cross(n, b1);
+}
+
+bool IsOutOfFilm(CameraDescription C, int2 FilmPosition) {
+    return any(FilmPosition < 0) || any(FilmPosition >= C.FilmDimensions);
+}
+bool IsOutOfFilm(CameraDescription C, uint2 FilmPosition) {
+    return any(FilmPosition < 0) || any(FilmPosition >= C.FilmDimensions);
+}
+
 float3 DebugColorTable (int Index) {
     const float3 _ColorTable[15] = {
         float3(1, 0, 0),
@@ -635,6 +673,54 @@ float3 DebugColorHeatMap (float h) {
 CameraDescription GetCameraDescription () {
     // TODO meshcards
     return UB.MainCamera;
+}
+
+Texture2D<float2> GetMomentumTexture (CameraDescription C) {
+    // TODO meshcards
+    return g_GMomentumTexture;
+}
+
+RWTexture2D<float2> GetRWMomentumTexture (CameraDescription C) {
+    // TODO meshcards
+    return g_RW_GMomentumTexture;
+}
+
+Texture2D<float4> GetColorTexture (CameraDescription C) {
+    // TODO meshcards
+    return g_GColorTexture;
+}
+
+RWTexture2D<float4> GetRWColorTexture (CameraDescription C) {
+    // TODO meshcards
+    return g_RW_GColorTexture;
+}
+
+Texture2D<float4>  GetNormalTexture (CameraDescription C) {
+    // TODO meshcards
+    return g_GNormalTexture;
+}
+
+RWTexture2D<float4> GetRWNormalTexture (CameraDescription C) {
+    // TODO meshcards
+    return g_RW_GNormalTexture;
+}
+
+Texture2D<float4> GetRadianceTexture (CameraDescription C) {
+    // TODO meshcards
+    return g_Radiance;
+}
+
+RWTexture2D<float4> GetRWRadianceTexture (CameraDescription C) {
+    // TODO meshcards
+    return g_RW_Radiance;
+}
+
+float3 RecoverWorldSpacePosition (CameraDescription C, float2 FilmPosition, float LinearDepth) {
+    float2 NDC2 = FilmToNDC2(C, FilmPosition);
+    float3 Direction = NDC2ToCameraDirectionUnnormalized(C, NDC2);
+    float3 Origin = C.Position;
+    float3 WorldSpacePosition = Origin + LinearDepth * Direction;
+    return WorldSpacePosition;
 }
 
 #endif // INC_3DGS_HLSL

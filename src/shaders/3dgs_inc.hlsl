@@ -15,9 +15,19 @@
 // Consistent with the paper.
 #define HIT_BUFFER_SIZE 16
 
+// Output the colored gaussians in the output channel.
+// For visualization purposes only.
+#define OUTPUT_COLORED_GAUSSIANS
 
 // Bitpack the vertex attributes when transfering them to the fragment shader
-#define BITPACK_VERTEX_ATTRIBUTES
+// #define BITPACK_VERTEX_ATTRIBUTES
+
+// Output full G-Buffers for PBR rendering
+// Controlled by the renderer.
+// #define OUTPUT_PBR_G_BUFFER
+
+// Use depth to reconstruct the normals, instead of rendering them directly
+// #define RECONSTRUCT_NORMALS_FROM_DEPTH
 
 
 // Acceleration structure for hardware ray tracing
@@ -87,8 +97,9 @@ RWStructuredBuffer<uint>   g_RWActiveGaussianNDCPositionBuffer;
 RWStructuredBuffer<uint>   g_RWActiveGaussianQuadNDCVector0Buffer;
 RWStructuredBuffer<uint>   g_RWActiveGaussianQuadNDCVector1Buffer;
 
-// NDC space Conic W values of the active gaussians
-RWStructuredBuffer<float4>  g_RWActiveGaussianConicWBuffer;
+// Precomputed color values for active gaussians
+// Only used when OUTPUT_COLORED_GAUSSIANS is defined
+RWStructuredBuffer<float3>  g_RWActiveGaussianColorBuffer;
 
 
 // Raytracing related stuff
@@ -106,23 +117,30 @@ RWStructuredBuffer<float>  g_RWRayToTraceTMaxBuffer;
 RWStructuredBuffer<uint>   g_RWRayFlagsBuffer;
 
 // The ray is completed. A closest hit is found or nothing is found in the range.
-#define RAY_FLAG_COMPLETED_BIT 0x1u
+#define RAY_FLAG_COMPLETED_BIT 0x80000000u
 // At least 1 hit is found along the ray
-#define RAY_FLAG_HIT_FOUND_BIT 0x2u
-// The lower 8 bits are the current accumulated opacity of geometries along the ray
-#define RAY_FLAG_OPACITY_MASK (0xffu)
+#define RAY_FLAG_HIT_FOUND_BIT 0x40000000u
+// The lower 23 bits packs the seed of the ray
+#define RAY_FLAG_SEED_MASK (0x7fffffu)
 
 // Keep the result (rgba) of the traced ray, RGBA16 Packed
+// Only written to in shading ray tracing
 RWStructuredBuffer<uint2> g_RWRayToTraceResultBuffer;
+// Hit T values for traced shadow rays.
+// Only written to in shadow ray tracing
+RWStructuredBuffer<float> g_RWRayToTraceHitTBuffer;
 
 
 // G-Buffers
 RWTexture2D<float4>      g_RW_GColorTexture;
 Texture2D<float4>        g_GColorTexture;
-RWTexture2D<float4>      g_RW_GNormalTexture;
-Texture2D<float4>        g_GNormalTexture;
 RWTexture2D<float2>      g_RW_GMomentumTexture;
 Texture2D<float2>        g_GMomentumTexture;
+// Roughness, nx, ny, unused
+RWTexture2D<float4>      g_RW_GMaterialTexture;
+Texture2D<float4>        g_GMaterialTexture;
+RWTexture2D<float4>      g_RW_GNormalTexture;
+Texture2D<float4>        g_GNormalTexture;
 // Output buffers
 RWTexture2D<float4>      g_RW_Radiance;
 Texture2D<float4>        g_Radiance;
@@ -133,6 +151,8 @@ ConstantBuffer<UniformBlock> UB;
 
 SamplerState g_LinearClampSampler;
 SamplerState g_LinearWrapSampler;
+SamplerState g_PointClampSampler;
+SamplerState g_PointWrapSampler;
 
 // Output buffers for ray tracing proxy mesh building
 RWStructuredBuffer<float3> g_RW_RTVertexBuffer;

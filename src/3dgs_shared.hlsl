@@ -61,7 +61,14 @@ struct UniformBlock {
     // Dimension of the screen (in small 8x8 tiles)
     int2 SmallTileDimensions;
     float RT_AlphaMultiplier;
-    uint  Padding0;
+    int  FrameIndex;
+
+    uint DebugMode;
+    // whether we're tracing and visualizing shading rays (started from the camera) 
+    // Otherwise only shadow ray depths are (possibly) visualized.
+    uint VisualizeShadingRays;
+    uint Padding1;
+    uint Padding2;
 };
 
 struct Gaussian {

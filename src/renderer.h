@@ -48,7 +48,7 @@ void DestroyKernels ();
         GfxBuffer active_gaussian_quad_NDC_vector0;
         GfxBuffer active_gaussian_quad_NDC_vector1;
 
-        GfxBuffer active_gaussian_conic_w;
+        GfxBuffer active_gaussian_color;
 
         GfxBuffer ray_to_trace_count;
         GfxBuffer ray_to_trace_direction;
@@ -65,8 +65,11 @@ void DestroyKernels ();
 
         // fp32x2 (LinearDepth, LinearDepth^2)
         GfxTexture G_momentum;
-        // fp8x4
+        // unorm8x4
         GfxTexture G_albedo_alpha;
+        // unorm8, roughness
+        GfxTexture G_material;
+        // unorm8x4
         GfxTexture G_normal;
 
         // fp16x4
@@ -84,7 +87,10 @@ void DestroyKernels ();
         GfxKernel ClearCounters;
         GfxKernel FilterActiveGaussians;
         GfxKernel ProjectActiveGaussians;
-        GfxKernel ResolveDepth;
+        GfxKernel ResolveGBuffers;
+        GfxKernel ReconstructNormals;
+
+        GfxKernel FinalComposition;
 
         GfxKernel Trace3DGSRays;
         GfxKernel SpawnCameraRays;
@@ -98,8 +104,8 @@ void DestroyKernels ();
         // Maximum number of rays to trace in 1 dispatch.
         int max_num_rays {1920 * 1080};
 
-        // Use HWRT to render the 3dgs scene.
-        bool show_HWRT_color {false};
+        // Visualize HWRT results (dispatch a bunch of camera rays and visualize)
+        bool visualize_HWRT {false};
 
         // The scaling of the proxy geometry in 3DGS ray tracing.
         // The original paper says 0.3 is good.
@@ -109,6 +115,13 @@ void DestroyKernels ();
         // Otherwise, they are ignored.
         float min_alpha_for_gaussian_evaluation {0.01f};
 
+        // Render color only when doing rasterization
+        bool no_G_buffers {false};
+
+        // Normals are reconstructed from the depth buffer rather than rasterized from gaussians.
+        bool reconstruct_normals {false};
+
+        uint debug_mode {0};
     } options_;
 
     struct {
@@ -122,6 +135,8 @@ void DestroyKernels ();
     int frame_index_ {};
 
     bool should_build_acceleration_structure_ {true};
+
+    bool need_reload_shaders_ {false};
 };
 
 #endif //INC_3DGS_ADVGI_RENDERER_H
