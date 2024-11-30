@@ -10,7 +10,7 @@
 #include "device_scene.h"
 #include "3dgs_shared.hlsl"
 
-Renderer::Renderer () : Timed("Renderer") {
+Renderer::Renderer () : Timed("Renderer"), blue_noise_sampler_(AppInternal::GetInstance().GetGfx()) {
 
 }
 
@@ -34,15 +34,20 @@ void Renderer::GenerateDrawIndirect(const GfxBuffer &vertex_count_buffer) {
 
 void Renderer::RenderUI () {
     if(ImGui::CollapsingHeader("Renderer")) {
-        ImGui::Checkbox("Show HWRT Color", &options_.visualize_HWRT);
+        ImGui::Checkbox("HWRT", &options_.visualize_HWRT);
+        if (options_.visualize_HWRT) {
+            ImGui::SliderFloat("Min Alpha For Gaussian Evaluation", &options_.HWRT_min_alpha_for_gaussian_evaluation, 0.0f, 0.5f);
+            ImGui::Checkbox("  HWRT (Shading Rays)", &options_.visualize_HWRT_shading_rays);
+        }
         ImGui::SliderFloat("Gaussian RT Proxy Geometry Sigma", &options_.gaussian_RT_proxy_geometry_sigma, 0.01f, 1.0f);
-        ImGui::SliderFloat("Min Alpha For Gaussian Evaluation", &options_.min_alpha_for_gaussian_evaluation, 0.0f, 0.5f);
+        ImGui::SliderFloat("Opaque Threshold", &options_.opaque_threshold, 0.0f, 1.0f);
+        ImGui::SliderFloat("Depth Alpha Clip", &options_.depth_alpha_clip_value, 0.0f, 1.0f);
         const char * debug_modes[] = {
             "Default",
             "Albedo/Color",
             "Roughness",
             "Normal",
-            "Momentum",
+            "Depth",
             "Alpha"
         };
         if (ImGui::BeginCombo("DebugMode", debug_modes[options_.debug_mode])) {
@@ -87,7 +92,7 @@ void Renderer::Render() {
         UB.NumGaussians     = scene.GetNumGaussians();
         UB.GaussianRTProxyGeometrySigma = options_.gaussian_RT_proxy_geometry_sigma;
         UB.IndirectThreadGroupSize = cfg_.wave_lane_count;
-        UB.MinAlphaForGaussianEvaluation = options_.min_alpha_for_gaussian_evaluation;
+        UB.HWRT_MinAlphaForGaussianEvaluation = options_.HWRT_min_alpha_for_gaussian_evaluation;
 
         UB.ScreenDimensions = resolution;
         UB.TileDimensions   = resolution / TILE_SIZE;
@@ -95,17 +100,22 @@ void Renderer::Render() {
         assert(UB.TileDimensions.y * TILE_SIZE == resolution.y);
 
         UB.SmallTileDimensions = resolution / SMALL_TILE_SIZE;
-        UB.RT_AlphaMultiplier = 2.f;
+        // Unused
+        UB.HWRT_AlphaMultiplier = 0;
         UB.FrameIndex = frame_index_;
 
         UB.DebugMode = options_.debug_mode;
-        UB.VisualizeShadingRays = false;
+        UB.VisualizeShadingRays = options_.visualize_HWRT_shading_rays;
+        UB.OpaqueThreshold = options_.opaque_threshold;
+        UB.DepthAlphaClipValue = options_.depth_alpha_clip_value;
     }
     gfxBufferGetData<UniformBlock>(gfx, buf_.UB)[frame_index_ & 1] = UB;
     gfxProgramSetParameter(gfx, program_, "UB", buf_.UB);
 
     auto & device_scene = scene.GetDeviceScene();
     device_scene.Bind(program_);
+
+    blue_noise_sampler_.InstallParameters(program_);
 
     gfxProgramSetParameter(gfx, program_, "g_RWDispatchIndirectCommandBuffer", buf_.dispatch_indirect_command);
     gfxProgramSetParameter(gfx, program_, "g_RWDispatchRaysIndirectCommandBuffer", buf_.dispatch_rays_indirect_command);
@@ -127,17 +137,22 @@ void Renderer::Render() {
     gfxProgramSetParameter(gfx, program_, "g_RWRayToTraceOriginBuffer", buf_.ray_to_trace_origin);
     gfxProgramSetParameter(gfx, program_, "g_RWRayToTraceTMaxBuffer", buf_.ray_to_trace_t_max);
     gfxProgramSetParameter(gfx, program_, "g_RWRayToTraceFlagsBuffer", buf_.ray_to_trace_flags);
+
     gfxProgramSetParameter(gfx, program_, "g_RWRayToTraceResultBuffer", buf_.ray_to_trace_result);
+    gfxProgramSetParameter(gfx, program_, "g_RWRayToTraceHitTBuffer", buf_.ray_to_trace_hit_t);
+
 
     gfxProgramSetParameter(gfx, program_, "g_RW_GColorTexture", tex_.G_albedo_alpha);
     gfxProgramSetParameter(gfx, program_, "g_GColorTexture", tex_.G_albedo_alpha);
-    gfxProgramSetParameter(gfx, program_, "g_RW_GMomentumTexture", tex_.G_momentum);
-    gfxProgramSetParameter(gfx, program_, "g_GMomentumTexture", tex_.G_momentum);
+    gfxProgramSetParameter(gfx, program_, "g_RW_GDepthTexture", tex_.G_depth);
+    gfxProgramSetParameter(gfx, program_, "g_GDepthTexture", tex_.G_depth);
     gfxProgramSetParameter(gfx, program_, "g_RW_GMaterialTexture", tex_.G_material);
     gfxProgramSetParameter(gfx, program_, "g_GMaterialTexture", tex_.G_material);
     // Not rasterized, but derived from depth buffer (overdraw is too severe for 3dgs)
     gfxProgramSetParameter(gfx, program_, "g_RW_GNormalTexture", tex_.G_normal);
     gfxProgramSetParameter(gfx, program_, "g_GNormalTexture", tex_.G_normal);
+    gfxProgramSetParameter(gfx, program_, "g_RW_GFilteredDepthTexture", tex_.G_filtered_depth);
+    gfxProgramSetParameter(gfx, program_, "g_GFilteredDepthTexture", tex_.G_filtered_depth);
 
     gfxProgramSetParameter(gfx, program_, "g_RW_Radiance", tex_.radiance);
     gfxProgramSetParameter(gfx, program_, "g_Radiance", tex_.radiance);
@@ -232,7 +247,7 @@ void Renderer::Render() {
     if(options_.visualize_HWRT) {
         // HWRT pipeline
 
-        auto section = TimedSection(*this, "HWRT Color");
+        auto section = TimedSection(*this, "HWRT Trace");
 
         gfxCommandBindKernel(gfx, kernel_.SpawnCameraRays);
         // Rays are packed in small tiles.
@@ -240,7 +255,17 @@ void Renderer::Render() {
         gfxCommandDispatch(gfx, num_groups, 1, 1);
 
         int num_rays = num_groups * TILE_SIZE * TILE_SIZE;
-        gfxCommandBindKernel(gfx, kernel_.Trace3DGSRays);
+        if (options_.visualize_HWRT_shading_rays) {
+            gfxCommandBindKernel(gfx, kernel_.Trace3DGSRays);
+            gfxSbtSetShaderGroup(gfx, sbt_, kGfxShaderGroupType_Raygen, 0, "Trace3DGSRaygen");
+            gfxSbtSetShaderGroup(gfx, sbt_, kGfxShaderGroupType_Hit, 0, "Trace3DGSHitGroup");
+            gfxSbtSetShaderGroup(gfx, sbt_, kGfxShaderGroupType_Miss, 0, "Trace3DGSMiss");
+        } else {
+            gfxCommandBindKernel(gfx, kernel_.Trace3DGSShadowRays);
+            gfxSbtSetShaderGroup(gfx, sbt_, kGfxShaderGroupType_Raygen, 0, "Trace3DGSShadowRaygen");
+            gfxSbtSetShaderGroup(gfx, sbt_, kGfxShaderGroupType_Hit, 0, "Trace3DGSShadowHitGroup");
+            gfxSbtSetShaderGroup(gfx, sbt_, kGfxShaderGroupType_Miss, 0, "Trace3DGSShadowMiss");
+        }
         gfxCommandDispatchRays(gfx, sbt_, num_rays, 1, 1);
 
     } else {
@@ -277,13 +302,13 @@ void Renderer::Render() {
             // Cleared to (0, 0, 0, 0)
             gfxCommandClearTexture(gfx, tex_.G_albedo_alpha);
             gfxCommandClearTexture(gfx, tex_.G_material);
-            gfxCommandClearTexture(gfx, tex_.G_momentum);
+            gfxCommandClearTexture(gfx, tex_.G_depth);
             gfxCommandClearTexture(gfx, tex_.G_normal);
             GenerateDrawIndirect(buf_.active_gaussian_count);
             gfxCommandBindKernel(gfx, kernel_.DrawActiveGaussians);
             gfxCommandBindColorTarget(gfx, 0, tex_.G_albedo_alpha);
             gfxCommandBindColorTarget(gfx, 1, tex_.G_material);
-            gfxCommandBindColorTarget(gfx, 2, tex_.G_momentum);
+            gfxCommandBindColorTarget(gfx, 2, tex_.G_depth);
             if (!options_.reconstruct_normals) {
                 gfxCommandBindColorTarget(gfx, 3, tex_.G_normal);
             }
@@ -300,13 +325,18 @@ void Renderer::Render() {
             gfxCommandDispatch(gfx, num_groups_x, num_groups_y, 1);
         }
 
+        {
+            auto section = TimedSection(*this, "FilterDepth");
+            gfxCommandBindKernel(gfx, kernel_.FilterDepth);
+            gfxCommandDispatch(gfx, UB.TileDimensions.x, UB.TileDimensions.y, 1);
+        }
+
         if (options_.reconstruct_normals) {
             // Reconstruct normals from depth buffer if required
             auto section = TimedSection(*this, "ReconstructNormals");
             gfxCommandBindKernel(gfx, kernel_.ReconstructNormals);
             gfxCommandDispatch(gfx, UB.TileDimensions.x, UB.TileDimensions.y, 1);
         }
-
     }
 
     if (!options_.visualize_HWRT) {

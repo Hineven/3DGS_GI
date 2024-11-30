@@ -7,6 +7,8 @@
 #include "select.hlsl"
 #include "math_constants.hlsl"
 
+#include "bluenoise.hlsl"
+
 void Swap(inout float a, inout float b) {
     float temp = a;
     a = b;
@@ -31,11 +33,13 @@ float2 NDC2ToFilm (CameraDescription C, float2 NDC2) {
 // Convert screen position to NDC2
 // Screen: [0, ScreenDimensions] -> NDC2: [-1, 1]
 float2 ScreenToNDC2(float2 Screen) {
-    return 2.0f * Screen / UB.ScreenDimensions - 1.0f;
+    float2 T = 2.0f * Screen / UB.ScreenDimensions - 1.0f;
+    return float2(T.x, -T.y);
 }
 
 float2 FilmToNDC2(CameraDescription C, float2 Film) {
-    return 2.f * Film / float2(C.FilmDimensions) - 1.f;
+    float2 T = 2.f * Film / float2(C.FilmDimensions) - 1.f;
+    return float2(T.x, -T.y);
 }
 
 float3x4 FetchInstanceTransform (int Index) {
@@ -45,18 +49,30 @@ float3x4 FetchInstanceInverseTransform (int Index) {
     return g_InstanceInvTransformBuffer[Index];
 }
 
+float3 TransformPoint (float3x4 Transform, float3 Point) {
+    return mul(Transform, float4(Point, 1.0f)).xyz;
+}
+
+float3 TransformVector (float3x4 Transform, float3 Vector) {
+    return mul(Transform, float4(Vector, 0.0f)).xyz;
+}
+
+float3 TransformVector (float3x3 Transform, float3 Vector) {
+    return mul(Transform, Vector);
+}
+
 float3 GaussianInstance_TransformLocalToWorld (float3 Position, int InstanceIndex) {
     float3x4 Transform = FetchInstanceTransform(InstanceIndex);
-    return mul(Transform, float4(Position, 1.0f)).xyz;
+    return TransformPoint(Transform, Position);
 }
 float3 GaussianInstance_TransformWorldToLocal (float3 Position, int InstanceIndex) {
     float3x4 Transform = FetchInstanceInverseTransform(InstanceIndex);
-    return mul(Transform, float4(Position, 1.0f)).xyz;
+    return TransformPoint(Transform, Position);
 }
 
 float3 GaussianInstance_TransformLocalToWorld_Normal (float3 Normal, int InstanceIndex) {
     float3x3 Transform = g_InstanceNormalTransformBuffer[InstanceIndex];
-    return mul(Transform, Normal);
+    return TransformVector(Transform, Normal);
 }
 
 float3 GaussianInstance_TransformLocalToWorld_Vector (float3 Vector, int InstanceIndex) {
@@ -226,9 +242,9 @@ bool IsInFrustrum (
 
 bool IsPointInFrustrum (CameraDescription C, float3 Position, out float3 ViewSpacePosition, bool Ortho = false, float NearClip = 0.f, float Expand = 0.f) {
     ViewSpacePosition = mul(C.View, float4(Position, 1.0f)).xyz;
-    float4 Homogeneous = mul(C.Projection, float4(ViewSpacePosition, 1.0f));
     // -z axis is aligned with camera direction
     if(ViewSpacePosition.z > 0) return false;
+    float4 Homogeneous = mul(C.Projection, float4(ViewSpacePosition, 1.0f));
     if(Ortho) {
         // FIXME
         return false;
@@ -675,14 +691,14 @@ CameraDescription GetCameraDescription () {
     return UB.MainCamera;
 }
 
-Texture2D<float2> GetMomentumTexture (CameraDescription C) {
+Texture2D<float2> GetDepthTexture (CameraDescription C) {
     // TODO meshcards
-    return g_GMomentumTexture;
+    return g_GDepthTexture;
 }
 
-RWTexture2D<float2> GetRWMomentumTexture (CameraDescription C) {
+RWTexture2D<float2> GetRWDepthTexture (CameraDescription C) {
     // TODO meshcards
-    return g_RW_GMomentumTexture;
+    return g_RW_GDepthTexture;
 }
 
 Texture2D<float4> GetColorTexture (CameraDescription C) {
@@ -705,6 +721,16 @@ RWTexture2D<float4> GetRWNormalTexture (CameraDescription C) {
     return g_RW_GNormalTexture;
 }
 
+Texture2D<float> GetFilteredDepthTexture (CameraDescription C) {
+    // TODO meshcards
+    return g_GFilteredDepthTexture;
+}
+
+RWTexture2D<float> GetRWFilteredDepthTexture (CameraDescription C) {
+    // TODO meshcards
+    return g_RW_GFilteredDepthTexture;
+}
+
 Texture2D<float4> GetRadianceTexture (CameraDescription C) {
     // TODO meshcards
     return g_Radiance;
@@ -721,6 +747,28 @@ float3 RecoverWorldSpacePosition (CameraDescription C, float2 FilmPosition, floa
     float3 Origin = C.Position;
     float3 WorldSpacePosition = Origin + LinearDepth * Direction;
     return WorldSpacePosition;
+}
+
+float  InterpolateBarycentrics (float A, float B, float C, float2 UV) {
+    return A * (1 - UV.x - UV.y) + B * UV.x + C * UV.y;
+}
+float3 InterpolateBarycentrics (float3 A, float3 B, float3 C, float2 UV) {
+    return A * (1 - UV.x - UV.y) + B * UV.x + C * UV.y;
+}
+
+float LinearToZDepth (CameraDescription C, float LinearDepth) {
+    float A = C.Projection[2][2];
+    float B = C.Projection[2][3];
+    return 0.5 * (-A * LinearDepth + B) / LinearDepth + 0.5;
+}
+
+float ZDepthToLinear (CameraDescription C, float ZDepth) {
+    float ZDepthN = 2.0 * ZDepth - 1.0;
+    return 2.f * C.NearPlane * C.FarPlane / (C.FarPlane + C.NearPlane - ZDepthN * (C.FarPlane - C.NearPlane));
+}
+
+float3 EvaluateSkyRadiance (float3 Direction) {
+    return g_SkyBoxCubeTexture.SampleLevel(g_LinearWrapSampler, Direction, 0.0f).xyz;
 }
 
 #endif // INC_3DGS_HLSL

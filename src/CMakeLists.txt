@@ -8,6 +8,7 @@ add_executable(3DGS_AdvGI
         renderer.cpp
         renderer_init.cpp
         timed.cpp
+        bluenoise.cpp
 )
 target_link_libraries(3DGS_AdvGI PUBLIC gfx glm)
 

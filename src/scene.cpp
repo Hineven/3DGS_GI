@@ -4,6 +4,8 @@
  * See LICENSE for licensing.
  */
 #include <happly.h>
+#include <gfx.h>
+#include <gfx_scene.h>
 #include "scene.h"
 #include "device_scene.h"
 #include "glm/ext/matrix_transform.hpp"
@@ -13,6 +15,20 @@
 Scene::Scene () {
     device_scene_ = std::make_unique<DeviceScene>();
 }
+
+bool Scene::LoadEnvironmentMap(std::filesystem::path path) {
+    if (path.extension() != "hdr" && path.extension() != "exr") {
+        app_warning("Only .hdr and .exr files are supported.");
+        return false;
+    }
+    if (!std::filesystem::exists(path)) {
+        app_warning("File does not exist.");
+        return false;
+    }
+    environment_map_path_ = path;
+    return true;
+}
+
 
 bool Scene::LoadGaussians (std::filesystem::path path, bool always_load_sh) {
     if(path.extension() != ".ply") {
@@ -202,7 +218,7 @@ glm::mat4x4 Camera::GetProjectionMatrix () const {
     auto width = AppInternal::GetInstance().GetWindowWidth();
     auto height = AppInternal::GetInstance().GetWindowHeight();
     auto aspect = (float)width / height;
-    auto projection_matrix = glm::perspective(fov_y, aspect, near, far);
+    auto projection_matrix = glm::perspectiveRH_ZO(fov_y, aspect, near, far);
     return projection_matrix;
 }
 

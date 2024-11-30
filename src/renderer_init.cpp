@@ -61,20 +61,25 @@ bool Renderer::CreateResources () {
     buf_.ray_to_trace_flags.setName("RayToTraceFlags");
     buf_.ray_to_trace_result = gfxCreateBuffer<uint2>(gfx, max_num_rays);
     buf_.ray_to_trace_result.setName("RayToTraceResult");
+    buf_.ray_to_trace_hit_t  = gfxCreateBuffer<float>(gfx, max_num_rays);
+    buf_.ray_to_trace_hit_t.setName("RayToTraceHitT");
 
     buf_.UB = gfxCreateBuffer<UniformBlock> (gfx, 2, nullptr, kGfxCpuAccess_Write);
     buf_.UB.setName("UniformBlock");
     buf_.UB.setStride(sizeof(UniformBlock));
 
     float zero_clear_value[4] = {0, 0, 0, 0};
-    tex_.G_momentum = gfxCreateTexture2D(gfx, width, height, DXGI_FORMAT_R16G16_FLOAT, 1, zero_clear_value);
-    tex_.G_momentum.setName("G_momentum");
+    tex_.G_depth = gfxCreateTexture2D(gfx, width, height, options_.depth_format, 1, zero_clear_value);
+    tex_.G_depth.setName("G_depth");
     tex_.G_albedo_alpha = gfxCreateTexture2D(gfx, width, height, DXGI_FORMAT_R8G8B8A8_UNORM, 1, zero_clear_value);
     tex_.G_albedo_alpha.setName("G_albedo_alpha");
     tex_.G_material = gfxCreateTexture2D(gfx, width, height, DXGI_FORMAT_R8_UNORM, 1, zero_clear_value);
     tex_.G_material.setName("G_material");
     tex_.G_normal = gfxCreateTexture2D(gfx, width, height, DXGI_FORMAT_R8G8B8A8_UNORM, 1, zero_clear_value);
     tex_.G_normal.setName("G_normal");
+
+    tex_.G_filtered_depth = gfxCreateTexture2D(gfx, width, height, DXGI_FORMAT_R32_FLOAT, 1, zero_clear_value);
+
 
     tex_.radiance = gfxCreateTexture2D(gfx, width, height, DXGI_FORMAT_R16G16B16A16_FLOAT, 1, zero_clear_value);
 
@@ -106,7 +111,9 @@ void Renderer::DestroyResources() {
     gfxDestroyBuffer(gfx, buf_.ray_to_trace_result);
     gfxDestroyBuffer(gfx, buf_.UB);
 
-    gfxDestroyTexture(gfx, tex_.G_momentum);
+    gfxDestroyTexture(gfx, tex_.G_filtered_depth);
+
+    gfxDestroyTexture(gfx, tex_.G_depth);
     gfxDestroyTexture(gfx, tex_.G_albedo_alpha);
     gfxDestroyTexture(gfx, tex_.G_material);
     gfxDestroyTexture(gfx, tex_.G_normal);
@@ -173,6 +180,7 @@ bool Renderer::CreateKernels () {
         kernel_.ProjectActiveGaussians = gfxCreateComputeKernel(gfx, program_, "ProjectActiveGaussians",
                                                                 defines_c.get(), define_count);
         kernel_.ResolveGBuffers = gfxCreateComputeKernel(gfx, program_, "ResolveGBuffers", defines_c.get(), define_count);
+        kernel_.FilterDepth  = gfxCreateComputeKernel(gfx, program_, "FilterDepth", defines_c.get(), define_count);
         kernel_.ReconstructNormals = gfxCreateComputeKernel(gfx, program_, "ReconstructNormals", defines_c.get(), define_count);
 
         kernel_.FinalComposition = gfxCreateComputeKernel(gfx, program_, "FinalComposition", defines_c.get(), define_count);
@@ -186,38 +194,40 @@ bool Renderer::CreateKernels () {
     // Raytracing kernels
     {
         std::vector<char const *> base_subobjects;
-        base_subobjects.push_back("ShaderConfig");
         base_subobjects.push_back("PipelineConfig");
 
-        std::vector<char const *> TraceScheduledRays_kernel_exports;
-        TraceScheduledRays_kernel_exports.push_back("Trace3DGSRaygen");
-        TraceScheduledRays_kernel_exports.push_back("Trace3DGSMiss");
-        TraceScheduledRays_kernel_exports.push_back("Trace3DGSShadowMiss");
-        TraceScheduledRays_kernel_exports.push_back("Trace3DGSAnyHit");
-        TraceScheduledRays_kernel_exports.push_back("Trace3DGSShadowAnyHit");
-        std::vector<char const *> TraceScheduledRays_kernel_subobjects = base_subobjects;
-        TraceScheduledRays_kernel_subobjects.push_back("Trace3DGSHitGroup");
-        TraceScheduledRays_kernel_subobjects.push_back("Trace3DGSHitGroupShadow");
+        std::vector<char const *> Trace3DGS_kernel_exports;
+        Trace3DGS_kernel_exports.push_back("Trace3DGSRaygen");
+        Trace3DGS_kernel_exports.push_back("Trace3DGSAnyHit");
+        Trace3DGS_kernel_exports.push_back("Trace3DGSMiss");
+        std::vector<char const *> Trace3DGS_kernel_subobjects = base_subobjects;
+        Trace3DGS_kernel_subobjects.push_back("Trace3DGSHitGroup");
+        Trace3DGS_kernel_subobjects.push_back("Trace3DGSShaderConfig");
         kernel_.Trace3DGSRays = gfxCreateRaytracingKernel(gfx, program_, nullptr, 0,
-               TraceScheduledRays_kernel_exports.data(), (uint32_t)TraceScheduledRays_kernel_exports.size(),
-               TraceScheduledRays_kernel_subobjects.data(), (uint32_t)TraceScheduledRays_kernel_subobjects.size(),
+               Trace3DGS_kernel_exports.data(), (uint32_t)Trace3DGS_kernel_exports.size(),
+               Trace3DGS_kernel_subobjects.data(), (uint32_t)Trace3DGS_kernel_subobjects.size(),
                defines_c.get(), define_count);
+        std::vector<char const *> Trace3DGSShadow_kernel_exports;
+        Trace3DGSShadow_kernel_exports.push_back("Trace3DGSShadowRaygen");
+        Trace3DGSShadow_kernel_exports.push_back("Trace3DGSShadowAnyHit");
+        Trace3DGSShadow_kernel_exports.push_back("Trace3DGSShadowMiss");
+        std::vector<char const *> Trace3DGSShadow_kernel_subobjects = base_subobjects;
+        Trace3DGSShadow_kernel_subobjects.push_back("Trace3DGSShadowHitGroup");
+        Trace3DGSShadow_kernel_subobjects.push_back("Trace3DGSShadowShaderConfig");
+        kernel_.Trace3DGSShadowRays = gfxCreateRaytracingKernel(gfx, program_, nullptr, 0,
+            Trace3DGSShadow_kernel_exports.data(), (uint32_t)Trace3DGSShadow_kernel_exports.size(),
+            Trace3DGSShadow_kernel_subobjects.data(), (uint32_t)Trace3DGSShadow_kernel_subobjects.size(),
+            defines_c.get(), define_count
+        );
 
         uint32_t entry_count[kGfxShaderGroupType_Count] {
-                1,
-                2, // SHADING RAY / SHADOW RAY
-                2,
+                1, // 1 raygen record
+                1, // 1 hitgroups
+                1, // 1 miss
                 1 // Actually we have no callables... but leave 1 here.
         };
-        GfxKernel sbt_kernels[] {kernel_.Trace3DGSRays};
+        GfxKernel sbt_kernels[] {kernel_.Trace3DGSRays, kernel_.Trace3DGSShadowRays};
         sbt_ = gfxCreateSbt(gfx, sbt_kernels, ARRAYSIZE(sbt_kernels), entry_count);
-
-        gfxSbtSetShaderGroup(gfx, sbt_, kGfxShaderGroupType_Raygen, 0, "Trace3DGSRaygen");
-        gfxSbtSetShaderGroup(gfx, sbt_, kGfxShaderGroupType_Miss, 0,   "Trace3DGSMiss");
-        gfxSbtSetShaderGroup(gfx, sbt_, kGfxShaderGroupType_Miss, 1,   "Trace3DGSShadowMiss");
-        gfxSbtSetShaderGroup(gfx, sbt_, kGfxShaderGroupType_Hit, 0,    "Trace3DGSHitGroup");
-        gfxSbtSetShaderGroup(gfx, sbt_, kGfxShaderGroupType_Hit, 1,    "Trace3DGSHitGroupShadow");
-
     }
 
     // Graphics kernels
@@ -233,7 +243,7 @@ bool Renderer::CreateKernels () {
         gfxDrawStateSetColorTarget(draw_state, 0, tex_.G_albedo_alpha.getFormat());
         if (!options_.no_G_buffers) {
             gfxDrawStateSetColorTarget(draw_state, 1, tex_.G_material.getFormat());
-            gfxDrawStateSetColorTarget(draw_state, 2, tex_.G_momentum.getFormat());
+            gfxDrawStateSetColorTarget(draw_state, 2, tex_.G_depth.getFormat());
             if (!options_.reconstruct_normals) {
                 gfxDrawStateSetColorTarget(draw_state, 3, tex_.G_normal.getFormat());
             }
@@ -265,15 +275,19 @@ void Renderer::DestroyKernels () {
     gfxDestroyKernel(gfx, kernel_.FilterActiveGaussians);
     gfxDestroyKernel(gfx, kernel_.ProjectActiveGaussians);
     gfxDestroyKernel(gfx, kernel_.ResolveGBuffers);
+    gfxDestroyKernel(gfx, kernel_.FilterDepth);
     gfxDestroyKernel(gfx, kernel_.ReconstructNormals);
     gfxDestroyKernel(gfx, kernel_.FinalComposition);
 
     gfxDestroyKernel(gfx, kernel_.Trace3DGSRays);
+    gfxDestroyKernel(gfx, kernel_.Trace3DGSShadowRays);
     gfxDestroyKernel(gfx, kernel_.SpawnCameraRays);
     gfxDestroyKernel(gfx, kernel_.DisplayCameraRays);
 
     gfxDestroyKernel(gfx, kernel_.DrawActiveGaussians);
     gfxDestroyKernel(gfx, kernel_.TonemapAndDraw);
+
+    gfxDestroySbt(gfx, sbt_);
 
     gfxDestroyProgram(gfx, program_);
 }
@@ -283,6 +297,8 @@ bool Renderer::Initialize () {
     // Reset flags and counters
     should_build_acceleration_structure_ = true;
     frame_index_ = 0;
+
+    if (!blue_noise_sampler_.Initialize()) return false;
 
     if(!CreateResources()) {
         return false;
@@ -296,4 +312,5 @@ bool Renderer::Initialize () {
 void Renderer::Destroy() {
     DestroyResources();
     DestroyKernels();
+    blue_noise_sampler_.Destroy();
 }

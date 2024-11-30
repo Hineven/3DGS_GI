@@ -29,6 +29,8 @@
 // Use depth to reconstruct the normals, instead of rendering them directly
 // #define RECONSTRUCT_NORMALS_FROM_DEPTH
 
+// Skybox
+TextureCube<float4> g_SkyBoxCubeTexture;
 
 // Acceleration structure for hardware ray tracing
 //                      TLAS
@@ -96,6 +98,8 @@ RWStructuredBuffer<float> g_RWActiveGaussianLinearDepthBuffer;
 RWStructuredBuffer<uint>   g_RWActiveGaussianNDCPositionBuffer;
 RWStructuredBuffer<uint>   g_RWActiveGaussianQuadNDCVector0Buffer;
 RWStructuredBuffer<uint>   g_RWActiveGaussianQuadNDCVector1Buffer;
+// Linear depths of the 2d projected quad vertices (top, left)
+RWStructuredBuffer<float2> g_RWActiveGaussianQuadLinearDepthsBuffer;
 
 // Precomputed color values for active gaussians
 // Only used when OUTPUT_COLORED_GAUSSIANS is defined
@@ -134,13 +138,16 @@ RWStructuredBuffer<float> g_RWRayToTraceHitTBuffer;
 // G-Buffers
 RWTexture2D<float4>      g_RW_GColorTexture;
 Texture2D<float4>        g_GColorTexture;
-RWTexture2D<float2>      g_RW_GMomentumTexture;
-Texture2D<float2>        g_GMomentumTexture;
+RWTexture2D<float2>       g_RW_GDepthTexture;
+// Linear depth, not Z buffer depth
+Texture2D<float2>         g_GDepthTexture;
 // Roughness, nx, ny, unused
 RWTexture2D<float4>      g_RW_GMaterialTexture;
 Texture2D<float4>        g_GMaterialTexture;
 RWTexture2D<float4>      g_RW_GNormalTexture;
 Texture2D<float4>        g_GNormalTexture;
+RWTexture2D<float>       g_RW_GFilteredDepthTexture;
+Texture2D<float>         g_GFilteredDepthTexture;
 // Output buffers
 RWTexture2D<float4>      g_RW_Radiance;
 Texture2D<float4>        g_Radiance;

@@ -88,8 +88,8 @@ int AppInternal::Run () {
 
     // Load scene
     {
-        // scene_.LoadGaussians(root_path + "data/chair/point_cloud/iteration_50000/point_cloud.ply", true);
-        scene_.LoadGaussians(root_path + "data/garden/point_cloud/iteration_7000/point_cloud.ply", true);
+        scene_.LoadGaussians(root_path + "data/chair/point_cloud/iteration_50000/point_cloud.ply", true);
+        // scene_.LoadGaussians(root_path + "data/garden/point_cloud/iteration_7000/point_cloud.ply", true);
         // scene_.LoadGaussians(root_path + "data/counter/point_cloud/iteration_7000/point_cloud.ply", true);
 
         scene_.UpdateDeviceScene();
@@ -105,6 +105,7 @@ int AppInternal::Run () {
     double last_frame_time = std::chrono::duration<double>(clock.now().time_since_epoch()).count();
 
     std::vector<std::pair<std::string, float>> last_frame_timed_sections;
+    std::vector<float> frame_latency_history;
 
     // {
     //     auto & camera = scene_.GetCamera();
@@ -138,6 +139,16 @@ int AppInternal::Run () {
             if(ImGui::Button("Reload shaders (F5)")) {
                 need_reload_shaders = true;
             }
+            float frame_total_time = 0.f;
+            {
+                for(auto & section : last_frame_timed_sections) {
+                    frame_total_time += section.second;
+                }
+                frame_latency_history.push_back(frame_total_time);
+                if (frame_latency_history.size() > 100) {
+                    frame_latency_history.erase(frame_latency_history.begin());
+                }
+            }
             if(ImGui::CollapsingHeader("Profile")) {
                 for(auto & section : last_frame_timed_sections) {
                     // Keep the texts aligned
@@ -145,8 +156,19 @@ int AppInternal::Run () {
                     if(name.size() < 30) {
                         name += std::string(30 - name.size(), ' ');
                     }
-                    ImGui::Text("%s: %4.2f ms", name.c_str(), section.second);
+                    ImGui::Text("- %s: %4.2f ms", name.c_str(), section.second);
                 }
+                ImGui::Text("Total: %4.2f ms", frame_total_time);
+                float fps = 1000.f / frame_total_time;
+                float minfps = fps, maxfps = fps;
+                for(auto & latency : frame_latency_history) {
+                    minfps = std::min(minfps, 1000.f / latency);
+                    maxfps = std::max(maxfps, 1000.f / latency);
+                }
+                char overlay[128];
+                sprintf_s(overlay, "FPS: %4.2f, Min: %4.2f, Max: %4.2f", fps, minfps, maxfps);
+                ImGui::PlotLines("Latency", frame_latency_history.data(), frame_latency_history.size(),
+                    0, overlay, 0.f);
             }
 
             renderer->RenderUI();
@@ -266,10 +288,11 @@ int AppInternal::Run () {
             std::cout << "Shaders reloaded" << std::endl;
         }
 
-        gfxFrame(gfx_);
+        gfxFrame(gfx_, false);
     }
 
     gfxFinish(gfx_);
+
 
     // Destroy renderer
     renderer->Destroy();

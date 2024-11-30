@@ -51,7 +51,7 @@ struct UniformBlock {
     int IndirectThreadGroupSize;
     // Min alpha we want our gaussians to have to be evaluated
     // NOTE: Only used in the ray tracing shader.
-    float MinAlphaForGaussianEvaluation;
+    float HWRT_MinAlphaForGaussianEvaluation;
 
     // Dimension of the screen (in pixels), the same as MainCamera.FilmDimensions
     int2  ScreenDimensions;
@@ -60,15 +60,18 @@ struct UniformBlock {
 
     // Dimension of the screen (in small 8x8 tiles)
     int2 SmallTileDimensions;
-    float RT_AlphaMultiplier;
+    float HWRT_AlphaMultiplier;
     int  FrameIndex;
 
     uint DebugMode;
     // whether we're tracing and visualizing shading rays (started from the camera) 
     // Otherwise only shadow ray depths are (possibly) visualized.
     uint VisualizeShadingRays;
-    uint Padding1;
-    uint Padding2;
+    // Pixels with alpha values passing this threshold will be considered opaque.
+    float OpaqueThreshold;
+    // Alphas for blending depth values are reduced by a factor of this value.
+    // Thus there can be smoother depth transitions between different gaussians.
+    float DepthAlphaClipValue;
 };
 
 struct Gaussian {

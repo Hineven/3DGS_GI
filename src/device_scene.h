@@ -7,7 +7,8 @@
 #ifndef INC_3DGS_ADVGI_DEVICE_SCENE_H
 #define INC_3DGS_ADVGI_DEVICE_SCENE_H
 
-#include "gfx.h"
+#include <gfx.h>
+#include <gfx_scene.h>
 #include "scene.h"
 class DeviceScene {
 public:
@@ -18,6 +19,7 @@ public:
     void Destroy ();
 
     void Bind  (const GfxProgram & program) ;
+
 
     // TODO compressed format
 
@@ -48,6 +50,9 @@ public:
     GfxBuffer gsi_inv_transform_;
     // To world normal transform, mat3x3 packed
     GfxBuffer gsi_normal_transform_;
+protected:
+
+    void UpdateGfxScene ();
 
 };
 

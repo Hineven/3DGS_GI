@@ -179,23 +179,38 @@ void ProjectActiveGaussians (uint DispatchID : SV_DispatchThreadID) {
     Eigenvector1 = normalize(Eigenvector1);
     Eigenvector2 = normalize(Eigenvector2);
 	// Output the projected quad vectors
+	// OPTIMIZE: scale the vectors according to opacity of the gaussian
 	float2 ClampedPosition = saturateDown(Homogeneous.xy * 0.25 + 0.5f);
 	g_RWActiveGaussianNDCPositionBuffer[DispatchID] = PackUnorm16x2(ClampedPosition);
-    float2 ClampedVector1 = saturateDown(Eigenvector1 * sqrt(abs(Lambda1)) * 0.5 + 0.5);
-	g_RWActiveGaussianQuadNDCVector0Buffer[DispatchID] = PackUnorm16x2(ClampedVector1);
-	float2 ClampedVector2 = saturateDown(Eigenvector2 * sqrt(abs(Lambda2)) * 0.5 + 0.5);
-	g_RWActiveGaussianQuadNDCVector1Buffer[DispatchID] = PackUnorm16x2(ClampedVector2);
+    float2 ClampedVector1 = Eigenvector1 * sqrt(abs(Lambda1));
+	g_RWActiveGaussianQuadNDCVector0Buffer[DispatchID] = PackUnorm16x2(saturateDown(ClampedVector1 * 0.5 + 0.5));
+	float2 ClampedVector2 = Eigenvector2 * sqrt(abs(Lambda2));
+	g_RWActiveGaussianQuadNDCVector1Buffer[DispatchID] = PackUnorm16x2(saturateDown(ClampedVector2 * 0.5 + 0.5));
+
+
+	// g_RWActiveGaussianQuadLinearDepthsBuffer[DispatchID] = float2(
+	// 	MaxResponseDepth1, MaxResponseDepth2
+	// );
+	// FIXME the original value should be correct.
+	// g_RWActiveGaussianLinearDepthBuffer[DispatchID] = MaxResponseDepth0;
+	// g_RWActiveGaussianQuadLinearDepthsBuffer[DispatchID] = 
+	// 	g_RWActiveGaussianLinearDepthBuffer[DispatchID].xx;
 }
 
 [numthreads(TILE_SIZE, TILE_SIZE, 1)]
 void ResolveGBuffers (uint2 DispatchID : SV_DispatchThreadID) {
 	CameraDescription C = GetCameraDescription();
 	if(IsOutOfFilm(C, DispatchID)) return;
-	float2 MomentumUnnormalized = GetRWMomentumTexture(C)[DispatchID].xy;
-	float  Weight = GetRWColorTexture(C)[DispatchID].w;
-	float2 Momentum = MomentumUnnormalized / max(Weight, 1e-6f);
+	float2 DepthUnnormalized = GetRWDepthTexture(C)[DispatchID].xy;
+	float Weight = DepthUnnormalized.y;
+	float Depth = DepthUnnormalized.x / max(Weight, 1e-6f);
+	// TODO dynamic thresh
+	if(Weight < 0.05) {
+		// Empty pixel.
+		Depth = 0;
+	}
 	// Depth
-	GetRWMomentumTexture(C)[DispatchID].xy = Momentum;
+	GetRWDepthTexture(C)[DispatchID].x = Depth;
 	// If the normals are reconstructed from the depth, they are not rendered to the GBuffer
 #ifndef RECONSTRUCT_NORMALS_FROM_DEPTH
 	// Normal
@@ -210,8 +225,38 @@ void ResolveGBuffers (uint2 DispatchID : SV_DispatchThreadID) {
 
 float TapDepth (CameraDescription C, int2 TapCoords) {
 	TapCoords = clamp(TapCoords, 0, C.FilmDimensions - 1);
-	return GetMomentumTexture(C).Load(int3(TapCoords, 0)).r;
+	return GetDepthTexture(C).Load(int3(TapCoords, 0)).r;
 }
+
+[numthreads(TILE_SIZE, TILE_SIZE, 1)]
+void FilterDepth (uint2 DispatchID : SV_DispatchThreadID) {
+	// fp16 low quality depth -> fp32 filtered depth
+	CameraDescription C = GetCameraDescription();
+	if(IsOutOfFilm(C, DispatchID)) return;
+	float SumWeight = 0;
+	float SumDepth  = 0;
+	for(int dx = -1; dx <= 1; dx++) {
+		for(int dy = -1; dy <= 1; dy++) {
+			int2 TapCoords = DispatchID + int2(dx, dy);
+			if(IsOutOfFilm(C, TapCoords)) continue;
+			float Depth  = TapDepth(C, TapCoords);
+			float Opacity = GetColorTexture(C).Load(int3(TapCoords, 0)).w;
+			if(Opacity < UB.OpaqueThreshold) continue;
+			float Weight = Opacity * (1.f / (1 + abs(dx) + abs(dy)));
+			SumWeight += Weight;
+			SumDepth  += Depth * Weight;
+		}
+	}
+	if(SumWeight <= UB.OpaqueThreshold) SumDepth = 0;
+	GetRWFilteredDepthTexture(C)[DispatchID] = SumDepth / max(SumWeight, 1e-6f);
+
+}
+
+float TapDepthFiltered (CameraDescription C, int2 TapCoords) {
+	TapCoords = clamp(TapCoords, 0, C.FilmDimensions - 1);
+	return GetFilteredDepthTexture(C).Load(int3(TapCoords, 0)).r;
+}
+
 // Reconstruct the normal texture from depth texture, so we dont have to rasterize normals.
 // Overdraws from 3DGS are huge burdens on output mergers.
 [numthreads(TILE_SIZE, TILE_SIZE, 1)]
@@ -219,20 +264,20 @@ void ReconstructNormals (uint2 DispatchID : SV_DispatchThreadID) {
 	CameraDescription C = GetCameraDescription();
 	if(IsOutOfFilm(C, DispatchID)) return;
 	int2   TexCoords = int2(DispatchID);
-	float  Depth = TapDepth(C, TexCoords);
+	float  Depth = TapDepthFiltered(C, TexCoords);
 	float3 CameraDirection = NDC2ToCameraDirection(C, FilmToNDC2(C, TexCoords + 0.5f.xx));
 	
 
 	float4 Depths = float4(
-		TapDepth(C, TexCoords - int2(1, 0)),
-		TapDepth(C, TexCoords + int2(1, 0)),
-		TapDepth(C, TexCoords - int2(0, 1)),
-		TapDepth(C, TexCoords + int2(0, 1))
+		TapDepthFiltered(C, TexCoords - int2(1, 0)),
+		TapDepthFiltered(C, TexCoords + int2(1, 0)),
+		TapDepthFiltered(C, TexCoords - int2(0, 1)),
+		TapDepthFiltered(C, TexCoords + int2(0, 1))
 	);
-	float3 Left = RecoverWorldSpacePosition(C, TexCoords - int2(1, 0) + 0.5f.xx, Depths.x);
+	float3 Left  = RecoverWorldSpacePosition(C, TexCoords - int2(1, 0) + 0.5f.xx, Depths.x);
 	float3 Right = RecoverWorldSpacePosition(C, TexCoords + int2(1, 0) + 0.5f.xx, Depths.y);
-	float3 Up = RecoverWorldSpacePosition(C, TexCoords - int2(0, 1) + 0.5f.xx, Depths.z);
-	float3 Down = RecoverWorldSpacePosition(C, TexCoords + int2(0, 1) + 0.5f.xx, Depths.w);
+	float3 Up    = RecoverWorldSpacePosition(C, TexCoords - int2(0, 1) + 0.5f.xx, Depths.z);
+	float3 Down  = RecoverWorldSpacePosition(C, TexCoords + int2(0, 1) + 0.5f.xx, Depths.w);
 	float3 HorizontalDerivative = normalize(Right - Left);
 	float3 VerticalDerivative = normalize(Down - Up);
 	float3 Normal = normalize(cross(HorizontalDerivative, VerticalDerivative));
@@ -245,10 +290,10 @@ void ReconstructNormals (uint2 DispatchID : SV_DispatchThreadID) {
 	// // Reference: https://atyuwen.github.io/posts/normal-reconstruction/
 	// // Horizontal 4 points
 	// float4 H = float4(
-	// 	TapDepth(C, TexCoords - int2(1, 0)),
-	// 	TapDepth(C, TexCoords + int2(1, 0)),
-	// 	TapDepth(C, TexCoords - int2(2, 0)),
-	// 	TapDepth(C, TexCoords + int2(2, 0))
+	// 	TapDepthFiltered(C, TexCoords - int2(1, 0)),
+	// 	TapDepthFiltered(C, TexCoords + int2(1, 0)),
+	// 	TapDepthFiltered(C, TexCoords - int2(2, 0)),
+	// 	TapDepthFiltered(C, TexCoords + int2(2, 0))
 	// );
 	// float2 HError = abs(2 * H.xy - H.zw - Depth);
 	// float3 HDerivative = 0;
@@ -263,10 +308,10 @@ void ReconstructNormals (uint2 DispatchID : SV_DispatchThreadID) {
 	// }
 	// // Vertical 4 points
 	// float4 V = float4(
-	// 	TapDepth(C, TexCoords - int2(0, 1)),
-	// 	TapDepth(C, TexCoords + int2(0, 1)),
-	// 	TapDepth(C, TexCoords - int2(0, 2)),
-	// 	TapDepth(C, TexCoords + int2(0, 2))
+	// 	TapDepthFiltered(C, TexCoords - int2(0, 1)),
+	// 	TapDepthFiltered(C, TexCoords + int2(0, 1)),
+	// 	TapDepthFiltered(C, TexCoords - int2(0, 2)),
+	// 	TapDepthFiltered(C, TexCoords + int2(0, 2))
 	// );
 	// float2 VError = abs(2 * V.xy - V.zw - Depth);
 	// float3 VDerivative = 0;
@@ -308,23 +353,26 @@ void FinalComposition (uint2 DispatchID : SV_DispatchThreadID) {
 	// TODO
 	// I simply copy the color buffer to the final buffer
 	// for now.
-	float4 Color = GetRWColorTexture(C)[DispatchID];
+	float4 RadianceW = GetRWColorTexture(C)[DispatchID];
 	if(UB.DebugMode == 1) {
 		
     } else if(UB.DebugMode == 2) {
-        Color.rgb = g_GMaterialTexture.Load(int3(DispatchID, 0)).rrr;
+        RadianceW.rgb = g_GMaterialTexture.Load(int3(DispatchID, 0)).rrr;
     } else if(UB.DebugMode == 3) {
-        Color.rgb = g_GNormalTexture.Load(int3(DispatchID, 0)).xyz;
+        RadianceW.rgb = g_GNormalTexture.Load(int3(DispatchID, 0)).xyz;
     } else if(UB.DebugMode == 4) {
-        float Depth = g_GMomentumTexture.Load(int3(DispatchID, 0)).x * 0.25;
-        float Momentum = g_GMomentumTexture.Load(int3(DispatchID, 0)).y;
-        float NormVariance = sqrt(max(Momentum - Depth * Depth, 0)) / max(Depth, 1e-6f);
-        Color = float4(Depth.xxx, 1);//RadianceToColor(float3(Depth, NormVariance, 0) * 0.02), 1);
+		float Depth = g_GDepthTexture.Load(int3(DispatchID, 0)).r;
+        RadianceW = float4(Depth.xxx, 1);
     } else if(UB.DebugMode == 4) {
         float Alpha = g_GColorTexture.Load(int3(DispatchID, 0)).a;
-        Color = float4(Alpha.xxx, 1);
+        RadianceW = float4(Alpha.xxx, 1);
     }
-	GetRWRadianceTexture(C)[DispatchID] = Color;
+	float3 ViewDirection = -NDC2ToCameraDirection(C, FilmToNDC2(C, DispatchID + 0.5f.xx));
+	float3 SkyRadiance = EvaluateSkyRadiance(ViewDirection);
+	GetRWRadianceTexture(C)[DispatchID] = float4(
+		RadianceW.rgb + SkyRadiance * (1.f - RadianceW.w),
+		RadianceW.w
+	);
 }
 
 
@@ -349,7 +397,7 @@ void SpawnCameraRays (uint GroupID : SV_GroupID, uint LocalID : SV_GroupThreadID
 		float2 ScreenPosition = float2(TexelCoords) + 0.5f;
 
 		RayToTrace Ray = SpawnCameraRay(UB.MainCamera, ScreenPosition);
-		// Ray.Seed = BlueNoise_Sample(TileTexelIndex, UB.FrameIndex);
+		Ray.Seed = BlueNoise_Sample1D(TexelCoords, UB.FrameIndex);
 		int RayIndex = TexelCoords.x + TexelCoords.y * UB.ScreenDimensions.x;
 		WriteRayToTrace(RayIndex, Ray);
 	}
@@ -402,7 +450,7 @@ void GenerateRTMesh (uint DispatchID : SV_DispatchThreadID) {
 	}
 
 	// Magic scaling number mentioned in the paper
-	float AlphaMin = UB.MinAlphaForGaussianEvaluation;
+	float AlphaMin = UB.HWRT_MinAlphaForGaussianEvaluation;
 	float Sigma    = UB.GaussianRTProxyGeometrySigma;
 	float MagicScale = sqrt(2 * log(Sigma / max(AlphaMin, 0.001f)));
 

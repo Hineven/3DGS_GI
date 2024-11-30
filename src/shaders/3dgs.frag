@@ -22,7 +22,7 @@ struct GBufferOutput {
     float4 AlbedoAlpha    : SV_Target0;
 #ifdef OUTPUT_PBR_G_BUFFER
     float4 Roughness      : SV_Target1;
-    float4 Momentum       : SV_Target2;
+    float4 Depth          : SV_Target2;
 #ifndef RECONSTRUCT_NORMALS_FROM_DEPTH
     float4 Normal         : SV_Target3;
 #endif
@@ -47,13 +47,22 @@ GBufferOutput DrawActiveGaussians (DrawActiveGaussians_FSInput Input) {
 #endif
 #endif
     float  Alpha  = RGBA.w *  Evaluate2DUnnormalizedGaussian(UV);
+    
     float3 Albedo = saturate(RGBA.xyz);
-    float  LinearDepth  = Input.Position.z * GetCameraDescription().FarPlane;
+    CameraDescription C = GetCameraDescription();
+    float  LinearDepth  = Input.Position.z * C.FarPlane;
     GBufferOutput Result = (GBufferOutput)0;
     Result.AlbedoAlpha    = float4(Albedo, Alpha);
 #ifdef OUTPUT_PBR_G_BUFFER
-    Result.Roughness      = float4(Roughness, 0, 0, Alpha);
-    Result.Momentum       = float4(LinearDepth, LinearDepth * LinearDepth, 0, Alpha);
+    Result.Roughness      = float4(Roughness,   0, 0, Alpha);
+    // Clip the alpha values for calculating the depth helps smooth the transition between
+    // gaussians (cause the gaussians are not fully drawn when rasterizing).
+    float DepthAlphaClipValue = UB.DepthAlphaClipValue;
+    float ClippedAlpha = max(0, Alpha - DepthAlphaClipValue);
+    float DepthMultiplier = ClippedAlpha / max(Alpha, 1e-6f);
+    Result.Depth          = float4(
+        LinearDepth * DepthMultiplier,
+        DepthMultiplier, 0, Alpha);
 #ifndef RECONSTRUCT_NORMALS_FROM_DEPTH
     Result.Normal         = float4(NormalU, Alpha);
 #endif

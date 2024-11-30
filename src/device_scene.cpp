@@ -77,7 +77,11 @@ void DeviceScene::Upload (const Scene & scene) {
     gsi_normal_transform_ = gfxCreateBuffer(gfx, scene.num_instances_ * sizeof(glm::mat3x3), scene.gsi_normal_transforms_.data());
     gsi_normal_transform_.setName("GSINormalTransformBuffer");
 
+    UpdateGfxScene();
+
 }
+
+
 
 void DeviceScene::Destroy () {
     auto & gfx = AppInternal::GetInstance().GetGfx();
@@ -97,6 +101,8 @@ void DeviceScene::Destroy () {
     gfxDestroyBuffer(gfx, gsi_transform_);
     gfxDestroyBuffer(gfx, gsi_inv_transform_);
     gfxDestroyBuffer(gfx, gsi_normal_transform_);
+asfsdafasdfdas
+
 }
 
 void DeviceScene::Bind(const GfxProgram &program) {

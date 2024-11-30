@@ -43,6 +43,9 @@ class Scene {
 public:
     Scene();
 
+    // Load a hdr environment map
+    bool LoadEnvironmentMap (std::filesystem::path);
+
     // Clear and load gaussians from some .ply file.
     // If the gaussians are PBR ready, we won't load the SH coeffs and colors.
     bool LoadGaussians (std::filesystem::path path, bool always_load_sh = false) ;
@@ -64,6 +67,7 @@ public:
     friend class DeviceScene;
     friend class Renderer;
 protected:
+
 
     Camera camera_ {};
 
@@ -93,6 +97,8 @@ protected:
     std::vector<int> gsi_gs_counts_;
 
     std::unique_ptr<DeviceScene> device_scene_;
+
+    std::filesystem::path environment_map_path_;
 };
 
 #endif //INC_3DGS_ADVGI_SCENE_H

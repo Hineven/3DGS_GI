@@ -8,7 +8,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # Tell gfx to use ImGui
 set(GFX_ENABLE_GUI                ON CACHE BOOL "")
-
+# Scene management
+set(GFX_ENABLE_SCENE              ON CACHE BOOL "")
 add_subdirectory(ext/gfx)
 add_subdirectory(ext/glm)
 # happly
