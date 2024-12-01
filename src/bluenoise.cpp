@@ -34,6 +34,6 @@ void BlueNoiseSampler::Destroy()
 void BlueNoiseSampler::InstallParameters(GfxProgram program)
 {
     gfxProgramSetParameter(gfx_, program, "g_SobolBuffer", sobol_buffer_);
-    gfxProgramSetParameter(gfx_, program, "g_RankingTile", ranking_tile_buffer_);
-    gfxProgramSetParameter(gfx_, program, "g_ScramblingTile", scrambling_tile_buffer_);
+    gfxProgramSetParameter(gfx_, program, "g_RankingTileBuffer", ranking_tile_buffer_);
+    gfxProgramSetParameter(gfx_, program, "g_ScramblingTileBuffer", scrambling_tile_buffer_);
 }

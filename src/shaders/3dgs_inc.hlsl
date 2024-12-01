@@ -29,13 +29,14 @@
 // Use depth to reconstruct the normals, instead of rendering them directly
 // #define RECONSTRUCT_NORMALS_FROM_DEPTH
 
-// Skybox
-TextureCube<float4> g_SkyBoxCubeTexture;
-
 // Acceleration structure for hardware ray tracing
 //                      TLAS
 // BLAS0(GS Group), BLAS1(GS Group), BLAS2(Mesh), ... 
 RaytracingAccelerationStructure g_HWRT_AccelerationStructure;
+
+// ----------------- Scene -----------------
+// Skybox
+TextureCube<float4> g_EnvironmentMap;
 // Index the offset of gaussians of each instance in the acceleration structure
 // BLAS0 Gaussian indices: Offset[0], Offset[0]+1, Offset[0]+2, ..., Offset[0] + Count[0] - 1
 // BLAS1 Gaussian indices: Offset[1], Offset[1]+1, Offset[1]+2, ..., Offset[1] + Count[1] - 1
@@ -75,6 +76,7 @@ StructuredBuffer<float3> g_GaussianAlbedoBuffer;
 StructuredBuffer<float>  g_GaussianRoughnessBuffer;
 
 StructuredBuffer<float3> g_GaussianNormalBuffer;
+// End of scene related stuff
 
 // Store indirect dispatch commands
 RWStructuredBuffer<DispatchIndirectCommand> g_RWDispatchIndirectCommandBuffer;
@@ -118,7 +120,7 @@ RWStructuredBuffer<float3> g_RWRayToTraceOriginBuffer;
 // The tmax of the ray to trace
 RWStructuredBuffer<float>  g_RWRayToTraceTMaxBuffer;
 // Ray flags
-RWStructuredBuffer<uint>   g_RWRayFlagsBuffer;
+RWStructuredBuffer<uint>   g_RWRayToTraceFlagsBuffer;
 
 // The ray is completed. A closest hit is found or nothing is found in the range.
 #define RAY_FLAG_COMPLETED_BIT 0x80000000u

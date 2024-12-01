@@ -12,13 +12,11 @@
 #include "glm/ext/matrix_clip_space.hpp"
 #include "app_internal.h"
 
-Scene::Scene () {
-    device_scene_ = std::make_unique<DeviceScene>();
-}
+Scene::Scene () {}
 
 bool Scene::LoadEnvironmentMap(std::filesystem::path path) {
-    if (path.extension() != "hdr" && path.extension() != "exr") {
-        app_warning("Only .hdr and .exr files are supported.");
+    if (path.extension() != ".hdr" && path.extension() != ".exr") {
+        app_warning("Only .hdr and .exr files are supported. Current: " << path.extension());
         return false;
     }
     if (!std::filesystem::exists(path)) {

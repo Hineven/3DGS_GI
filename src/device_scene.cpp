@@ -7,9 +7,24 @@
 #include "device_scene.h"
 #include "app_internal.h"
 
+DeviceScene::DeviceScene() {
+    auto gfx = AppInternal::GetInstance().GetGfx();
+    auto root_path = AppInternal::GetInstance().GetRootPath();
+    ibl_program_ = gfxCreateProgram(gfx, "src/shaders/ibl", root_path.c_str());
+    app_assert(ibl_program_);
+    GfxDrawState draw_sky_state = {};
+    gfxDrawStateSetColorTarget(draw_sky_state, 0, DXGI_FORMAT_R16G16B16A16_FLOAT);
+    draw_sky_kernel_ =
+        gfxCreateGraphicsKernel(gfx, ibl_program_, draw_sky_state, "DrawSky");
+    blur_sky_kernel_ = gfxCreateComputeKernel(gfx, ibl_program_, "BlurSky");
+}
 
 DeviceScene::~DeviceScene () {
     Destroy();
+    auto gfx = AppInternal::GetInstance().GetGfx();
+    gfxDestroyKernel(gfx, draw_sky_kernel_);
+    gfxDestroyKernel(gfx, blur_sky_kernel_);
+    gfxDestroyProgram(gfx, ibl_program_);
 }
 
 void DeviceScene::Upload (const Scene & scene) {
@@ -77,8 +92,101 @@ void DeviceScene::Upload (const Scene & scene) {
     gsi_normal_transform_ = gfxCreateBuffer(gfx, scene.num_instances_ * sizeof(glm::mat3x3), scene.gsi_normal_transforms_.data());
     gsi_normal_transform_.setName("GSINormalTransformBuffer");
 
-    UpdateGfxScene();
+    UpdateGfxScene(scene);
 
+}
+
+
+void DeviceScene::UpdateGfxScene(const Scene & scene) {
+    auto gfx = AppInternal::GetInstance().GetGfx();
+    if (!gfx_scene_) gfx_scene_ = gfxCreateScene();
+    auto filename = scene.environment_map_path_.string();
+    if (kGfxResult_NoError != gfxSceneImport(gfx_scene_, filename.c_str())) {
+        app_warning("Failed to import environment map: " << scene.environment_map_path_.string().c_str());
+        return ;
+    }
+    auto resource = gfxSceneFindObjectByAssetFile<GfxImage>(gfx_scene_, filename.c_str());
+    if (!resource) {
+        app_warning("Failed to load environment map: " << scene.environment_map_path_.string().c_str());
+        return ;
+    }
+    uint width = 1024;
+    uint num_mips = gfxCalculateMipCount(width);
+
+    environment_map_ = gfxCreateTextureCube(
+        gfx, width, DXGI_FORMAT_R16G16B16A16_FLOAT, num_mips
+    );
+    environment_map_.setName("EnvironmentMap");
+
+    uint in_width = resource->width;
+    uint in_height = resource->height;
+    uint in_num_mips = gfxCalculateMipCount(in_width, in_height);
+    uint in_num_channels = resource->channel_count;
+    uint in_channel_bytes = resource->bytes_per_channel;
+
+    GfxTexture in_environment_texture = gfxCreateTexture2D(
+        gfx, in_width, in_height, resource->format, in_num_mips
+    );
+    {
+        GfxBuffer upload_buffer = gfxCreateBuffer(gfx,
+        (size_t)in_width * in_height * in_num_channels * in_channel_bytes,
+            resource->data.data(), kGfxCpuAccess_Write);
+        gfxCommandCopyBufferToTexture(gfx, in_environment_texture, upload_buffer);
+        gfxCommandGenerateMips(gfx, in_environment_texture);
+        gfxDestroyBuffer(gfx, upload_buffer);
+    }
+
+    glm::dvec3 const forward_vectors[] = {glm::dvec3(-1.0, 0.0, 0.0), glm::dvec3(1.0, 0.0, 0.0),
+    glm::dvec3(0.0, 1.0, 0.0), glm::dvec3(0.0, -1.0, 0.0), glm::dvec3(0.0, 0.0, -1.0),
+    glm::dvec3(0.0, 0.0, 1.0)};
+
+    glm::dvec3 const up_vectors[] = {glm::dvec3(0.0, -1.0, 0.0), glm::dvec3(0.0, -1.0, 0.0),
+        glm::dvec3(0.0, 0.0, -1.0), glm::dvec3(0.0, 0.0, 1.0), glm::dvec3(0.0, -1.0, 0.0),
+        glm::dvec3(0.0, -1.0, 0.0)};
+
+    uint32_t const buffer_dimensions[] = {
+        environment_map_.getWidth(), environment_map_.getHeight()};
+    gfxProgramSetParameter(gfx, ibl_program_, "g_BufferDimensions", buffer_dimensions);
+    gfxProgramSetParameter(gfx, ibl_program_, "g_EnvironmentMap", in_environment_texture);
+    gfxProgramSetParameter(gfx, ibl_program_, "g_LinearSampler", AppInternal::GetInstance().GetSamplers().linear_wrap);
+
+    for (uint32_t cubemap_face = 0; cubemap_face < 6; ++cubemap_face)
+    {
+
+        gfxCommandBindColorTarget(gfx, 0, environment_map_, 0, cubemap_face);
+
+        glm::dmat4 const view =
+            glm::lookAt(glm::dvec3(0.0), forward_vectors[cubemap_face], up_vectors[cubemap_face]);
+        glm::dmat4 const proj          = glm::perspective(M_PI / 2.0, 1.0, 0.1, 1e4);
+        glm::mat4 const  view_proj_inv = glm::mat4(glm::inverse(proj * view));
+
+        gfxProgramSetParameter(gfx, ibl_program_, "g_ViewProjectionInverse", view_proj_inv);
+
+        gfxCommandBindKernel(gfx, draw_sky_kernel_);
+        gfxCommandDraw(gfx, 3);
+    }
+
+    for (uint32_t mip_level = 1; mip_level < num_mips; ++mip_level)
+    {
+        gfxProgramSetParameter(
+            gfx, ibl_program_, "g_InEnvironmentBuffer", environment_map_, mip_level - 1);
+        gfxProgramSetParameter(
+            gfx, ibl_program_, "g_OutEnvironmentBuffer", environment_map_, mip_level);
+
+        uint32_t const *num_threads = gfxKernelGetNumThreads(gfx, blur_sky_kernel_);
+        uint32_t const  num_groups_x =
+            (GFX_MAX(width >> mip_level, 1u) + num_threads[0] - 1) / num_threads[0];
+        uint32_t const num_groups_y =
+            (GFX_MAX(width >> mip_level, 1u) + num_threads[1] - 1) / num_threads[1];
+        uint32_t const num_groups_z = 6; // blur all faces
+
+        gfxCommandBindKernel(gfx, blur_sky_kernel_);
+        gfxCommandDispatch(gfx, num_groups_x, num_groups_y, num_groups_z);
+    }
+
+    auto handle = gfxSceneGetImageHandle(gfx_scene_, resource.getIndex());
+    gfxSceneDestroyImage(gfx_scene_, handle);
+    gfxDestroyTexture(gfx, in_environment_texture);
 }
 
 
@@ -101,12 +209,17 @@ void DeviceScene::Destroy () {
     gfxDestroyBuffer(gfx, gsi_transform_);
     gfxDestroyBuffer(gfx, gsi_inv_transform_);
     gfxDestroyBuffer(gfx, gsi_normal_transform_);
-asfsdafasdfdas
 
+    gfxDestroyTexture(gfx, environment_map_);
+
+    gfxDestroyScene(gfx_scene_);
 }
 
 void DeviceScene::Bind(const GfxProgram &program) {
     auto & gfx = AppInternal::GetInstance().GetGfx();
+
+    gfxProgramSetParameter(gfx, program, "g_EnvironmentMap", environment_map_);
+
     gfxProgramSetParameter(gfx, program, "g_GaussianPositionBuffer", gaussian_position);
     gfxProgramSetParameter(gfx, program, "g_GaussianAlphaBuffer", gaussian_alpha);
     gfxProgramSetParameter(gfx, program, "g_GaussianRotationBuffer", gaussian_rotation);

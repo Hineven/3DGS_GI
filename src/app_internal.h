@@ -19,7 +19,7 @@ public:
 
     inline GfxWindow& GetWindow() { return window_; }
     inline GfxContext& GetGfx() { return gfx_; }
-    inline std::string GetRootPath() { return root_path_; }
+    inline const std::string & GetRootPath() { return root_path_; }
 
     inline int GetWindowWidth() { return 1920; }
     inline int GetWindowHeight() { return 1088; }

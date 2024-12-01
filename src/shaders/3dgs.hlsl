@@ -539,7 +539,7 @@ RayToTrace FetchRayToTrace (int RayIndex) {
     Ray.Origin    = g_RWRayToTraceOriginBuffer[RayIndex];
     Ray.RayTMax   = g_RWRayToTraceTMaxBuffer[RayIndex];
     Ray.RayTMin   = 0.0f;
-    uint Flags = g_RWRayFlagsBuffer[RayIndex];
+    uint Flags = g_RWRayToTraceFlagsBuffer[RayIndex];
     Ray.bHit = (Flags & RAY_FLAG_HIT_FOUND_BIT) != 0;
     Ray.bCompleted = (Flags & RAY_FLAG_COMPLETED_BIT) != 0;
     Ray.Seed = float(Flags & RAY_FLAG_SEED_MASK) / (RAY_FLAG_SEED_MASK + 1);
@@ -556,7 +556,7 @@ void WriteRayToTrace (int RayIndex, RayToTrace Ray) {
     Flags |= Ray.bHit ? RAY_FLAG_HIT_FOUND_BIT : 0;
     Flags |= Ray.bCompleted ? RAY_FLAG_COMPLETED_BIT : 0;
     Flags |= uint(saturateDown(Ray.Seed) * (RAY_FLAG_SEED_MASK + 1));
-    g_RWRayFlagsBuffer[RayIndex] = Flags;
+    g_RWRayToTraceFlagsBuffer[RayIndex] = Flags;
 }
 
 float4 FetchRayTraceResult (int RayIndex) {
@@ -768,7 +768,7 @@ float ZDepthToLinear (CameraDescription C, float ZDepth) {
 }
 
 float3 EvaluateSkyRadiance (float3 Direction) {
-    return g_SkyBoxCubeTexture.SampleLevel(g_LinearWrapSampler, Direction, 0.0f).xyz;
+    return g_EnvironmentMap.SampleLevel(g_LinearWrapSampler, Direction, 0.0f).xyz;
 }
 
 #endif // INC_3DGS_HLSL

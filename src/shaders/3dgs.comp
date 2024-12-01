@@ -361,7 +361,7 @@ void FinalComposition (uint2 DispatchID : SV_DispatchThreadID) {
     } else if(UB.DebugMode == 3) {
         RadianceW.rgb = g_GNormalTexture.Load(int3(DispatchID, 0)).xyz;
     } else if(UB.DebugMode == 4) {
-		float Depth = g_GDepthTexture.Load(int3(DispatchID, 0)).r;
+		float Depth = g_GDepthTexture.Load(int3(DispatchID, 0)).r * 0.2f;
         RadianceW = float4(Depth.xxx, 1);
     } else if(UB.DebugMode == 4) {
         float Alpha = g_GColorTexture.Load(int3(DispatchID, 0)).a;
@@ -397,7 +397,7 @@ void SpawnCameraRays (uint GroupID : SV_GroupID, uint LocalID : SV_GroupThreadID
 		float2 ScreenPosition = float2(TexelCoords) + 0.5f;
 
 		RayToTrace Ray = SpawnCameraRay(UB.MainCamera, ScreenPosition);
-		Ray.Seed = BlueNoise_Sample1D(TexelCoords, UB.FrameIndex);
+		Ray.Seed = UB.HWRT_StochasticRayTracingQuality * BlueNoise_Sample1D(TexelCoords, UB.FrameIndex);
 		int RayIndex = TexelCoords.x + TexelCoords.y * UB.ScreenDimensions.x;
 		WriteRayToTrace(RayIndex, Ray);
 	}
@@ -419,7 +419,7 @@ void DisplayCameraRays (uint GroupID : SV_GroupID, uint LocalID : SV_GroupThread
 			float4 RayResult = FetchRayTraceResult(RayIndex);
 			g_RW_Radiance[TexelCoords] = float4(RayResult.xyz, 1);
 		} else {
-			float  RayT = FetchRayTraceHitT(RayIndex);
+			float  RayT = FetchRayTraceHitT(RayIndex) * 0.2f;
 			g_RW_Radiance[TexelCoords] = float4(RayT.xxx, 1);
 		}
 	}

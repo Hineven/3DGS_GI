@@ -6,6 +6,9 @@ enable_language(CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# Disable C6553 warning
+add_compile_options(/wd6553)
+
 # Tell gfx to use ImGui
 set(GFX_ENABLE_GUI                ON CACHE BOOL "")
 # Scene management

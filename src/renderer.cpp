@@ -34,14 +34,15 @@ void Renderer::GenerateDrawIndirect(const GfxBuffer &vertex_count_buffer) {
 
 void Renderer::RenderUI () {
     if(ImGui::CollapsingHeader("Renderer")) {
-        ImGui::Checkbox("HWRT", &options_.visualize_HWRT);
+        ImGui::Checkbox("HWRT Visualize", &options_.visualize_HWRT);
         if (options_.visualize_HWRT) {
             ImGui::SliderFloat("Min Alpha For Gaussian Evaluation", &options_.HWRT_min_alpha_for_gaussian_evaluation, 0.0f, 0.5f);
-            ImGui::Checkbox("  HWRT (Shading Rays)", &options_.visualize_HWRT_shading_rays);
+            ImGui::Checkbox("  Visualize Shading Rays", &options_.visualize_HWRT_shading_rays);
         }
         ImGui::SliderFloat("Gaussian RT Proxy Geometry Sigma", &options_.gaussian_RT_proxy_geometry_sigma, 0.01f, 1.0f);
         ImGui::SliderFloat("Opaque Threshold", &options_.opaque_threshold, 0.0f, 1.0f);
         ImGui::SliderFloat("Depth Alpha Clip", &options_.depth_alpha_clip_value, 0.0f, 1.0f);
+        ImGui::SliderFloat("HWRT Shadow Ray Quality", &options_.stochastic_ray_tracing_quality, 0.f, 1.f);
         const char * debug_modes[] = {
             "Default",
             "Albedo/Color",
@@ -108,6 +109,8 @@ void Renderer::Render() {
         UB.VisualizeShadingRays = options_.visualize_HWRT_shading_rays;
         UB.OpaqueThreshold = options_.opaque_threshold;
         UB.DepthAlphaClipValue = options_.depth_alpha_clip_value;
+
+        UB.HWRT_StochasticRayTracingQuality = options_.stochastic_ray_tracing_quality;
     }
     gfxBufferGetData<UniformBlock>(gfx, buf_.UB)[frame_index_ & 1] = UB;
     gfxProgramSetParameter(gfx, program_, "UB", buf_.UB);

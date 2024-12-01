@@ -34,7 +34,7 @@ struct CameraDescription {
     uint   Flags;
 
     float3 Up;
-    uint Padding0;
+    uint   Padding0;
 };
 
 
@@ -72,6 +72,9 @@ struct UniformBlock {
     // Alphas for blending depth values are reduced by a factor of this value.
     // Thus there can be smoother depth transitions between different gaussians.
     float DepthAlphaClipValue;
+
+    float HWRT_StochasticRayTracingQuality;
+    uint  Padding0;
 };
 
 struct Gaussian {

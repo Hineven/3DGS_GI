@@ -13,6 +13,8 @@
 class DeviceScene {
 public:
 
+    DeviceScene ();
+
     ~DeviceScene () ;
 
     void Upload (const Scene & scene) ;
@@ -50,9 +52,18 @@ public:
     GfxBuffer gsi_inv_transform_;
     // To world normal transform, mat3x3 packed
     GfxBuffer gsi_normal_transform_;
+
+    GfxScene gfx_scene_;
+
+    GfxTexture environment_map_;
+
 protected:
 
-    void UpdateGfxScene ();
+    GfxProgram ibl_program_;
+    GfxKernel draw_sky_kernel_;
+    GfxKernel blur_sky_kernel_;
+
+    void UpdateGfxScene (const Scene & scene);
 
 };
 

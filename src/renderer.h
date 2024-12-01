@@ -134,6 +134,10 @@ void DestroyKernels ();
         // The clip value for depth rasterization. Making it smoother.
         float depth_alpha_clip_value {0.08f};
 
+        // The quality of stochastic ray tracing [0, 1].
+        // Lower values bring more biased but faster results.
+        float stochastic_ray_tracing_quality {0.25f};
+
         // Render color only when doing rasterization
         bool no_G_buffers {false};
 
