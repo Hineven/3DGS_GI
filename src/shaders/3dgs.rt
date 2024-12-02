@@ -49,7 +49,7 @@ void Trace3DGSRaygen ()
     Trace3DGSPayload Payload;
     RayDesc Ray;
     {
-        RayToTrace RayData = FetchRayToTrace(RayIndex);
+        RayToTrace RayData = FetchRayToTrace(RayIndex, UB.MaxRayTraceT);
         Ray.Origin = RayData.Origin;
         Ray.Direction = RayData.Direction;
         Ray.TMin = RayData.RayTMin;
@@ -164,7 +164,7 @@ void Trace3DGSShadowRaygen ()
     Trace3DGSShadowPayload Payload = (Trace3DGSShadowPayload) 0;
     RayDesc Ray;
     {
-        RayToTrace RayData = FetchRayToTrace(RayIndex);
+        RayToTrace RayData = FetchRayToTrace(RayIndex, UB.MaxRayTraceT);
         Ray.Origin = RayData.Origin;
         Ray.Direction = RayData.Direction;
         Ray.TMin = RayData.RayTMin;

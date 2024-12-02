@@ -34,7 +34,11 @@ struct CameraDescription {
     uint   Flags;
 
     float3 Up;
-    uint   Padding0;
+    uint   HasHZB;
+
+    float2 FilmTexelSize;
+    // Size of each pixel on HZB buffer at mip 0
+    float2 HZBBaseTexelSize;
 };
 
 

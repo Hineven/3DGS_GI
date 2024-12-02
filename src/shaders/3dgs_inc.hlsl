@@ -19,6 +19,9 @@
 // For visualization purposes only.
 #define OUTPUT_COLORED_GAUSSIANS
 
+// Use better normal reconstruction algorithm (5 samples required vs 4 samples)
+// #define HIGH_QUALITY_NORMAL_RECONSTRUCTION
+
 // Bitpack the vertex attributes when transfering them to the fragment shader
 // #define BITPACK_VERTEX_ATTRIBUTES
 
@@ -117,8 +120,8 @@ RWStructuredBuffer<uint>   g_RWRayToTraceCountBuffer;
 RWStructuredBuffer<uint>   g_RWRayToTraceDirectionBuffer;
 // Ray origins
 RWStructuredBuffer<float3> g_RWRayToTraceOriginBuffer;
-// The tmax of the ray to trace
-RWStructuredBuffer<float>  g_RWRayToTraceTMaxBuffer;
+// Min hit time of the ray to trace
+RWStructuredBuffer<float>  g_RWRayToTraceTMinBuffer;
 // Ray flags
 RWStructuredBuffer<uint>   g_RWRayToTraceFlagsBuffer;
 

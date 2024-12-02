@@ -1,5 +1,7 @@
 #include "3dgs.hlsl"
 
+#include "ssrt.hlsl"
+
 float3 SH3Evaluate(float3 ViewDirection, SHCoefficents3 SH3, int Degree)
 {
 	const float SH_C0 = 0.28209479177387814f;
@@ -267,6 +269,7 @@ void ReconstructNormals (uint2 DispatchID : SV_DispatchThreadID) {
 	float  Depth = TapDepthFiltered(C, TexCoords);
 	float3 CameraDirection = NDC2ToCameraDirection(C, FilmToNDC2(C, TexCoords + 0.5f.xx));
 	
+#ifndef HIGH_QUALITY_NORMAL_RECONSTRUCTION
 
 	float4 Depths = float4(
 		TapDepthFiltered(C, TexCoords - int2(1, 0)),
@@ -285,58 +288,168 @@ void ReconstructNormals (uint2 DispatchID : SV_DispatchThreadID) {
 		Normal = -Normal;
 	}
 	GetRWNormalTexture(C)[DispatchID] = float4(Normal * 0.5 + 0.5, 1);
-	return;
+#else
 
-	// // Reference: https://atyuwen.github.io/posts/normal-reconstruction/
-	// // Horizontal 4 points
-	// float4 H = float4(
-	// 	TapDepthFiltered(C, TexCoords - int2(1, 0)),
-	// 	TapDepthFiltered(C, TexCoords + int2(1, 0)),
-	// 	TapDepthFiltered(C, TexCoords - int2(2, 0)),
-	// 	TapDepthFiltered(C, TexCoords + int2(2, 0))
-	// );
-	// float2 HError = abs(2 * H.xy - H.zw - Depth);
-	// float3 HDerivative = 0;
-	// if(H.x && H.z && HError.x < HError.y) {
-	// 	float3 A = RecoverWorldSpacePosition(C, TexCoords - int2(1, 0) + 0.5f.xx, H.x);
-	// 	float3 B = RecoverWorldSpacePosition(C, TexCoords - int2(2, 0) + 0.5f.xx, H.z);
-	// 	HDerivative = normalize(B - A);
-	// } else {
-	// 	float3 A = RecoverWorldSpacePosition(C, TexCoords + int2(1, 0) + 0.5f.xx, H.y);
-	// 	float3 B = RecoverWorldSpacePosition(C, TexCoords + int2(2, 0) + 0.5f.xx, H.w);
-	// 	HDerivative = normalize(A - B); 
-	// }
-	// // Vertical 4 points
-	// float4 V = float4(
-	// 	TapDepthFiltered(C, TexCoords - int2(0, 1)),
-	// 	TapDepthFiltered(C, TexCoords + int2(0, 1)),
-	// 	TapDepthFiltered(C, TexCoords - int2(0, 2)),
-	// 	TapDepthFiltered(C, TexCoords + int2(0, 2))
-	// );
-	// float2 VError = abs(2 * V.xy - V.zw - Depth);
-	// float3 VDerivative = 0;
-	// if(V.x && V.z && VError.x < VError.y) {
-	// 	float3 A = RecoverWorldSpacePosition(C, TexCoords - int2(0, 1) + 0.5f.xx, V.x);
-	// 	float3 B = RecoverWorldSpacePosition(C, TexCoords - int2(0, 2) + 0.5f.xx, V.z);
-	// 	VDerivative = normalize(B - A);
-	// } else {
-	// 	float3 A = RecoverWorldSpacePosition(C, TexCoords + int2(0, 1) + 0.5f.xx, V.y);
-	// 	float3 B = RecoverWorldSpacePosition(C, TexCoords + int2(0, 2) + 0.5f.xx, V.w);
-	// 	VDerivative = normalize(A - B); 
-	// }
-	// float3 Normal = normalize(cross(HDerivative, VDerivative));
-	// if(dot(Normal, CameraDirection) > 0) {
-	// 	Normal = -Normal;
-	// }
-	// GetRWNormalTexture(C)[DispatchID] = float4(Normal * 0.5 + 0.5, 1);
+	// Reference: https://atyuwen.github.io/posts/normal-reconstruction/
+	// Horizontal 4 points
+	float4 H = float4(
+		TapDepthFiltered(C, TexCoords - int2(1, 0)),
+		TapDepthFiltered(C, TexCoords + int2(1, 0)),
+		TapDepthFiltered(C, TexCoords - int2(2, 0)),
+		TapDepthFiltered(C, TexCoords + int2(2, 0))
+	);
+	float2 HError = abs(2 * H.xy - H.zw - Depth);
+	float3 HDerivative = 0;
+	if(H.x && H.z && HError.x < HError.y) {
+		float3 A = RecoverWorldSpacePosition(C, TexCoords - int2(1, 0) + 0.5f.xx, H.x);
+		float3 B = RecoverWorldSpacePosition(C, TexCoords - int2(2, 0) + 0.5f.xx, H.z);
+		HDerivative = normalize(B - A);
+	} else {
+		float3 A = RecoverWorldSpacePosition(C, TexCoords + int2(1, 0) + 0.5f.xx, H.y);
+		float3 B = RecoverWorldSpacePosition(C, TexCoords + int2(2, 0) + 0.5f.xx, H.w);
+		HDerivative = normalize(A - B); 
+	}
+	// Vertical 4 points
+	float4 V = float4(
+		TapDepthFiltered(C, TexCoords - int2(0, 1)),
+		TapDepthFiltered(C, TexCoords + int2(0, 1)),
+		TapDepthFiltered(C, TexCoords - int2(0, 2)),
+		TapDepthFiltered(C, TexCoords + int2(0, 2))
+	);
+	float2 VError = abs(2 * V.xy - V.zw - Depth);
+	float3 VDerivative = 0;
+	if(V.x && V.z && VError.x < VError.y) {
+		float3 A = RecoverWorldSpacePosition(C, TexCoords - int2(0, 1) + 0.5f.xx, V.x);
+		float3 B = RecoverWorldSpacePosition(C, TexCoords - int2(0, 2) + 0.5f.xx, V.z);
+		VDerivative = normalize(B - A);
+	} else {
+		float3 A = RecoverWorldSpacePosition(C, TexCoords + int2(0, 1) + 0.5f.xx, V.y);
+		float3 B = RecoverWorldSpacePosition(C, TexCoords + int2(0, 2) + 0.5f.xx, V.w);
+		VDerivative = normalize(A - B); 
+	}
+	float3 Normal = normalize(cross(HDerivative, VDerivative));
+	if(dot(Normal, CameraDirection) > 0) {
+		Normal = -Normal;
+	}
+	GetRWNormalTexture(C)[DispatchID] = float4(Normal * 0.5 + 0.5, 1);
+#endif
 }
 
 // [numthreads(TILE_SIZE, TILE_SIZE, 1)]
-// void FinetuneNormals (uint2 DispatchID : SV_DispatchThreadID) {
+// void FilterNormals (uint2 DispatchID : SV_DispatchThreadID) {
 // 	if(DispatchID.x >= UB.ScreenDimensions.x || DispatchID.y >= UB.ScreenDimensions.y) return;
 // 	int2 TexelCoords = int2(DispatchID);
 // 	float3 Depth012  = 
 // }
+
+// Compound ray tracing. Trace rays in screen space first to cull the easy rays 
+// and then trace the rest of the rays with 3DGS HWRT.
+[numthreads(WAVE_SIZE, 1, 1)]
+void TraceRaysInScreenSpace (uint DispatchID : SV_DispatchThreadID) {
+	if(DispatchID >= g_RWRayToTraceCountBuffer[0]) return;
+	RayToTrace Ray = FetchRayToTrace(DispatchID, UB.TraceRayMaxT);
+	CameraDescription C = GetCameraDescription();
+	
+	float3 OriginUVW   = TransformPointWithPerspectiveDivide(C.ProjectionView, Ray.Origin);
+	float3 TexelNormal = GetTexelNormalFromTexture(GetNormalTexture(C), OriginUVW.xy);
+
+	float NormalBias = 0;
+	// Bias along the normal to avoid self-intersecting camera facing scene depth texels
+	// HZB traversal uses point filtering, so scene depth texels stick out from the plane they are representing
+	{
+		float2 CornerUV = OriginUVW.xy + .5f * C.FilmTexelSize;
+		float3 CornerWorldPosition = RecoverWorldSpacePosition(C, CornerUV, ZDepthToLinear(C, OriginUVW.z));
+		// Project texel corner onto normal
+		NormalBias = abs(dot(CornerWorldPosition - Ray.Origin, TexelNormal)) * 2;
+	}
+
+	float3 BiasedOrigin = Ray.Origin + NormalBias * TexelNormal;
+	float3 RayStartUVW  = TransformPointWithPerspectiveDivide(C.ProjectionView, BiasedOrigin);
+	// Skip screen traces if the normal bias pushed our starting point off-screen, as TraceScreen() doesn't handle this
+	if (any(RayStartUVW.xy < -1) || any(RayStartUVW.xy > 1)) {
+		return;
+	}
+	
+	bool bHit;
+	float3 HitUVW;
+	float3 LastVisibleUVW;
+	float Unused;
+
+	float MaxTraceDistance = UB.SSRT_MaxTraceDistance;
+	float RelativeTexelThickness = UB.SSRT_RelativeTexelThickness;
+
+	ScreenSpaceRayTrace(
+		C,
+		GetZDepthTexture(C),
+		GetNearHZBTexture(C),
+		BiasedOrigin,
+		Ray.Direction,
+		MaxTraceDistance, 
+		UB.SSRT_MaxNumIterations,
+		RelativeTexelThickness,
+		0,
+		bHit,
+		HitUVW,
+		LastVisibleUVW,
+		Unused
+	);
+
+	bool bFastMoving = false;
+	float3 HitWorldPosition = RecoverWorldSpacePosition(C, HitUVW.xy, ZDepthToLinear(C, HitUVW.z));
+	float HitDistance = min(length(HitWorldPosition - BiasedOrigin), MaxTraceDistance);
+
+	if (bHit)
+	{
+		float2 NoiseUV = float2(
+			DispatchID % 1024,
+			DispatchID / 1024
+		) + 0.5f.xx;
+		float Noise = InterleavedGradientNoise(NoiseUV, 0);
+		// No vignetting for screen traces for now.
+		if (bHit)
+		{
+			float3 HistoryUVW = ReprojectToHistoryUVWFromUVW(C, HitUVW);
+			if(all(HistoryUVW.xy >= 0 && all(HistoryUVW.xy <= 1))) {
+				// Calculate the expected depth of the pixel last frame
+				float PrevZDepth  = HistoryUVW.z;
+
+				// Lookup the actual depth at the same screen position last frame
+				float HistoryZDepth = GetHistoryZDepthTexture(C).SampleLevel(g_PointClampSampler, HistoryUVW.xy, 0).x;
+
+				bHit = abs(HistoryZDepth - PrevZDepth) < RelativeTexelThickness * 0.5f * lerp(.5f, 2.0f, Noise);
+			}
+		}
+
+		if (bHit)
+		{
+			float2 HitHistoryScreenUV = HitHistoryScreenPosition.xy * PrevScreenPositionScaleBias.xy + PrevScreenPositionScaleBias.zw;
+			HitHistoryScreenUV = clamp(HitHistoryScreenUV, PrevSceneColorBilinearUVMin, PrevSceneColorBilinearUVMax);
+			float3 Lighting = SampleScreenColor(PrevSceneColorTexture, GlobalPointClampedSampler, HitHistoryScreenUV).xyz * PrevSceneColorPreExposureCorrection;
+
+			Lighting += GetSkylightLeaking(RayWorldDirection, HitDistance) * View.PreExposure;
+
+			#if DEBUG_VISUALIZE_TRACE_TYPES
+				RWTraceRadiance[TraceBufferCoord] = float3(.5f, 0, 0) * View.PreExposure;
+			#else
+				RWTraceRadiance[TraceBufferCoord] = QuantizeForFloatRenderTarget(Lighting, Noise);
+			#endif
+
+			{
+				float HitSceneDepth = ConvertFromDeviceZ(HitUVz.z);
+				float3 HitTranslatedWorldPosition = mul(float4(GetScreenPositionForProjectionType(HitScreenPosition, HitSceneDepth), HitSceneDepth, 1), View.ScreenToTranslatedWorld).xyz;
+				//Note: this will be affected by TAA jitter, should use GetHistoryScreenPositionIncludingTAAJitter instead but costs too much
+				float3 HitWorldVelocity = HitTranslatedWorldPosition - GetPrevTranslatedWorldPosition(HitHistoryScreenPosition);
+
+				bFastMoving = IsTraceMoving(TranslatedWorldPosition, SceneDepth, ScreenProbeAtlasCoord, HitTranslatedWorldPosition, HitWorldVelocity);
+			}
+		}
+	}
+
+	if (bHit || bWriteDepthOnMiss)
+	{
+		WriteTraceHit(TraceBufferCoord, HitDistance, bHit, bFastMoving, /*bReachedRadianceCache*/ false);
+	}
+}
 
 // [numthreads(TILE_SIZE, TILE_SIZE, 1)]
 // void TemporalDenoise (uint2 DispatchID : SV_DispatchThreadID) {

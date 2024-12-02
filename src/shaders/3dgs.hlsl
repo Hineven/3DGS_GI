@@ -49,12 +49,25 @@ float3x4 FetchInstanceInverseTransform (int Index) {
     return g_InstanceInvTransformBuffer[Index];
 }
 
+float3 TransformPointWithPerspectiveDivide (float4x4 Transform, float3 Point) {
+    float4 Homogeneous = mul(Transform, float4(Point, 1.0f));
+    return Homogeneous.xyz / Homogeneous.w;
+}
+
 float3 TransformPoint (float3x4 Transform, float3 Point) {
     return mul(Transform, float4(Point, 1.0f)).xyz;
 }
 
 float3 TransformVector (float3x4 Transform, float3 Vector) {
     return mul(Transform, float4(Vector, 0.0f)).xyz;
+}
+
+float3x4 ClipMatrix (float4x4 M) {
+    return float3x4(
+        M[0][0], M[0][1], M[0][2], M[0][3],
+        M[1][0], M[1][1], M[1][2], M[1][3],
+        M[2][0], M[2][1], M[2][2], M[2][3]
+    );
 }
 
 float3 TransformVector (float3x3 Transform, float3 Vector) {
@@ -525,20 +538,20 @@ struct RayToTrace {
 };
 
 // Initialize the ray to trace struct
-RayToTrace InitRayToTrace () {
+RayToTrace InitRayToTrace (float RayTMax) {
     RayToTrace Ray = (RayToTrace)0;
     Ray.RayTMin = 0.0f;
-    Ray.RayTMax = FLT_MAX;
+    Ray.RayTMax = RayTMax;
     return Ray;
 }
 
 // Fetch the ray to trace by its index
-RayToTrace FetchRayToTrace (int RayIndex) {
+RayToTrace FetchRayToTrace (int RayIndex, float RayTMax) {
     RayToTrace Ray = (RayToTrace)0;
     Ray.Direction = Octahedron01ToUnitVector(UnpackUnorm16x2(g_RWRayToTraceDirectionBuffer[RayIndex]));
     Ray.Origin    = g_RWRayToTraceOriginBuffer[RayIndex];
-    Ray.RayTMax   = g_RWRayToTraceTMaxBuffer[RayIndex];
-    Ray.RayTMin   = 0.0f;
+    Ray.RayTMax   = RayTMax;
+    Ray.RayTMin   = g_RWRayToTraceTMinBuffer[RayIndex];
     uint Flags = g_RWRayToTraceFlagsBuffer[RayIndex];
     Ray.bHit = (Flags & RAY_FLAG_HIT_FOUND_BIT) != 0;
     Ray.bCompleted = (Flags & RAY_FLAG_COMPLETED_BIT) != 0;
@@ -549,14 +562,17 @@ RayToTrace FetchRayToTrace (int RayIndex) {
 // Write the ray to trace by its index
 void WriteRayToTrace (int RayIndex, RayToTrace Ray) {
     g_RWRayToTraceDirectionBuffer[RayIndex] = PackUnorm16x2(UnitVectorToOctahedron01(Ray.Direction));
-    float3 NewOrigin = Ray.Origin + Ray.RayTMin * Ray.Direction;
-    g_RWRayToTraceOriginBuffer[RayIndex] = NewOrigin;
-    g_RWRayToTraceTMaxBuffer[RayIndex] = Ray.RayTMax - Ray.RayTMin;
+    g_RWRayToTraceOriginBuffer[RayIndex] = Ray.Origin;
+    g_RWRayToTraceTMinBuffer[RayIndex] = Ray.RayTMin;
     uint Flags = 0;
     Flags |= Ray.bHit ? RAY_FLAG_HIT_FOUND_BIT : 0;
     Flags |= Ray.bCompleted ? RAY_FLAG_COMPLETED_BIT : 0;
     Flags |= uint(saturateDown(Ray.Seed) * (RAY_FLAG_SEED_MASK + 1));
     g_RWRayToTraceFlagsBuffer[RayIndex] = Flags;
+}
+
+void WriteRayTraceTMin (int RayIndex, float TMin) {
+    g_RWRayToTraceTMinBuffer[RayIndex] = TMin;
 }
 
 float4 FetchRayTraceResult (int RayIndex) {
@@ -716,6 +732,10 @@ Texture2D<float4>  GetNormalTexture (CameraDescription C) {
     return g_GNormalTexture;
 }
 
+float3 GetTexelNormalFromTexture (Texture2D<float4> NormalTexture, float2 UV) {
+    return normalize(NormalTexture.SampleLevel(g_PointClampSampler, UV, 0.0f).xyz * 2.0f - 1.0f);
+}
+
 RWTexture2D<float4> GetRWNormalTexture (CameraDescription C) {
     // TODO meshcards
     return g_RW_GNormalTexture;
@@ -769,6 +789,23 @@ float ZDepthToLinear (CameraDescription C, float ZDepth) {
 
 float3 EvaluateSkyRadiance (float3 Direction) {
     return g_EnvironmentMap.SampleLevel(g_LinearWrapSampler, Direction, 0.0f).xyz;
+}
+
+// Copy-pasted from UE5. A simple and fast way to get an interleaved gradient noise.
+
+// high frequency dither pattern appearing almost random without banding steps
+//note: from "NEXT GENERATION POST PROCESSING IN CALL OF DUTY: ADVANCED WARFARE"
+//      http://advances.realtimerendering.com/s2014/index.html
+// Epic extended by FrameId
+// ~7 ALU operations (2 frac, 3 mad, 2 *)
+// @return 0..1
+float InterleavedGradientNoise( float2 uv, float FrameId )
+{
+	// magic values are found by experimentation
+	uv += FrameId * (float2(47, 17) * 0.695f);
+
+    const float3 magic = float3( 0.06711056f, 0.00583715f, 52.9829189f );
+    return frac(magic.z * frac(dot(uv, magic.xy)));
 }
 
 #endif // INC_3DGS_HLSL
