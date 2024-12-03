@@ -111,8 +111,8 @@ void FilterActiveGaussians (uint DispatchID : SV_DispatchThreadID) {
 
 	float3 ViewSpacePosition = 0;
 	if(IsPointInFrustrum(UB.MainCamera, G.Position, ViewSpacePosition, false, 0.2f, 0.2f)) {
-		int GaussianCount = WaveActiveSum(1);
-		int GaussianRank  = WavePrefixSum(1);
+		int GaussianCount = WaveActiveCountBits(1);
+		int GaussianRank  = WavePrefixCountBits(1);
 		int GaussianBaseIndex = 0;
 		if(WaveIsFirstLane()) {
 			InterlockedAdd(g_RWActiveGaussianCountBuffer[0], GaussianCount, GaussianBaseIndex);
@@ -250,8 +250,29 @@ void FilterDepth (uint2 DispatchID : SV_DispatchThreadID) {
 		}
 	}
 	if(SumWeight <= UB.OpaqueThreshold) SumDepth = 0;
-	GetRWFilteredDepthTexture(C)[DispatchID] = SumDepth / max(SumWeight, 1e-6f);
+	float FilteredDepth = SumDepth / max(SumWeight, 1e-6f);
+	GetRWFilteredDepthTexture(C)[DispatchID] = FilteredDepth;
+	float ZDepth = FilteredDepth == 0 ? -1 : LinearToZDepth(C, FilteredDepth);
+	GetRWZDepthTexture(C)[DispatchID] = ZDepth;
+}
 
+Texture2D<float> g_InNearHZBTexture;
+RWTexture2D<float> g_OutRWNearHZBTexture;
+
+[numthreads(TILE_SIZE, TILE_SIZE, 1)]
+void GenerateNearHZB (uint2 DispatchID : SV_DispatchThreadID) {
+	CameraDescription C = GetCameraDescription();
+	uint2 Dimensions = 0;
+	g_InNearHZBTexture.GetDimensions(Dimensions.x, Dimensions.y);
+	if(any(DispatchID >= Dimensions)) return;
+	float4 ZDepths = g_InNearHZBTexture.GatherRed(g_PointClampSampler, DispatchID * 2);
+	// Filter invalid depth values
+	ZDepths = select(ZDepths < 0, 1.f.xxxx, ZDepths);
+	float  MinZDepth = min(
+		min(ZDepths.x, ZDepths.y),
+		min(ZDepths.z, ZDepths.w)
+	);
+	g_OutRWNearHZBTexture[DispatchID] = MinZDepth;
 }
 
 float TapDepthFiltered (CameraDescription C, int2 TapCoords) {
@@ -347,7 +368,8 @@ void ReconstructNormals (uint2 DispatchID : SV_DispatchThreadID) {
 [numthreads(WAVE_SIZE, 1, 1)]
 void TraceRaysInScreenSpace (uint DispatchID : SV_DispatchThreadID) {
 	if(DispatchID >= g_RWRayToTraceCountBuffer[0]) return;
-	RayToTrace Ray = FetchRayToTrace(DispatchID, UB.TraceRayMaxT);
+	int RayIndex = g_RWRayToTraceListBuffer[DispatchID];
+	RayToTrace Ray = FetchRayToTrace(RayIndex, UB.RT_MaxTraceDistance);
 	CameraDescription C = GetCameraDescription();
 	
 	float3 OriginUVW   = TransformPointWithPerspectiveDivide(C.ProjectionView, Ray.Origin);
@@ -404,7 +426,7 @@ void TraceRaysInScreenSpace (uint DispatchID : SV_DispatchThreadID) {
 			DispatchID % 1024,
 			DispatchID / 1024
 		) + 0.5f.xx;
-		float Noise = InterleavedGradientNoise(NoiseUV, 0);
+		float Noise = InterleavedGradientNoise(NoiseUV, UB.FrameIndex);
 		// No vignetting for screen traces for now.
 		if (bHit)
 		{
@@ -414,7 +436,7 @@ void TraceRaysInScreenSpace (uint DispatchID : SV_DispatchThreadID) {
 				float PrevZDepth  = HistoryUVW.z;
 
 				// Lookup the actual depth at the same screen position last frame
-				float HistoryZDepth = GetHistoryZDepthTexture(C).SampleLevel(g_PointClampSampler, HistoryUVW.xy, 0).x;
+				float HistoryZDepth = GetPreviousZDepthTexture(C).SampleLevel(g_PointClampSampler, HistoryUVW.xy, 0).x;
 
 				bHit = abs(HistoryZDepth - PrevZDepth) < RelativeTexelThickness * 0.5f * lerp(.5f, 2.0f, Noise);
 			}
@@ -422,32 +444,33 @@ void TraceRaysInScreenSpace (uint DispatchID : SV_DispatchThreadID) {
 
 		if (bHit)
 		{
-			float2 HitHistoryScreenUV = HitHistoryScreenPosition.xy * PrevScreenPositionScaleBias.xy + PrevScreenPositionScaleBias.zw;
-			HitHistoryScreenUV = clamp(HitHistoryScreenUV, PrevSceneColorBilinearUVMin, PrevSceneColorBilinearUVMax);
-			float3 Lighting = SampleScreenColor(PrevSceneColorTexture, GlobalPointClampedSampler, HitHistoryScreenUV).xyz * PrevSceneColorPreExposureCorrection;
-
-			Lighting += GetSkylightLeaking(RayWorldDirection, HitDistance) * View.PreExposure;
-
-			#if DEBUG_VISUALIZE_TRACE_TYPES
-				RWTraceRadiance[TraceBufferCoord] = float3(.5f, 0, 0) * View.PreExposure;
-			#else
-				RWTraceRadiance[TraceBufferCoord] = QuantizeForFloatRenderTarget(Lighting, Noise);
-			#endif
-
-			{
-				float HitSceneDepth = ConvertFromDeviceZ(HitUVz.z);
-				float3 HitTranslatedWorldPosition = mul(float4(GetScreenPositionForProjectionType(HitScreenPosition, HitSceneDepth), HitSceneDepth, 1), View.ScreenToTranslatedWorld).xyz;
-				//Note: this will be affected by TAA jitter, should use GetHistoryScreenPositionIncludingTAAJitter instead but costs too much
-				float3 HitWorldVelocity = HitTranslatedWorldPosition - GetPrevTranslatedWorldPosition(HitHistoryScreenPosition);
-
-				bFastMoving = IsTraceMoving(TranslatedWorldPosition, SceneDepth, ScreenProbeAtlasCoord, HitTranslatedWorldPosition, HitWorldVelocity);
-			}
+			float3 HistoryUVW = ReprojectToHistoryUVWFromUVW(C, HitUVW);
+			float3 Radiance = GetPreviousRadianceTexture(C).SampleLevel(g_PointClampSampler, HistoryUVW.xy, 0).xyz;
+			g_RWRayToTraceResultBuffer[DispatchID] = Radiance;
 		}
 	}
 
-	if (bHit || bWriteDepthOnMiss)
+	if (bHit)
 	{
-		WriteTraceHit(TraceBufferCoord, HitDistance, bHit, bFastMoving, /*bReachedRadianceCache*/ false);
+		WriteRayTraceFlags(DispatchID, bHit, HitDistance);
+	}
+}
+
+[numthreads(WAVE_SIZE, 1, 1)]
+void CompactRayTraces (uint DispatchID : SV_DispatchThreadID) {
+	if(DispatchID >= g_RWRayToTraceCountBuffer[0]) return;
+	int RayIndex = g_RWRayToTraceListBuffer[DispatchID];
+	RayToTrace Ray = FetchRayToTrace(RayIndex, UB.RT_MaxTraceDistance);
+	if(!Ray.bHit) {
+		int RayCount = WaveActiveCountBits(1);
+		int RayWarpRank  = WavePrefixCountBits(1);
+		int RayBaseRank = 0;
+		if(WaveIsFirstLane()) {
+			InterlockedAdd(g_RWCompactedRayToTraceCountBuffer[0], RayCount, RayBaseRank);
+		}
+		RayBaseRank = WaveReadLaneFirst(RayBaseRank);
+		int NewRayRank = RayBaseRank + RayWarpRank;
+		g_RWCompactedRayToTraceListBuffer[NewRayRank] = RayIndex;
 	}
 }
 
@@ -512,6 +535,7 @@ void SpawnCameraRays (uint GroupID : SV_GroupID, uint LocalID : SV_GroupThreadID
 		RayToTrace Ray = SpawnCameraRay(UB.MainCamera, ScreenPosition);
 		Ray.Seed = UB.HWRT_StochasticRayTracingQuality * BlueNoise_Sample1D(TexelCoords, UB.FrameIndex);
 		int RayIndex = TexelCoords.x + TexelCoords.y * UB.ScreenDimensions.x;
+		g_RWRayToTraceListBuffer[RayIndex] = RayIndex;
 		WriteRayToTrace(RayIndex, Ray);
 	}
 }

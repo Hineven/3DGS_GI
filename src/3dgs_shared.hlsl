@@ -13,6 +13,8 @@ struct CameraDescription {
     // NDC: lhs, camera direction aligned to z, [-1, 1]*[-1, 1]*[0, 1]
     float4x4 Projection;
     float4x4 ProjectionView;
+    // Current UVW(UVZ) -> Previous UVW (UVZ)
+    float4x4 Reprojection;
 
     float3 Position;
     float  NearPlane;
@@ -34,7 +36,7 @@ struct CameraDescription {
     uint   Flags;
 
     float3 Up;
-    uint   HasHZB;
+    uint Padding0;
 
     float2 FilmTexelSize;
     // Size of each pixel on HZB buffer at mip 0
@@ -78,7 +80,14 @@ struct UniformBlock {
     float DepthAlphaClipValue;
 
     float HWRT_StochasticRayTracingQuality;
+    float RT_MaxTraceDistance;
+    float SSRT_MaxTraceDistance;
+    float SSRT_RelativeTexelThickness;
+    
+    uint  SSRT_MaxNumIterations;
     uint  Padding0;
+    uint  Padding1;
+    uint  Padding2;
 };
 
 struct Gaussian {

@@ -531,8 +531,6 @@ struct RayToTrace {
     float  RayTMax;
     // Specifies if at least 1 hit has been found
     bool   bHit;
-    // Specifies if the hit found is sure to be the closest hit
-    bool   bCompleted;
     // Ray seed when performing stochastic operations
     float  Seed;
 };
@@ -550,12 +548,11 @@ RayToTrace FetchRayToTrace (int RayIndex, float RayTMax) {
     RayToTrace Ray = (RayToTrace)0;
     Ray.Direction = Octahedron01ToUnitVector(UnpackUnorm16x2(g_RWRayToTraceDirectionBuffer[RayIndex]));
     Ray.Origin    = g_RWRayToTraceOriginBuffer[RayIndex];
+    uint Flags    = g_RWRayToTraceFlagsBuffer[RayIndex];
     Ray.RayTMax   = RayTMax;
-    Ray.RayTMin   = g_RWRayToTraceTMinBuffer[RayIndex];
-    uint Flags = g_RWRayToTraceFlagsBuffer[RayIndex];
-    Ray.bHit = (Flags & RAY_FLAG_HIT_FOUND_BIT) != 0;
-    Ray.bCompleted = (Flags & RAY_FLAG_COMPLETED_BIT) != 0;
-    Ray.Seed = float(Flags & RAY_FLAG_SEED_MASK) / (RAY_FLAG_SEED_MASK + 1);
+    Ray.RayTMin   = asfloat(Flags & RAY_FLAG_TMIN_MASK);
+    Ray.bHit      = (Flags & RAY_FLAG_HIT_BIT) != 0;
+    Ray.Seed      = g_RWRayToTraceSeedBuffer[RayIndex];
     return Ray;
 }
 
@@ -563,16 +560,14 @@ RayToTrace FetchRayToTrace (int RayIndex, float RayTMax) {
 void WriteRayToTrace (int RayIndex, RayToTrace Ray) {
     g_RWRayToTraceDirectionBuffer[RayIndex] = PackUnorm16x2(UnitVectorToOctahedron01(Ray.Direction));
     g_RWRayToTraceOriginBuffer[RayIndex] = Ray.Origin;
-    g_RWRayToTraceTMinBuffer[RayIndex] = Ray.RayTMin;
-    uint Flags = 0;
-    Flags |= Ray.bHit ? RAY_FLAG_HIT_FOUND_BIT : 0;
-    Flags |= Ray.bCompleted ? RAY_FLAG_COMPLETED_BIT : 0;
-    Flags |= uint(saturateDown(Ray.Seed) * (RAY_FLAG_SEED_MASK + 1));
+    uint Flags = ((uint)Ray.bHit * RAY_FLAG_HIT_BIT) | asuint(abs(Ray.RayTMin));
     g_RWRayToTraceFlagsBuffer[RayIndex] = Flags;
+    g_RWRayToTraceSeedBuffer[RayIndex] = Ray.Seed;
 }
 
-void WriteRayTraceTMin (int RayIndex, float TMin) {
-    g_RWRayToTraceTMinBuffer[RayIndex] = TMin;
+void WriteRayTraceFlags (int RayIndex, bool bHit, float TMin) {
+    uint Flags = ((uint)bHit * RAY_FLAG_HIT_BIT) | asuint(abs(TMin));
+    g_RWRayToTraceFlagsBuffer[RayIndex] = Flags;
 }
 
 float4 FetchRayTraceResult (int RayIndex) {
@@ -751,6 +746,24 @@ RWTexture2D<float> GetRWFilteredDepthTexture (CameraDescription C) {
     return g_RW_GFilteredDepthTexture;
 }
 
+Texture2D<float> GetZDepthTexture (CameraDescription C) {
+    // TODO meshcards
+    return g_GZDepthTexture;
+}
+
+RWTexture2D<float> GetRWZDepthTexture (CameraDescription C) {
+    // TODO meshcards
+    return g_RW_GZDepthTexture;
+}
+
+Texture2D<float> GetPreviousZDepthTexture (CameraDescription C) {
+    return g_PreviousZDepthTexture;
+}
+
+Texture2D<float> GetNearHZBTexture (CameraDescription C) {
+    return g_NearHZBTexture;
+}
+
 Texture2D<float4> GetRadianceTexture (CameraDescription C) {
     // TODO meshcards
     return g_Radiance;
@@ -759,6 +772,10 @@ Texture2D<float4> GetRadianceTexture (CameraDescription C) {
 RWTexture2D<float4> GetRWRadianceTexture (CameraDescription C) {
     // TODO meshcards
     return g_RW_Radiance;
+}
+
+Texture2D<float4> GetPreviousRadianceTexture (CameraDescription C) {
+    return g_PreviousRadiance;
 }
 
 float3 RecoverWorldSpacePosition (CameraDescription C, float2 FilmPosition, float LinearDepth) {
@@ -806,6 +823,10 @@ float InterleavedGradientNoise( float2 uv, float FrameId )
 
     const float3 magic = float3( 0.06711056f, 0.00583715f, 52.9829189f );
     return frac(magic.z * frac(dot(uv, magic.xy)));
+}
+
+float3 ReprojectToHistoryUVWFromUVW (CameraDescription C, float3 UVW) {
+    return TransformPointWithPerspectiveDivide(C.Reprojection, UVW);
 }
 
 #endif // INC_3DGS_HLSL

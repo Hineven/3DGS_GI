@@ -40,18 +40,18 @@ float2 LineBoxIntersect(float3 RayOrigin, float3 RayEnd, float3 BoxMin, float3 B
 // Conventions are consistent with my codebase.
 void ScreenSpaceRayTrace (
     CameraDescription C,
-    Texture2D ZDepthTexture,
-    Texture2D NearHZBTexture,
+    Texture2D<float> ZDepthTexture,
+    Texture2D<float> NearHZBTexture,
     float3 RayWorldOrigin,
     float3 RayWorldDirection,
     float  MaxTraceDistance,
     int    MaxNumIterations,
     float  RelTexelThickness,
     int    MinWarpOccupancy,
-    inout  bool bHit,                   // If a trustworthy hit is found
-    inout float3 OutHitUVZ,
-    inout float3 OutLastVisibleUVZ,
-    inout float  OutHitTileZ
+    inout  bool   bHit,                   // If a trustworthy hit is found
+    inout  float3 OutHitUVZ,
+    inout  float3 OutLastVisibleUVZ,
+    inout  float  OutHitTileZ
 ) {
     // UV + Linear Depth
     float3 RayStartUVW;

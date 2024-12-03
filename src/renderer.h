@@ -53,14 +53,14 @@ void DestroyKernels ();
 
         GfxBuffer active_gaussian_color;
 
-        GfxBuffer ray_to_trace_count;
+        GfxBuffer ray_to_trace_count[2];
+        GfxBuffer ray_to_trace_list[2];
         GfxBuffer ray_to_trace_direction;
         GfxBuffer ray_to_trace_origin;
-        GfxBuffer ray_to_trace_t_max;
+        GfxBuffer ray_to_trace_seed;
         GfxBuffer ray_to_trace_flags;
 
         GfxBuffer ray_to_trace_result;
-        GfxBuffer ray_to_trace_hit_t;
 
         GfxBuffer UB;
     } buf_ {};
@@ -78,10 +78,15 @@ void DestroyKernels ();
         // unorm8x4
         GfxTexture G_normal;
         // Full precision R32 depth (filtered from R16 linear depth)
+        // 0 for infinitely far
         GfxTexture G_filtered_depth;
+        // Z depth ([0, 1] range, -1 for infinitely far)
+        GfxTexture G_zdepth[2];
+        // Min hi-z buffer
+        GfxTexture near_HZB;
 
         // fp16x4
-        GfxTexture radiance;
+        GfxTexture radiance[2];
 //        GfxTexture output;
     } tex_ {};
 
@@ -98,6 +103,7 @@ void DestroyKernels ();
         GfxKernel ResolveGBuffers;
         GfxKernel FilterDepth;
         GfxKernel ReconstructNormals;
+        GfxKernel TraceRaysInScreenSpace;
         GfxKernel FinalComposition;
 
         // Trace shading rays
@@ -162,6 +168,8 @@ void DestroyKernels ();
     bool should_build_acceleration_structure_ {true};
 
     bool need_reload_shaders_ {false};
+
+    UniformBlock previous_UB_;
 };
 
 #endif //INC_3DGS_ADVGI_RENDERER_H

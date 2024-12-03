@@ -220,7 +220,10 @@ glm::mat4x4 Camera::GetProjectionMatrix () const {
     return projection_matrix;
 }
 
-CameraDescription Camera::PackDescription(int film_width, int film_height) const {
+CameraDescription Camera::PackDescription(
+    int film_width, int film_height,
+    const CameraDescription & prev_description
+) const {
     auto aspect = (double)film_width / film_height;
     auto tan_fov_y = tan(fov_y / 2.0);
     auto two_tan_fov_y = float(tan_fov_y * 2.0);
@@ -238,6 +241,9 @@ CameraDescription Camera::PackDescription(int film_width, int film_height) const
     ret.View = GetViewMatrix();
     ret.Projection = GetProjectionMatrix();
     ret.ProjectionView = ret.Projection * ret.View;
+    ret.Reprojection = glm::mat4(
+        glm::dmat4(prev_description.ProjectionView) * glm::inverse(glm::dmat4(ret.ProjectionView))
+    );
 
     ret.Position = position;
     ret.NearPlane = near;
@@ -255,6 +261,10 @@ CameraDescription Camera::PackDescription(int film_width, int film_height) const
     ret.Flags = 0;
 
     ret.Up = axis_up;
+    ret.Padding0 = 0;
+
+    ret.FilmTexelSize = 1.f / glm::vec2(film_width, film_height);
+    ret.HZBBaseTexelSize = 2.f * ret.FilmTexelSize;
 
     return ret;
 }

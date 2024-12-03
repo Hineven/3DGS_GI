@@ -44,12 +44,12 @@ struct Trace3DGSShadowPayload {
 [shader("raygeneration")]
 void Trace3DGSRaygen ()
 {
-    int RayIndex = DispatchRaysIndex().x;
+    int RayIndex = g_RWRayToTraceListBuffer[DispatchRaysIndex().x];
     if(RayIndex >= g_RWRayToTraceCountBuffer[0]) return ;
     Trace3DGSPayload Payload;
     RayDesc Ray;
     {
-        RayToTrace RayData = FetchRayToTrace(RayIndex, UB.MaxRayTraceT);
+        RayToTrace RayData = FetchRayToTrace(RayIndex, UB.RT_MaxTraceDistance);
         Ray.Origin = RayData.Origin;
         Ray.Direction = RayData.Direction;
         Ray.TMin = RayData.RayTMin;
@@ -159,12 +159,12 @@ void Trace3DGSAnyHit (inout Trace3DGSPayload Payload, in BuiltInTriangleIntersec
 [shader("raygeneration")]
 void Trace3DGSShadowRaygen ()
 {
-    int RayIndex = DispatchRaysIndex().x;
+    int RayIndex = g_RWRayToTraceListBuffer[DispatchRaysIndex().x];
     if(RayIndex >= g_RWRayToTraceCountBuffer[0]) return ;
     Trace3DGSShadowPayload Payload = (Trace3DGSShadowPayload) 0;
     RayDesc Ray;
     {
-        RayToTrace RayData = FetchRayToTrace(RayIndex, UB.MaxRayTraceT);
+        RayToTrace RayData = FetchRayToTrace(RayIndex, UB.RT_MaxTraceDistance);
         Ray.Origin = RayData.Origin;
         Ray.Direction = RayData.Direction;
         Ray.TMin = RayData.RayTMin;
@@ -186,7 +186,8 @@ void Trace3DGSShadowRaygen ()
     );
     
     // Write the result to the output buffer
-    g_RWRayToTraceHitTBuffer[RayIndex] = Payload.HitDist;
+    bool bHit = Payload.HitDist != 0;
+    WriteRayTraceFlags(RayIndex, bHit, Payload.HitDist);
 }
 
 

@@ -12,7 +12,7 @@
 #endif
 
 // Maximum number of closest hits to cache per ray trace.
-// Consistent with the paper.
+// Consistent with the 3DGS ray tracing paper.
 #define HIT_BUFFER_SIZE 16
 
 // Output the colored gaussians in the output channel.
@@ -30,6 +30,7 @@
 // #define OUTPUT_PBR_G_BUFFER
 
 // Use depth to reconstruct the normals, instead of rendering them directly
+// Controlled by the renderer.
 // #define RECONSTRUCT_NORMALS_FROM_DEPTH
 
 // Acceleration structure for hardware ray tracing
@@ -116,28 +117,27 @@ RWStructuredBuffer<float3>  g_RWActiveGaussianColorBuffer;
 // States of rays to be traced (or during tracing)
 // Number of rays to be traced.
 RWStructuredBuffer<uint>   g_RWRayToTraceCountBuffer;
+RWStructuredBuffer<uint>   g_RWCompactedRayToTraceCountBuffer;
+// Active ray indices to be traced
+RWStructuredBuffer<uint>   g_RWRayToTraceListBuffer;
+RWStructuredBuffer<uint>   g_RWCompactedRayToTraceListBuffer;
 // Octahedron encoded ray direction
 RWStructuredBuffer<uint>   g_RWRayToTraceDirectionBuffer;
 // Ray origins
 RWStructuredBuffer<float3> g_RWRayToTraceOriginBuffer;
-// Min hit time of the ray to trace
-RWStructuredBuffer<float>  g_RWRayToTraceTMinBuffer;
-// Ray flags
+// Random number seed of the ray
+RWStructuredBuffer<float>  g_RWRayToTraceSeedBuffer;
+// Ray flags, including the hit flag and TMin
 RWStructuredBuffer<uint>   g_RWRayToTraceFlagsBuffer;
 
-// The ray is completed. A closest hit is found or nothing is found in the range.
-#define RAY_FLAG_COMPLETED_BIT 0x80000000u
-// At least 1 hit is found along the ray
-#define RAY_FLAG_HIT_FOUND_BIT 0x40000000u
-// The lower 23 bits packs the seed of the ray
-#define RAY_FLAG_SEED_MASK (0x7fffffu)
+// We found a closest hit and the ray is completed tracing.
+#define RAY_FLAG_HIT_BIT 0x80000000u
+// The lower 31 bits packs the seed of the ray (unsigned float)
+#define RAY_FLAG_TMIN_MASK (0x3fffffffu)
 
 // Keep the result (rgba) of the traced ray, RGBA16 Packed
-// Only written to in shading ray tracing
+// Only written to in shading ray tracing, used to visualize the ray tracing scene.
 RWStructuredBuffer<uint2> g_RWRayToTraceResultBuffer;
-// Hit T values for traced shadow rays.
-// Only written to in shadow ray tracing
-RWStructuredBuffer<float> g_RWRayToTraceHitTBuffer;
 
 
 // G-Buffers
@@ -146,6 +146,7 @@ Texture2D<float4>        g_GColorTexture;
 RWTexture2D<float2>       g_RW_GDepthTexture;
 // Linear depth, not Z buffer depth
 Texture2D<float2>         g_GDepthTexture;
+
 // Roughness, nx, ny, unused
 RWTexture2D<float4>      g_RW_GMaterialTexture;
 Texture2D<float4>        g_GMaterialTexture;
@@ -153,9 +154,18 @@ RWTexture2D<float4>      g_RW_GNormalTexture;
 Texture2D<float4>        g_GNormalTexture;
 RWTexture2D<float>       g_RW_GFilteredDepthTexture;
 Texture2D<float>         g_GFilteredDepthTexture;
+
+// ZDepth is reconstructed from the filtered depth texture.
+RWTexture2D<float>        g_RW_GZDepthTexture;
+Texture2D<float>          g_GZDepthTexture;
+Texture2D<float>          g_PreviousZDepthTexture;
+// HiZ buffer
+Texture2D<float>          g_NearHZBTexture;
+
 // Output buffers
 RWTexture2D<float4>      g_RW_Radiance;
 Texture2D<float4>        g_Radiance;
+Texture2D<float4>        g_PreviousRadiance;
 
 
 // All non-resource uniforms

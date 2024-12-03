@@ -21,7 +21,10 @@ public:
     Camera() = default;
     ~Camera() = default;
 
-    CameraDescription PackDescription (int film_width, int film_height) const;
+    CameraDescription PackDescription (
+        int film_width, int film_height,
+        const CameraDescription & prev_description
+    ) const;
 
     glm::mat4x4 GetViewMatrix () const;
     glm::mat4x4 GetProjectionMatrix () const;
