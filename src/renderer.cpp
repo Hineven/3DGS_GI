@@ -450,7 +450,7 @@ void Renderer::Render() {
         CompactRayTraces();
 
         // Use hardware ray tracing (stochastic 3DGS shadow ray tracing) to deal with the rest
-        if (false) {
+        {
             auto section = TimedSection(*this, "HWRT Shadow Ray Trace");
 
             GenerateDispatchRaysIndirect(buf_.ray_to_trace_count[ray_compact_count & 1]);

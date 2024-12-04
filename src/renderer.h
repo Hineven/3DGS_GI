@@ -141,10 +141,10 @@ void DestroyKernels ();
         float HWRT_min_alpha_for_gaussian_evaluation {0.01f};
 
         // Pixels with alpha values higher than this threshold are considered opaque.
-        float opaque_threshold {0.05f};
+        float opaque_threshold {0.1f};
 
         // The clip value for depth rasterization. Making it smoother.
-        float depth_alpha_clip_value {0.08f};
+        float depth_alpha_clip_value {0.01f};
 
         // The quality of stochastic ray tracing [0, 1].
         // Lower values bring more biased but faster results.

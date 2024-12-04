@@ -90,10 +90,13 @@ struct UniformBlock {
     DeviceVirtualAddressRange RT_RayGenerationShaderRecord;
     
     DeviceVirtualAddressRangeAndStride RT_MissShaderTable;
-    DeviceVirtualAddressRangeAndStride RT_HitGroupTable;
-
-    DeviceVirtualAddressRangeAndStride RT_CallableShaderTable;
     uint2 Padding0;
+
+    DeviceVirtualAddressRangeAndStride RT_HitGroupTable;
+    uint2 Padding1;
+    
+    DeviceVirtualAddressRangeAndStride RT_CallableShaderTable;
+    uint2 Padding2;
 };
 
 struct Gaussian {

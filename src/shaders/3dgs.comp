@@ -558,6 +558,7 @@ void ResolveDirectLighting (uint DispatchID : SV_DispatchThreadID) {
 	// GetRWRadianceTexture(C)[PixelCoords] = float4(Ray.bHit, Ray.RayTMin, 0, PixelAlbedoA.w);
 	float  FreeTravelDistance = distance(Ray.Origin, UB.Debug_LightPosition);
 	// bool   bNotOccluded = Ray.RayTMin >= FreeTravelDistance;
+	// TODO jitter visibility test
 	float  ShadowFactor = Ray.RayTMin >= FreeTravelDistance * 0.9f;
 
 	float3 PixelAlbedo  = PixelAlbedoA.rgb;

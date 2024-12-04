@@ -140,7 +140,7 @@ RWStructuredBuffer<uint>   g_RWRayToTraceFlagsBuffer;
 // We found a closest hit and the ray is completed tracing.
 #define RAY_FLAG_HIT_BIT 0x80000000u
 // The lower 31 bits packs the seed of the ray (unsigned float)
-#define RAY_FLAG_TMIN_MASK (0x3fffffffu)
+#define RAY_FLAG_TMIN_MASK (0x7fffffffu)
 
 // Keep the result (rgba) of the traced ray, RGBA16 Packed
 // Only written to in shading ray tracing, used to visualize the ray tracing scene.
