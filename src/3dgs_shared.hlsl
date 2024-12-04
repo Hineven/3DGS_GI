@@ -84,10 +84,16 @@ struct UniformBlock {
     float SSRT_MaxTraceDistance;
     float SSRT_RelativeTexelThickness;
     
+    float3 Debug_LightPosition;
     uint  SSRT_MaxNumIterations;
-    uint  Padding0;
-    uint  Padding1;
-    uint  Padding2;
+
+    DeviceVirtualAddressRange RT_RayGenerationShaderRecord;
+    
+    DeviceVirtualAddressRangeAndStride RT_MissShaderTable;
+    DeviceVirtualAddressRangeAndStride RT_HitGroupTable;
+
+    DeviceVirtualAddressRangeAndStride RT_CallableShaderTable;
+    uint2 Padding0;
 };
 
 struct Gaussian {

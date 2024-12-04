@@ -20,14 +20,24 @@ void Swap(inout int a, inout int b) {
     b = temp;
 }
 
+float2 NDC2ToUV (float2 NDC2) {
+    return float2(0.5f, -0.5f) * NDC2 + 0.5f.xx;
+}
+
+float2 UVToNDC2 (float2 UV) {
+    return float2(2.f, -2.f) * (UV - 0.5f.xx);
+}
+
 // Convert NDC2 to screen position
 // NDC2: [-1, 1] -> Screen: [0, ScreenDimensions]
 float2 NDC2ToScreen(float2 NDC2) {
-    return 0.5f * UB.ScreenDimensions * (NDC2 + 1.0f);
+    float2 T = float2(NDC2.x, -NDC2.y);
+    return 0.5f * UB.ScreenDimensions * (T + 1.0f);
 }
 
 float2 NDC2ToFilm (CameraDescription C, float2 NDC2) {
-    return 0.5f * float2(C.FilmDimensions) * (NDC2 + 1.0f);
+    float2 T = float2(NDC2.x, -NDC2.y);
+    return 0.5f * float2(C.FilmDimensions) * (T + 1.0f);
 }
 
 // Convert screen position to NDC2
@@ -575,7 +585,8 @@ float4 FetchRayTraceResult (int RayIndex) {
 }
 
 float FetchRayTraceHitT (int RayIndex) {
-    return g_RWRayToTraceHitTBuffer[RayIndex];
+    uint Flags = g_RWRayToTraceFlagsBuffer[RayIndex];
+    return asfloat(Flags & RAY_FLAG_TMIN_MASK);
 }
 
 // Compute the ray t to evaluate max respose of a ray-gaussian intersection according to the paper.
@@ -628,7 +639,7 @@ float3 NDC2ToCameraDirection (CameraDescription Camera, float2 NDC2) {
 
 // Spawn a camera ray from the screen position
 RayToTrace SpawnCameraRay (CameraDescription Camera, float2 ScreenPosition) {
-    RayToTrace Ray = InitRayToTrace();
+    RayToTrace Ray = InitRayToTrace(UB.RT_MaxTraceDistance);
     Ray.Origin = Camera.Position;
     float2 NDC2 = ScreenToNDC2(ScreenPosition);
     float3 DirectionUnnormalized = NDC2ToCameraDirectionUnnormalized(Camera, NDC2);
@@ -727,7 +738,7 @@ Texture2D<float4>  GetNormalTexture (CameraDescription C) {
     return g_GNormalTexture;
 }
 
-float3 GetTexelNormalFromTexture (Texture2D<float4> NormalTexture, float2 UV) {
+float3 GetTexelNormalFromTextureUV (Texture2D<float4> NormalTexture, float2 UV) {
     return normalize(NormalTexture.SampleLevel(g_PointClampSampler, UV, 0.0f).xyz * 2.0f - 1.0f);
 }
 
@@ -778,12 +789,16 @@ Texture2D<float4> GetPreviousRadianceTexture (CameraDescription C) {
     return g_PreviousRadiance;
 }
 
-float3 RecoverWorldSpacePosition (CameraDescription C, float2 FilmPosition, float LinearDepth) {
-    float2 NDC2 = FilmToNDC2(C, FilmPosition);
+float3 RecoverWorldSpacePositionNDC2 (CameraDescription C, float2 NDC2, float LinearDepth) {
     float3 Direction = NDC2ToCameraDirectionUnnormalized(C, NDC2);
     float3 Origin = C.Position;
     float3 WorldSpacePosition = Origin + LinearDepth * Direction;
     return WorldSpacePosition;
+}
+
+float3 RecoverWorldSpacePosition (CameraDescription C, float2 FilmPosition, float LinearDepth) {
+    float2 NDC2 = FilmToNDC2(C, FilmPosition);
+    return RecoverWorldSpacePositionNDC2(C, NDC2, LinearDepth);
 }
 
 float  InterpolateBarycentrics (float A, float B, float C, float2 UV) {
@@ -796,7 +811,7 @@ float3 InterpolateBarycentrics (float3 A, float3 B, float3 C, float2 UV) {
 float LinearToZDepth (CameraDescription C, float LinearDepth) {
     float A = C.Projection[2][2];
     float B = C.Projection[2][3];
-    return 0.5 * (-A * LinearDepth + B) / LinearDepth + 0.5;
+    return (-A * LinearDepth + B) / LinearDepth;
 }
 
 float ZDepthToLinear (CameraDescription C, float ZDepth) {

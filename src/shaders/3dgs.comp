@@ -1,5 +1,7 @@
 #include "3dgs.hlsl"
 
+#include "material.hlsl"
+
 #include "ssrt.hlsl"
 
 float3 SH3Evaluate(float3 ViewDirection, SHCoefficents3 SH3, int Degree)
@@ -63,6 +65,20 @@ float3 SH3Evaluate(float3 ViewDirection, SHCoefficents3 SH3, int Degree)
 
 
 #ifndef USING_3DGS_RT
+
+[numthreads(1, 1, 1)]
+void GenerateDispatchRaysIndirect () {
+	DispatchRaysIndirectCommand Cmd = (DispatchRaysIndirectCommand)0;
+	Cmd.RayGenerationShaderRecord = UB.RT_RayGenerationShaderRecord;
+	Cmd.MissShaderTable = UB.RT_MissShaderTable;
+	Cmd.HitGroupTable = UB.RT_HitGroupTable;
+	Cmd.CallableShaderTable = UB.RT_CallableShaderTable;
+	Cmd.Width  = g_RaysToDispatchCountBuffer[0];
+	Cmd.Height = 1;
+	Cmd.Depth  = 1;
+	g_RWDispatchRaysIndirectCommandBuffer[0] = Cmd;
+}
+
 [numthreads(1, 1, 1)]
 void GenerateDispatchIndirect () {
 	DispatchIndirectCommand Cmd = (DispatchIndirectCommand)0;
@@ -237,42 +253,48 @@ void FilterDepth (uint2 DispatchID : SV_DispatchThreadID) {
 	if(IsOutOfFilm(C, DispatchID)) return;
 	float SumWeight = 0;
 	float SumDepth  = 0;
+	bool  bTransparent = false;
 	for(int dx = -1; dx <= 1; dx++) {
 		for(int dy = -1; dy <= 1; dy++) {
 			int2 TapCoords = DispatchID + int2(dx, dy);
 			if(IsOutOfFilm(C, TapCoords)) continue;
 			float Depth  = TapDepth(C, TapCoords);
 			float Opacity = GetColorTexture(C).Load(int3(TapCoords, 0)).w;
-			if(Opacity < UB.OpaqueThreshold) continue;
+			if(Opacity < UB.OpaqueThreshold) {
+				if(dx == 0 && dy == 0) {
+					bTransparent = true;
+				}
+				continue;
+			}
 			float Weight = Opacity * (1.f / (1 + abs(dx) + abs(dy)));
 			SumWeight += Weight;
 			SumDepth  += Depth * Weight;
 		}
 	}
-	if(SumWeight <= UB.OpaqueThreshold) SumDepth = 0;
+	
+	if(SumWeight <= UB.OpaqueThreshold || bTransparent) SumDepth = 0;
 	float FilteredDepth = SumDepth / max(SumWeight, 1e-6f);
 	GetRWFilteredDepthTexture(C)[DispatchID] = FilteredDepth;
-	float ZDepth = FilteredDepth == 0 ? -1 : LinearToZDepth(C, FilteredDepth);
+	float ZDepth = FilteredDepth == 0 ? ZDEPTH_INF : LinearToZDepth(C, FilteredDepth);
 	GetRWZDepthTexture(C)[DispatchID] = ZDepth;
 }
 
 Texture2D<float> g_InNearHZBTexture;
-RWTexture2D<float> g_OutRWNearHZBTexture;
+RWTexture2D<float> g_OutNearHZBTexture;
 
 [numthreads(TILE_SIZE, TILE_SIZE, 1)]
 void GenerateNearHZB (uint2 DispatchID : SV_DispatchThreadID) {
 	CameraDescription C = GetCameraDescription();
 	uint2 Dimensions = 0;
 	g_InNearHZBTexture.GetDimensions(Dimensions.x, Dimensions.y);
-	if(any(DispatchID >= Dimensions)) return;
-	float4 ZDepths = g_InNearHZBTexture.GatherRed(g_PointClampSampler, DispatchID * 2);
-	// Filter invalid depth values
-	ZDepths = select(ZDepths < 0, 1.f.xxxx, ZDepths);
+	if(any(DispatchID * 2 >= Dimensions)) return;
+	float2 GatherUV = (DispatchID * 2 + 0.5f) / Dimensions;
+	float4 ZDepths = g_InNearHZBTexture.GatherRed(g_PointClampSampler, GatherUV);
 	float  MinZDepth = min(
 		min(ZDepths.x, ZDepths.y),
 		min(ZDepths.z, ZDepths.w)
 	);
-	g_OutRWNearHZBTexture[DispatchID] = MinZDepth;
+	g_OutNearHZBTexture[DispatchID] = MinZDepth;
 }
 
 float TapDepthFiltered (CameraDescription C, int2 TapCoords) {
@@ -363,6 +385,44 @@ void ReconstructNormals (uint2 DispatchID : SV_DispatchThreadID) {
 // 	float3 Depth012  = 
 // }
 
+[numthreads(TILE_SIZE, TILE_SIZE, 1)]
+void SampleLightRays (uint2 DispatchID : SV_DispatchThreadID) {
+	CameraDescription C = GetCameraDescription();
+	if(IsOutOfFilm(C, DispatchID)) return;
+	// Just simply sample from a point light source
+	// TODO real light sample
+	float3 LightPosition = UB.Debug_LightPosition;
+	float2 FilmPosition = DispatchID + 0.5f.xx;
+	float  LinearDepth  = GetFilteredDepthTexture(C).Load(int3(DispatchID, 0)).r;
+	// Empty pixel
+	if(LinearDepth == 0) {
+		return ;
+	}
+	float3 Origin = RecoverWorldSpacePosition(C, FilmPosition, LinearDepth);
+	float3 Direction = normalize(LightPosition - Origin);
+	// Direction = float3(0, 0, 1);
+	
+	// Allocate rays
+	int RayIndex = 0;
+	{
+		int RayIndexBase = 0;
+		int RayWarpCount = WaveActiveCountBits(1);
+		int RayWarpRank  = WavePrefixCountBits(1);
+		if(WaveIsFirstLane()) {
+			InterlockedAdd(g_RWRayToTraceCountBuffer[0], RayWarpCount, RayIndexBase);
+		}
+		RayIndexBase = WaveReadLaneFirst(RayIndexBase);
+		RayIndex = RayIndexBase + RayWarpRank;
+	}
+
+	RayToTrace Ray = InitRayToTrace(UB.RT_MaxTraceDistance);
+	Ray.Origin = Origin;
+	Ray.Direction = Direction;
+	Ray.Seed = BlueNoise_Sample1D(DispatchID, UB.FrameIndex);
+	WriteRayToTrace(RayIndex, Ray);
+	g_RWRayToTraceListBuffer[RayIndex] = RayIndex;
+}
+
 // Compound ray tracing. Trace rays in screen space first to cull the easy rays 
 // and then trace the rest of the rays with 3DGS HWRT.
 [numthreads(WAVE_SIZE, 1, 1)]
@@ -373,22 +433,26 @@ void TraceRaysInScreenSpace (uint DispatchID : SV_DispatchThreadID) {
 	CameraDescription C = GetCameraDescription();
 	
 	float3 OriginUVW   = TransformPointWithPerspectiveDivide(C.ProjectionView, Ray.Origin);
-	float3 TexelNormal = GetTexelNormalFromTexture(GetNormalTexture(C), OriginUVW.xy);
+	OriginUVW.xy = NDC2ToUV(OriginUVW.xy);
+	float3 TexelNormal = normalize(
+		2 * GetNormalTexture(C).SampleLevel(g_PointClampSampler, OriginUVW.xy, 0).xyz - 1
+	);
 
 	float NormalBias = 0;
 	// Bias along the normal to avoid self-intersecting camera facing scene depth texels
 	// HZB traversal uses point filtering, so scene depth texels stick out from the plane they are representing
 	{
 		float2 CornerUV = OriginUVW.xy + .5f * C.FilmTexelSize;
-		float3 CornerWorldPosition = RecoverWorldSpacePosition(C, CornerUV, ZDepthToLinear(C, OriginUVW.z));
+		float3 CornerWorldPosition = RecoverWorldSpacePositionNDC2(C, UVToNDC2(CornerUV), ZDepthToLinear(C, OriginUVW.z));
 		// Project texel corner onto normal
 		NormalBias = abs(dot(CornerWorldPosition - Ray.Origin, TexelNormal)) * 2;
 	}
 
 	float3 BiasedOrigin = Ray.Origin + NormalBias * TexelNormal;
 	float3 RayStartUVW  = TransformPointWithPerspectiveDivide(C.ProjectionView, BiasedOrigin);
+	RayStartUVW.xy = NDC2ToUV(RayStartUVW.xy);
 	// Skip screen traces if the normal bias pushed our starting point off-screen, as TraceScreen() doesn't handle this
-	if (any(RayStartUVW.xy < -1) || any(RayStartUVW.xy > 1)) {
+	if (any(RayStartUVW.xy < 0) || any(RayStartUVW.xy >= 1)) {
 		return;
 	}
 	
@@ -406,6 +470,7 @@ void TraceRaysInScreenSpace (uint DispatchID : SV_DispatchThreadID) {
 		GetNearHZBTexture(C),
 		BiasedOrigin,
 		Ray.Direction,
+		// normalize(float3(0, 1, 1)),
 		MaxTraceDistance, 
 		UB.SSRT_MaxNumIterations,
 		RelativeTexelThickness,
@@ -416,44 +481,41 @@ void TraceRaysInScreenSpace (uint DispatchID : SV_DispatchThreadID) {
 		Unused
 	);
 
-	bool bFastMoving = false;
-	float3 HitWorldPosition = RecoverWorldSpacePosition(C, HitUVW.xy, ZDepthToLinear(C, HitUVW.z));
+	float3 HitWorldPosition = RecoverWorldSpacePositionNDC2(C, UVToNDC2(HitUVW.xy), ZDepthToLinear(C, HitUVW.z));
 	float HitDistance = min(length(HitWorldPosition - BiasedOrigin), MaxTraceDistance);
 
 	if (bHit)
 	{
 		float2 NoiseUV = float2(
-			DispatchID % 1024,
-			DispatchID / 1024
+			RayIndex % 1024,
+			RayIndex / 1024
 		) + 0.5f.xx;
 		float Noise = InterleavedGradientNoise(NoiseUV, UB.FrameIndex);
 		// No vignetting for screen traces for now.
-		if (bHit)
-		{
-			float3 HistoryUVW = ReprojectToHistoryUVWFromUVW(C, HitUVW);
-			if(all(HistoryUVW.xy >= 0 && all(HistoryUVW.xy <= 1))) {
-				// Calculate the expected depth of the pixel last frame
-				float PrevZDepth  = HistoryUVW.z;
+		// if (bHit)
+		// {
+		// 	float3 HistoryUVW = ReprojectToHistoryUVWFromUVW(C, HitUVW);
+		// 	if(all(HistoryUVW.xy >= 0) && all(HistoryUVW.xy <= 1)) {
+		// 		// Calculate the expected depth of the pixel last frame
+		// 		float PrevZDepth  = HistoryUVW.z;
 
-				// Lookup the actual depth at the same screen position last frame
-				float HistoryZDepth = GetPreviousZDepthTexture(C).SampleLevel(g_PointClampSampler, HistoryUVW.xy, 0).x;
+		// 		// Lookup the actual depth at the same screen position last frame
+		// 		float HistoryZDepth = GetPreviousZDepthTexture(C).SampleLevel(g_PointClampSampler, HistoryUVW.xy, 0).x;
 
-				bHit = abs(HistoryZDepth - PrevZDepth) < RelativeTexelThickness * 0.5f * lerp(.5f, 2.0f, Noise);
-			}
-		}
+		// 		bHit = abs(HistoryZDepth - PrevZDepth) < RelativeTexelThickness * 0.5f * lerp(.5f, 2.0f, Noise);
+		// 	}
+		// }
 
-		if (bHit)
-		{
-			float3 HistoryUVW = ReprojectToHistoryUVWFromUVW(C, HitUVW);
-			float3 Radiance = GetPreviousRadianceTexture(C).SampleLevel(g_PointClampSampler, HistoryUVW.xy, 0).xyz;
-			g_RWRayToTraceResultBuffer[DispatchID] = Radiance;
-		}
+		// if (bHit)
+		// {
+		// 	float3 HistoryUVW = ReprojectToHistoryUVWFromUVW(C, HitUVW);
+		// 	float3 Radiance = GetPreviousRadianceTexture(C).SampleLevel(g_PointClampSampler, HistoryUVW.xy, 0).xyz;
+		// 	g_RWRayToTraceResultBuffer[RayIndex] = PackFp16x4Safe(float4(Radiance, 0));
+		// }
 	}
 
-	if (bHit)
-	{
-		WriteRayTraceFlags(DispatchID, bHit, HitDistance);
-	}
+	
+	WriteRayTraceFlags(RayIndex, bHit, HitDistance);
 }
 
 [numthreads(WAVE_SIZE, 1, 1)]
@@ -474,6 +536,39 @@ void CompactRayTraces (uint DispatchID : SV_DispatchThreadID) {
 	}
 }
 
+[numthreads(WAVE_SIZE, 1, 1)]
+void ResolveDirectLighting (uint DispatchID : SV_DispatchThreadID) {
+	CameraDescription C = GetCameraDescription();
+	if(DispatchID >= g_RWRayCountBuffer[0]) return;
+
+	// Splat ray origins onto the film
+	int RayIndex = DispatchID;
+	RayToTrace Ray = FetchRayToTrace(RayIndex, UB.RT_MaxTraceDistance);
+	float3 Homogeneous  = TransformPointWithPerspectiveDivide(C.ProjectionView, Ray.Origin);
+	float2 FilmPosition = NDC2ToFilm(C, Homogeneous.xy);
+	int2   PixelCoords  = int2(FilmPosition);
+	
+	if(IsOutOfFilm(C, PixelCoords)) return;
+
+	float3 PixelNormal  = normalize(GetNormalTexture(C).Load(int3(PixelCoords, 0)).rgb * 2 - 1);
+	float4 PixelAlbedoA = GetColorTexture(C).Load(int3(PixelCoords, 0));
+
+	// Transparent
+	if(PixelAlbedoA.w < UB.OpaqueThreshold) return;
+	// GetRWRadianceTexture(C)[PixelCoords] = float4(Ray.bHit, Ray.RayTMin, 0, PixelAlbedoA.w);
+	float  FreeTravelDistance = distance(Ray.Origin, UB.Debug_LightPosition);
+	// bool   bNotOccluded = Ray.RayTMin >= FreeTravelDistance;
+	float  ShadowFactor = Ray.RayTMin >= FreeTravelDistance * 0.9f;
+
+	float3 PixelAlbedo  = PixelAlbedoA.rgb;
+	float3 ViewDirection  = normalize(C.Position - Ray.Origin);
+	float3 LightDirection = Ray.Direction;
+	float3 LightRadiance = 0.5 * float3(5, 3.7, 3);
+	Material PixelMaterial = MakeMaterial(PixelNormal, PixelAlbedo);
+	float3 Radiance = LightRadiance * EvaluateBSDF(PixelMaterial, LightDirection, ViewDirection) * ShadowFactor;
+	GetRWRadianceTexture(C)[PixelCoords] = float4(Radiance, PixelAlbedoA.w);
+}
+
 // [numthreads(TILE_SIZE, TILE_SIZE, 1)]
 // void TemporalDenoise (uint2 DispatchID : SV_DispatchThreadID) {
 // 	if(DispatchID.x >= UB.ScreenDimensions.x || DispatchID.y >= UB.ScreenDimensions.y) return;
@@ -489,9 +584,9 @@ void FinalComposition (uint2 DispatchID : SV_DispatchThreadID) {
 	// TODO
 	// I simply copy the color buffer to the final buffer
 	// for now.
-	float4 RadianceW = GetRWColorTexture(C)[DispatchID];
+	float4 RadianceW = g_Radiance.Load(int3(DispatchID, 0));
 	if(UB.DebugMode == 1) {
-		
+		RadianceW = g_GColorTexture.Load(int3(DispatchID, 0));
     } else if(UB.DebugMode == 2) {
         RadianceW.rgb = g_GMaterialTexture.Load(int3(DispatchID, 0)).rrr;
     } else if(UB.DebugMode == 3) {

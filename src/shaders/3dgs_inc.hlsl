@@ -5,6 +5,8 @@
 
 #define INVALID_U32 (0xffffffffu)
 
+#define ZDEPTH_INF (1.f + FLT_EPSILON)
+
 #ifndef WAVE_SIZE
 // Make code linting work
 #define WAVE_SIZE 32
@@ -83,6 +85,9 @@ StructuredBuffer<float3> g_GaussianNormalBuffer;
 // End of scene related stuff
 
 // Store indirect dispatch commands
+RWStructuredBuffer<DispatchRaysIndirectCommand> g_RWDispatchRaysIndirectCommandBuffer;
+StructuredBuffer<uint> g_RaysToDispatchCountBuffer;
+
 RWStructuredBuffer<DispatchIndirectCommand> g_RWDispatchIndirectCommandBuffer;
 StructuredBuffer<uint> g_ThreadsToDispatchCountBuffer;
 
@@ -115,6 +120,8 @@ RWStructuredBuffer<float3>  g_RWActiveGaussianColorBuffer;
 // Raytracing related stuff
 
 // States of rays to be traced (or during tracing)
+// Number of rays in total
+RWStructuredBuffer<uint>   g_RWRayCountBuffer;
 // Number of rays to be traced.
 RWStructuredBuffer<uint>   g_RWRayToTraceCountBuffer;
 RWStructuredBuffer<uint>   g_RWCompactedRayToTraceCountBuffer;

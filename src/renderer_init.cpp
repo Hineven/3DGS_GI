@@ -49,20 +49,26 @@ bool Renderer::CreateResources () {
 
     int max_num_rays = options_.max_num_rays;
 
-    buf_.ray_to_trace_count = gfxCreateBuffer<int>(gfx, 1);
-    buf_.ray_to_trace_count.setName("RayToTraceCount");
+    buf_.ray_count = gfxCreateBuffer<int>(gfx, 1);
+    buf_.ray_count.setName("RayCount");
+    buf_.ray_to_trace_count[0] = gfxCreateBuffer<int>(gfx, 1);
+    buf_.ray_to_trace_count[0].setName("RayToTraceCount0");
+    buf_.ray_to_trace_count[1] = gfxCreateBuffer<int>(gfx, 1);
+    buf_.ray_to_trace_count[1].setName("RayToTraceCount1");
+    buf_.ray_to_trace_list[0] = gfxCreateBuffer<uint>(gfx, max_num_rays);
+    buf_.ray_to_trace_list[0].setName("RayToTraceList0");
+    buf_.ray_to_trace_list[1] = gfxCreateBuffer<uint>(gfx, max_num_rays);
+    buf_.ray_to_trace_list[1].setName("RayToTraceList1");
     buf_.ray_to_trace_direction = gfxCreateBuffer<uint>(gfx, max_num_rays);
     buf_.ray_to_trace_direction.setName("RayToTraceDirection");
     buf_.ray_to_trace_origin = gfxCreateBuffer<glm::vec3>(gfx, max_num_rays);
     buf_.ray_to_trace_origin.setName("RayToTraceOrigin");
-    buf_.ray_to_trace_t_max = gfxCreateBuffer<float>(gfx, max_num_rays);
-    buf_.ray_to_trace_t_max.setName("RayToTraceTMax");
+    buf_.ray_to_trace_seed = gfxCreateBuffer<float>(gfx, max_num_rays);
+    buf_.ray_to_trace_seed.setName("RayToTraceSeed");
     buf_.ray_to_trace_flags = gfxCreateBuffer<uint>(gfx, max_num_rays);
     buf_.ray_to_trace_flags.setName("RayToTraceFlags");
     buf_.ray_to_trace_result = gfxCreateBuffer<uint2>(gfx, max_num_rays);
     buf_.ray_to_trace_result.setName("RayToTraceResult");
-    buf_.ray_to_trace_hit_t  = gfxCreateBuffer<float>(gfx, max_num_rays);
-    buf_.ray_to_trace_hit_t.setName("RayToTraceHitT");
 
     buf_.UB = gfxCreateBuffer<UniformBlock> (gfx, 2, nullptr, kGfxCpuAccess_Write);
     buf_.UB.setName("UniformBlock");
@@ -77,12 +83,22 @@ bool Renderer::CreateResources () {
     tex_.G_material.setName("G_material");
     tex_.G_normal = gfxCreateTexture2D(gfx, width, height, DXGI_FORMAT_R8G8B8A8_UNORM, 1, zero_clear_value);
     tex_.G_normal.setName("G_normal");
+    tex_.G_zdepth[0] = gfxCreateTexture2D(gfx, width, height, DXGI_FORMAT_R32_FLOAT, 1, zero_clear_value);
+    tex_.G_zdepth[0].setName("G_zdepth0");
+    tex_.G_zdepth[1] = gfxCreateTexture2D(gfx, width, height, DXGI_FORMAT_R32_FLOAT, 1, zero_clear_value);
+    tex_.G_zdepth[1].setName("G_zdepth1");
+    int num_mips = gfxCalculateMipCount(width, height);
+    assert(num_mips > 1);
+    tex_.near_HZB = gfxCreateTexture2D(gfx, divideAndRoundUp(width, 2), divideAndRoundUp(height, 2), DXGI_FORMAT_R32_FLOAT, num_mips - 1, zero_clear_value);
+    tex_.near_HZB.setName("NearHZB");
 
     tex_.G_filtered_depth = gfxCreateTexture2D(gfx, width, height, DXGI_FORMAT_R32_FLOAT, 1, zero_clear_value);
+    tex_.G_filtered_depth.setName("G_filtered_depth");
 
-
-    tex_.radiance = gfxCreateTexture2D(gfx, width, height, DXGI_FORMAT_R16G16B16A16_FLOAT, 1, zero_clear_value);
-
+    tex_.radiance[0] = gfxCreateTexture2D(gfx, width, height, DXGI_FORMAT_R16G16B16A16_FLOAT, 1, zero_clear_value);
+    tex_.radiance[0].setName("Radiance0");
+    tex_.radiance[1] = gfxCreateTexture2D(gfx, width, height, DXGI_FORMAT_R16G16B16A16_FLOAT, 1, zero_clear_value);
+    tex_.radiance[1].setName("Radiance1");
 //    tex_.output = gfxCreateTexture2D(gfx, width, height, DXGI_FORMAT_R8G8B8A8_UNORM);
 
     return true;
@@ -103,10 +119,14 @@ void Renderer::DestroyResources() {
     gfxDestroyBuffer(gfx, buf_.active_gaussian_quad_NDC_vector1);
     gfxDestroyBuffer(gfx, buf_.active_gaussian_color);
 
-    gfxDestroyBuffer(gfx, buf_.ray_to_trace_count);
+    gfxDestroyBuffer(gfx, buf_.ray_count);
+    gfxDestroyBuffer(gfx, buf_.ray_to_trace_count[0]);
+    gfxDestroyBuffer(gfx, buf_.ray_to_trace_count[1]);
+    gfxDestroyBuffer(gfx, buf_.ray_to_trace_list[0]);
+    gfxDestroyBuffer(gfx, buf_.ray_to_trace_list[1]);
     gfxDestroyBuffer(gfx, buf_.ray_to_trace_direction);
     gfxDestroyBuffer(gfx, buf_.ray_to_trace_origin);
-    gfxDestroyBuffer(gfx, buf_.ray_to_trace_t_max);
+    gfxDestroyBuffer(gfx, buf_.ray_to_trace_seed);
     gfxDestroyBuffer(gfx, buf_.ray_to_trace_flags);
     gfxDestroyBuffer(gfx, buf_.ray_to_trace_result);
     gfxDestroyBuffer(gfx, buf_.UB);
@@ -118,7 +138,8 @@ void Renderer::DestroyResources() {
     gfxDestroyTexture(gfx, tex_.G_material);
     gfxDestroyTexture(gfx, tex_.G_normal);
 
-    gfxDestroyTexture(gfx, tex_.radiance);
+    gfxDestroyTexture(gfx, tex_.radiance[0]);
+    gfxDestroyTexture(gfx, tex_.radiance[1]);
 //    gfxDestroyTexture(gfx, tex_.output);
 }
 
@@ -169,6 +190,8 @@ bool Renderer::CreateKernels () {
     {
         kernel_.GenerateRTMesh = gfxCreateComputeKernel(gfx, program_, "GenerateRTMesh", defines_c.get(), define_count);
 
+        kernel_.GenerateDispatchRaysIndirect = gfxCreateComputeKernel(gfx, program_, "GenerateDispatchRaysIndirect",
+                                                                     defines_c.get(), define_count);
         kernel_.GenerateDispatchIndirect = gfxCreateComputeKernel(gfx, program_, "GenerateDispatchIndirect",
                                                                   defines_c.get(), define_count);
         kernel_.GenerateDrawIndirect = gfxCreateComputeKernel(gfx, program_, "GenerateDrawIndirect",
@@ -181,7 +204,12 @@ bool Renderer::CreateKernels () {
                                                                 defines_c.get(), define_count);
         kernel_.ResolveGBuffers = gfxCreateComputeKernel(gfx, program_, "ResolveGBuffers", defines_c.get(), define_count);
         kernel_.FilterDepth  = gfxCreateComputeKernel(gfx, program_, "FilterDepth", defines_c.get(), define_count);
+        kernel_.GenerateNearHZB = gfxCreateComputeKernel(gfx, program_, "GenerateNearHZB", defines_c.get(), define_count);
         kernel_.ReconstructNormals = gfxCreateComputeKernel(gfx, program_, "ReconstructNormals", defines_c.get(), define_count);
+        kernel_.SampleLightRays    = gfxCreateComputeKernel(gfx, program_, "SampleLightRays", defines_c.get(), define_count);
+        kernel_.TraceRaysInScreenSpace = gfxCreateComputeKernel(gfx, program_, "TraceRaysInScreenSpace", defines_c.get(), define_count);
+        kernel_.CompactRayTraces = gfxCreateComputeKernel(gfx, program_, "CompactRayTraces", defines_c.get(), define_count);
+        kernel_.ResolveDirectLighting = gfxCreateComputeKernel(gfx, program_, "ResolveDirectLighting", defines_c.get(), define_count);
 
         kernel_.FinalComposition = gfxCreateComputeKernel(gfx, program_, "FinalComposition", defines_c.get(), define_count);
 
@@ -268,6 +296,7 @@ void Renderer::DestroyKernels () {
     auto & gfx = AppInternal::GetInstance().GetGfx();
     gfxDestroyKernel(gfx, kernel_.GenerateRTMesh);
 
+    gfxDestroyKernel(gfx, kernel_.GenerateDispatchRaysIndirect);
     gfxDestroyKernel(gfx, kernel_.GenerateDispatchIndirect);
     gfxDestroyKernel(gfx, kernel_.GenerateDrawIndirect);
 
@@ -276,7 +305,12 @@ void Renderer::DestroyKernels () {
     gfxDestroyKernel(gfx, kernel_.ProjectActiveGaussians);
     gfxDestroyKernel(gfx, kernel_.ResolveGBuffers);
     gfxDestroyKernel(gfx, kernel_.FilterDepth);
+    gfxDestroyKernel(gfx, kernel_.GenerateNearHZB);
     gfxDestroyKernel(gfx, kernel_.ReconstructNormals);
+    gfxDestroyKernel(gfx, kernel_.SampleLightRays);
+    gfxDestroyKernel(gfx, kernel_.TraceRaysInScreenSpace);
+    gfxDestroyKernel(gfx, kernel_.CompactRayTraces);
+    gfxDestroyKernel(gfx, kernel_.ResolveDirectLighting);
     gfxDestroyKernel(gfx, kernel_.FinalComposition);
 
     gfxDestroyKernel(gfx, kernel_.Trace3DGSRays);

@@ -57,21 +57,21 @@ void ScreenSpaceRayTrace (
     float3 RayStartUVW;
     {
         float3 Homogeneous = TransformPointWithPerspectiveDivide(C.ProjectionView, RayWorldOrigin);
-        RayStartUVW = float3(NDC2ToFilm(C, Homogeneous.xy), Homogeneous.z);
+        RayStartUVW = float3(NDC2ToUV(Homogeneous.xy), Homogeneous.z);
     }
     // UV + Linear Depth
     float3 RayEndUVW;
     {
         float3 ViewRayDirection  = TransformVector(ClipMatrix(C.View), RayWorldDirection);
-        float  OriginLinearDepth = mul(C.View, float4(RayWorldOrigin, 1.f)).z;
-        // Clamp the ray end to the far plane.
-		float RayEndWorldDistance = ViewRayDirection.z < 0.0 
-            ? min(-0.99f * OriginLinearDepth / ViewRayDirection.z, MaxTraceDistance)
+        float  NOriginLinearDepth = mul(C.View, float4(RayWorldOrigin, 1.f)).z;
+        // Clamp the ray end to the near plane, avoid bad homogenous coordinates
+		float RayEndWorldDistance = ViewRayDirection.z > 0.0 
+            ? min(0.99f * (- NOriginLinearDepth - C.NearPlane) / ViewRayDirection.z, MaxTraceDistance)
             : MaxTraceDistance;
 
 		float3 RayWorldEnd = RayWorldOrigin + RayWorldDirection * RayEndWorldDistance;
         float3 Homogeneous = TransformPointWithPerspectiveDivide(C.ProjectionView, RayWorldEnd);
-		RayEndUVW = float3(NDC2ToFilm(C, Homogeneous.xy), Homogeneous.z);
+		RayEndUVW = float3(NDC2ToUV(Homogeneous.xy), Homogeneous.z);
 
 		float2 ScreenEdgeIntersections = LineBoxIntersect(RayStartUVW, RayEndUVW, 0.xxx, 1.xxx);
 
@@ -112,8 +112,8 @@ void ScreenSpaceRayTrace (
 		float2 XYPlane = floor(CurrentUVW.xy * CurrentMipResolution) + FloorOffset;
 		XYPlane = XYPlane * CurrentMipTexelSize + UVOffset;
 		
-		float2 PlaneIntersectionTimes = (XYPlane - RayStartUVW.xy) / RayDirectionUVW.xy;
-		CurrentT   = min(PlaneIntersectionTimes.x, PlaneIntersectionTimes.y);
+		float2 PlaneIntersections = (XYPlane - RayStartUVW.xy) / RayDirectionUVW.xy;
+		CurrentT   = min(PlaneIntersections.x, PlaneIntersections.y);
 		CurrentUVW = RayStartUVW + CurrentT * RayDirectionUVW;
 	}
 
@@ -125,7 +125,7 @@ void ScreenSpaceRayTrace (
 	float LastAboveSurfaceT = CurrentT;
 
 	// Stackless HZB traversal
-	while (MipLevel >= 0 
+	while (MipLevel >= -1
 		&& Iteration < MaxNumIterations 
 		&& CurrentT < 1.0f
 #if SSRT_TERMINATE_ON_LOW_OCCUPANCY
@@ -142,25 +142,25 @@ void ScreenSpaceRayTrace (
 		float2 XYPlane = floor(CurrentUVW.xy * CurrentMipResolution) + FloorOffset;
 		XYPlane = XYPlane * CurrentMipTexelSize + UVOffset;
 
-		float TileRevZ;
+		float TileZ;
 
 		if(MipLevel < 0) {
             // Sample from full resolution depth buffer
-            TileRevZ = 1 - ZDepthTexture.SampleLevel(g_PointClampSampler, CurrentUVW.xy, 0).r;
+            TileZ = ZDepthTexture.SampleLevel(g_PointClampSampler, CurrentUVW.xy, 0).r;
         } else {
             // Sample from HZB
-			TileRevZ = 1 - NearHZBTexture.SampleLevel(g_PointClampSampler, CurrentUVW.xy, MipLevel).x;
+			TileZ = NearHZBTexture.SampleLevel(g_PointClampSampler, CurrentUVW.xy, MipLevel).r;
 		}
 
-		float3 BoundaryPlanes = float3(XYPlane, TileRevZ);
+		float3 BoundaryPlanes = float3(XYPlane, TileZ);
 
 		float3 PlaneIntersections = (BoundaryPlanes - RayStartUVW) / RayDirectionUVW;
-        // Do not intersect with the Z-plane when the ray is heading towards the camera
-		PlaneIntersections.z = RayDirectionUVW.z < 0 ? PlaneIntersections.z : 1.0f;
+        // Do not intersect with the Z-plane when the ray is heading toward the camera (may miss a closer hit)
+		PlaneIntersections.z = RayDirectionUVW.z > 0 ? PlaneIntersections.z : 1.0f;
         // Ray T used to update the current T
-		float UpdateT = min(PlaneIntersections.x, PlaneIntersections.y);
+		float  UpdateT = min(PlaneIntersections.x, PlaneIntersections.y);
 
-		bool bAboveSurface = CurrentUVW.z < (1 - TileRevZ);
+		bool bAboveSurface = CurrentUVW.z < TileZ;
 		bool bSkippedTile  = bAboveSurface;
 
         UpdateT = min(UpdateT, PlaneIntersections.z);
@@ -181,11 +181,11 @@ void ScreenSpaceRayTrace (
     // Somehow went below the surface
 	if (MipLevel < -1 && CurrentT < 1.0f)
 	{
-		float TileRevZ = ZDepthTexture.SampleLevel(g_PointClampSampler, CurrentUVW.xy, 0).r;
+		float TileZ = ZDepthTexture.SampleLevel(g_PointClampSampler, CurrentUVW.xy, 0).r;
 
-		OutHitTileZ = TileRevZ;
+		OutHitTileZ = TileZ;
 
-		float HitLinearDepth = ZDepthToLinear(C, 1 - TileRevZ);
+		float HitLinearDepth = ZDepthToLinear(C, TileZ);
 		float CurLinearDepth = ZDepthToLinear(C, CurrentUVW.z);
 
 		bHit = (CurLinearDepth - HitLinearDepth) < RelTexelThickness * max(HitLinearDepth, .00001f);

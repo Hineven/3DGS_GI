@@ -53,6 +53,7 @@ void DestroyKernels ();
 
         GfxBuffer active_gaussian_color;
 
+        GfxBuffer ray_count;
         GfxBuffer ray_to_trace_count[2];
         GfxBuffer ray_to_trace_list[2];
         GfxBuffer ray_to_trace_direction;
@@ -94,6 +95,7 @@ void DestroyKernels ();
         // Used to write the vertex/index buffer for ray traced 3dgs proxy meshes.
         GfxKernel GenerateRTMesh;
 
+        GfxKernel GenerateDispatchRaysIndirect;
         GfxKernel GenerateDispatchIndirect;
         GfxKernel GenerateDrawIndirect;
 
@@ -102,8 +104,12 @@ void DestroyKernels ();
         GfxKernel ProjectActiveGaussians;
         GfxKernel ResolveGBuffers;
         GfxKernel FilterDepth;
+        GfxKernel GenerateNearHZB;
         GfxKernel ReconstructNormals;
+        GfxKernel SampleLightRays;
         GfxKernel TraceRaysInScreenSpace;
+        GfxKernel CompactRayTraces;
+        GfxKernel ResolveDirectLighting;
         GfxKernel FinalComposition;
 
         // Trace shading rays
@@ -151,6 +157,8 @@ void DestroyKernels ();
         bool reconstruct_normals {false};
 
         DXGI_FORMAT depth_format {DXGI_FORMAT_R16G16_FLOAT};
+
+        float3 debug_light_position {0, 0, 0};
 
         uint debug_mode {0};
     } options_;
