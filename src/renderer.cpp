@@ -73,6 +73,10 @@ void Renderer::RenderUI () {
         if (ImGui::Checkbox("Reconstruct Normals", &options_.reconstruct_normals)) {
             need_reload_shaders_ = true;
         }
+        ImGui::Checkbox("SSRT Enable", &options_.SSRT_enable);
+        ImGui::SliderFloat("SSRT Max Trace Distance", &options_.SSRT_max_trace_distance, 0.f, 1.f);
+        ImGui::SliderFloat("SSRT Relative Texel Thickness", &options_.SSRT_relative_texel_thickness, 0.001f, 0.015f);
+        ImGui::Checkbox("HWRT Enable", &options_.HWRT_enable);
         ImGui::SliderFloat("Debug Light X", &options_.debug_light_position.x, -10.f, 10.f);
         ImGui::SliderFloat("Debug Light Y", &options_.debug_light_position.y, -10.f, 10.f);
         ImGui::SliderFloat("Debug Light Z", &options_.debug_light_position.z, -10.f, 10.f);
@@ -124,8 +128,8 @@ void Renderer::Render() {
         float MaxTraceDistance = camera.far;
         UB.HWRT_StochasticRayTracingQuality = options_.stochastic_ray_tracing_quality;
         UB.RT_MaxTraceDistance              = MaxTraceDistance;
-        UB.SSRT_MaxTraceDistance            = MaxTraceDistance;
-        UB.SSRT_RelativeTexelThickness      = 0.02f;
+        UB.SSRT_MaxTraceDistance            = options_.SSRT_max_trace_distance;
+        UB.SSRT_RelativeTexelThickness      = options_.SSRT_relative_texel_thickness;
 
         UB.Debug_LightPosition              = options_.debug_light_position;
         UB.SSRT_MaxNumIterations            = 50; // Consistent with Lumen
@@ -137,8 +141,10 @@ void Renderer::Render() {
             (D3D12_GPU_VIRTUAL_ADDRESS_RANGE_AND_STRIDE *)&UB.RT_CallableShaderTable);
 
     }
-    gfxBufferGetData<UniformBlock>(gfx, buf_.UB)[frame_index_ & 1] = UB;
-    gfxProgramSetParameter(gfx, program_, "UB", buf_.UB);
+    uint32_t UB_stride = roundUp((uint32_t)sizeof(UniformBlock), 256u);
+    GfxBuffer UB_range = gfxCreateBufferRange(gfx, buf_.UB, UB_stride * gfxGetBackBufferIndex(gfx), sizeof(UniformBlock));
+    UB_range.setStride(UB_stride);
+    gfxBufferGetData<UniformBlock>(gfx, UB_range)[0] = UB;
 
     previous_UB_ = UB;
 
@@ -197,6 +203,8 @@ void Renderer::Render() {
     auto & samplers = AppInternal::GetInstance().GetSamplers();
     gfxProgramSetParameter(gfx, program_, "g_LinearClampSampler", samplers.linear_clamp);
     gfxProgramSetParameter(gfx, program_, "g_LinearWrapSampler", samplers.linear_wrap);
+
+    gfxProgramSetBuffer(gfx, program_, "UB", UB_range);
 
     // Rendering begins
 
@@ -439,7 +447,7 @@ void Renderer::Render() {
         }
 
         // Screen space ray tracing
-        {
+        if (options_.SSRT_enable) {
             auto section = TimedSection(*this, "TraceRaysInScreenSpace");
             GenerateDispatchIndirect(buf_.ray_to_trace_count[ray_compact_count & 1]);
             gfxCommandBindKernel(gfx, kernel_.TraceRaysInScreenSpace);
@@ -447,10 +455,10 @@ void Renderer::Render() {
         }
 
         // Cull the rays that are simply completed by SSRT
-        CompactRayTraces();
+        if (options_.SSRT_enable) CompactRayTraces();
 
         // Use hardware ray tracing (stochastic 3DGS shadow ray tracing) to deal with the rest
-        {
+        if (options_.HWRT_enable) {
             auto section = TimedSection(*this, "HWRT Shadow Ray Trace");
 
             GenerateDispatchRaysIndirect(buf_.ray_to_trace_count[ray_compact_count & 1]);
@@ -485,6 +493,8 @@ void Renderer::Render() {
         gfxCommandBindKernel(gfx, kernel_.TonemapAndDraw);
         gfxCommandDraw(gfx, 3, 1);
     }
+
+    gfxDestroyBuffer(gfx, UB_range);
 
     frame_index_ ++;
 }

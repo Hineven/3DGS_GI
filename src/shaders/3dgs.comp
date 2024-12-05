@@ -126,7 +126,7 @@ void FilterActiveGaussians (uint DispatchID : SV_DispatchThreadID) {
     Gaussian G = FetchGaussian(GaussianIndex);
 
 	float3 ViewSpacePosition = 0;
-	if(IsPointInFrustrum(UB.MainCamera, G.Position, ViewSpacePosition, false, 0.2f, 0.2f)) {
+	if(IsPointInFrustrum(UB.MainCamera, G.Position, ViewSpacePosition, false, GetCameraDescription().NearPlane, 0.2f)) {
 		int GaussianCount = WaveActiveCountBits(1);
 		int GaussianRank  = WavePrefixCountBits(1);
 		int GaussianBaseIndex = 0;
@@ -418,9 +418,10 @@ void SampleLightRays (uint2 DispatchID : SV_DispatchThreadID) {
 	RayToTrace Ray = InitRayToTrace(UB.RT_MaxTraceDistance);
 	Ray.Origin = Origin;
 	Ray.Direction = Direction;
-	Ray.Seed = BlueNoise_Sample1D(DispatchID, UB.FrameIndex);
+	Ray.Seed = BlueNoise_Sample1D(DispatchID, UB.FrameIndex) * UB.HWRT_StochasticRayTracingQuality;
 	WriteRayToTrace(RayIndex, Ray);
 	g_RWRayToTraceListBuffer[RayIndex] = RayIndex;
+	g_RWRayToTraceResultBuffer[RayIndex] = 0;
 }
 
 // Compound ray tracing. Trace rays in screen space first to cull the easy rays 
@@ -492,28 +493,31 @@ void TraceRaysInScreenSpace (uint DispatchID : SV_DispatchThreadID) {
 		) + 0.5f.xx;
 		float Noise = InterleavedGradientNoise(NoiseUV, UB.FrameIndex);
 		// No vignetting for screen traces for now.
-		// if (bHit)
-		// {
-		// 	float3 HistoryUVW = ReprojectToHistoryUVWFromUVW(C, HitUVW);
-		// 	if(all(HistoryUVW.xy >= 0) && all(HistoryUVW.xy <= 1)) {
-		// 		// Calculate the expected depth of the pixel last frame
-		// 		float PrevZDepth  = HistoryUVW.z;
+		if (bHit)
+		{
+			float3 HistoryUVW = ReprojectToHistoryUVWFromUVW(C, HitUVW);
+			if(all(HistoryUVW.xy >= 0) && all(HistoryUVW.xy < 1)) {
+				// Calculate the expected depth of the pixel last frame
+				float PrevZDepth  = HistoryUVW.z;
 
-		// 		// Lookup the actual depth at the same screen position last frame
-		// 		float HistoryZDepth = GetPreviousZDepthTexture(C).SampleLevel(g_PointClampSampler, HistoryUVW.xy, 0).x;
+				// Lookup the actual depth at the same screen position last frame
+				float HistoryZDepth = GetPreviousZDepthTexture(C).SampleLevel(g_PointClampSampler, HistoryUVW.xy, 0).x;
 
-		// 		bHit = abs(HistoryZDepth - PrevZDepth) < RelativeTexelThickness * 0.5f * lerp(.5f, 2.0f, Noise);
-		// 	}
-		// }
+				bHit = abs(HistoryZDepth - PrevZDepth) < RelativeTexelThickness * 0.5f * lerp(.5f, 2.0f, Noise);
+			}
+		}
 
-		// if (bHit)
-		// {
-		// 	float3 HistoryUVW = ReprojectToHistoryUVWFromUVW(C, HitUVW);
-		// 	float3 Radiance = GetPreviousRadianceTexture(C).SampleLevel(g_PointClampSampler, HistoryUVW.xy, 0).xyz;
-		// 	g_RWRayToTraceResultBuffer[RayIndex] = PackFp16x4Safe(float4(Radiance, 0));
-		// }
+		if (bHit)
+		{
+			float3 HistoryUVW = ReprojectToHistoryUVWFromUVW(C, HitUVW);
+			if(all(HistoryUVW.xy >= 0) && all(HistoryUVW.xy < 1)) {
+				float3 Radiance = GetPreviousRadianceTexture(C).SampleLevel(g_PointClampSampler, HistoryUVW.xy, 0).xyz;
+				g_RWRayToTraceResultBuffer[RayIndex] = PackFp16x4Safe(float4(Radiance, 0));
+			}
+		}
 	}
 
+	// Remember to reduce the texel relative thickness on SSRT if there're too many false hits.
 	
 	WriteRayTraceFlags(RayIndex, bHit, HitDistance);
 }
@@ -533,6 +537,11 @@ void CompactRayTraces (uint DispatchID : SV_DispatchThreadID) {
 		RayBaseRank = WaveReadLaneFirst(RayBaseRank);
 		int NewRayRank = RayBaseRank + RayWarpRank;
 		g_RWCompactedRayToTraceListBuffer[NewRayRank] = RayIndex;
+		// Backward a little bit for ray continuation.
+		// FIXME
+		// float RayTMinBiased = max(Ray.RayTMin * 0.4f, Ray.RayTMin - 0.4f);
+		float RayTMinBiased = Ray.RayTMin;
+		WriteRayTraceFlags(RayIndex, Ray.bHit, RayTMinBiased);
 	}
 }
 
@@ -559,7 +568,7 @@ void ResolveDirectLighting (uint DispatchID : SV_DispatchThreadID) {
 	float  FreeTravelDistance = distance(Ray.Origin, UB.Debug_LightPosition);
 	// bool   bNotOccluded = Ray.RayTMin >= FreeTravelDistance;
 	// TODO jitter visibility test
-	float  ShadowFactor = Ray.RayTMin >= FreeTravelDistance * 0.9f;
+	float  ShadowFactor = Ray.RayTMin >= FreeTravelDistance * 0.99f;
 
 	float3 PixelAlbedo  = PixelAlbedoA.rgb;
 	float3 ViewDirection  = normalize(C.Position - Ray.Origin);
@@ -587,7 +596,7 @@ void FinalComposition (uint2 DispatchID : SV_DispatchThreadID) {
 	// for now.
 	float4 RadianceW = g_Radiance.Load(int3(DispatchID, 0));
 	if(UB.DebugMode == 1) {
-		RadianceW = g_GColorTexture.Load(int3(DispatchID, 0));
+		RadianceW.rgb = g_GColorTexture.Load(int3(DispatchID, 0)).rgb;
     } else if(UB.DebugMode == 2) {
         RadianceW.rgb = g_GMaterialTexture.Load(int3(DispatchID, 0)).rrr;
     } else if(UB.DebugMode == 3) {

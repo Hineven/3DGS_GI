@@ -20,4 +20,9 @@ inline T divideAndRoundUp (T a, T b) {
     return (a + b - 1) / b;
 }
 
+template<typename T>
+inline T roundUp (T a, T b) {
+    return divideAndRoundUp(a, b) * b;
+}
+
 #endif //INC_3DGS_ADVGI_COMMON_H

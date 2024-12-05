@@ -148,10 +148,22 @@ void DestroyKernels ();
 
         // The quality of stochastic ray tracing [0, 1].
         // Lower values bring more biased but faster results.
-        float stochastic_ray_tracing_quality {0.25f};
+        float stochastic_ray_tracing_quality {0.20f};
+
+        // How thick a texel is on Z axis in the projected space when doing screen space ray tracing.
+        // Thicker values may produce more artifacts but can cull more rays.
+        float SSRT_relative_texel_thickness {0.005f};
+
+        // Normally, SSRT just helps to solve near field occlusions.
+        // Due to the depth bias in rasterization, SSRT in 3DGS is not as reliable as it is in regular context.
+        float SSRT_max_trace_distance {0.25f};
 
         // Render color only when doing rasterization
         bool no_G_buffers {false};
+
+        bool SSRT_enable {true};
+
+        bool HWRT_enable {true};
 
         // Normals are reconstructed from the depth buffer rather than rasterized from gaussians.
         bool reconstruct_normals {false};

@@ -89,6 +89,7 @@ int AppInternal::Run () {
     // Load scene
     {
         scene_.LoadEnvironmentMap(root_path + "data/environment_maps/rogland_overcast_4k.exr");
+        // scene_.LoadGaussians(root_path + "data/barn/point_cloud/iteration_50000/point_cloud.ply", true);
         scene_.LoadGaussians(root_path + "data/chair/point_cloud/iteration_50000/point_cloud.ply", true);
         // scene_.LoadGaussians(root_path + "data/garden/point_cloud/iteration_7000/point_cloud.ply", true);
         // scene_.LoadGaussians(root_path + "data/counter/point_cloud/iteration_7000/point_cloud.ply", true);
@@ -105,6 +106,7 @@ int AppInternal::Run () {
 
     double last_frame_time = std::chrono::duration<double>(clock.now().time_since_epoch()).count();
 
+    float delta_tick = 1.f;
     std::vector<std::pair<std::string, float>> last_frame_timed_sections;
     std::vector<float> frame_latency_history;
 
@@ -160,6 +162,7 @@ int AppInternal::Run () {
                     ImGui::Text("- %s: %4.2f ms", name.c_str(), section.second);
                 }
                 ImGui::Text("Total: %4.2f ms", frame_total_time);
+                ImGui::Text("CPU Delta Tick: %4.2f ms", delta_tick * 1000.f);
                 float fps = 1000.f / frame_total_time;
                 float minfps = fps, maxfps = fps;
                 for(auto & latency : frame_latency_history) {
@@ -188,9 +191,16 @@ int AppInternal::Run () {
             gfxImGuiRender();
         }
 
+        // End of device frame
+
+        // If I don't do this, there'll be severe flickering when the camera is moving
+        // FIXME why?? UniformBuffer problem?
+        // gfxFinish(gfx_);
+        gfxFrame(gfx_, false);
+
         // Logic
         double this_frame_time = std::chrono::duration<double>(clock.now().time_since_epoch()).count();
-        float const delta_tick = float(this_frame_time - last_frame_time);
+        delta_tick = float(this_frame_time - last_frame_time);
         last_frame_time = this_frame_time;
 
         // Camera navigation
@@ -288,8 +298,6 @@ int AppInternal::Run () {
             app_assert(renderer->Initialize());
             std::cout << "Shaders reloaded" << std::endl;
         }
-
-        gfxFrame(gfx_, false);
     }
 
     gfxFinish(gfx_);

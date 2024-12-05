@@ -58,11 +58,11 @@ GBufferOutput DrawActiveGaussians (DrawActiveGaussians_FSInput Input) {
     // Clip the alpha values for calculating the depth helps smooth the transition between
     // gaussians (cause the gaussians are not fully drawn when rasterizing).
     float DepthAlphaClipValue = UB.DepthAlphaClipValue;
-    float ClippedAlpha = max(0, Alpha - DepthAlphaClipValue);
-    float DepthMultiplier = ClippedAlpha / max(Alpha, 1e-6f);
+    float DepthMultiplier = min(DepthAlphaClipValue + Alpha, 1.f);
     Result.Depth          = float4(
-        LinearDepth * DepthMultiplier,
-        DepthMultiplier, 0, Alpha);
+        LinearDepth, 1, 0, DepthMultiplier);
+    // Result.Roughness = Roughness;
+    // Result.Depth = float2(LinearDepth, 1);
 #ifndef RECONSTRUCT_NORMALS_FROM_DEPTH
     Result.Normal         = float4(NormalU, Alpha);
 #endif

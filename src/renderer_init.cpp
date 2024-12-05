@@ -70,9 +70,10 @@ bool Renderer::CreateResources () {
     buf_.ray_to_trace_result = gfxCreateBuffer<uint2>(gfx, max_num_rays);
     buf_.ray_to_trace_result.setName("RayToTraceResult");
 
-    buf_.UB = gfxCreateBuffer<UniformBlock> (gfx, 2, nullptr, kGfxCpuAccess_Write);
-    buf_.UB.setName("UniformBlock");
-    buf_.UB.setStride(sizeof(UniformBlock));
+    uint UB_stride = roundUp((uint32_t)sizeof(UniformBlock), 256u);
+    buf_.UB = gfxCreateBuffer(gfx, UB_stride * gfxGetBackBufferCount(gfx), nullptr, kGfxCpuAccess_Write);
+    buf_.UB.setName("UniformBlock0");
+    buf_.UB.setStride(UB_stride);
 
     float zero_clear_value[4] = {0, 0, 0, 0};
     tex_.G_depth = gfxCreateTexture2D(gfx, width, height, options_.depth_format, 1, zero_clear_value);

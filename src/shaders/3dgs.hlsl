@@ -266,7 +266,7 @@ bool IsInFrustrum (
 bool IsPointInFrustrum (CameraDescription C, float3 Position, out float3 ViewSpacePosition, bool Ortho = false, float NearClip = 0.f, float Expand = 0.f) {
     ViewSpacePosition = mul(C.View, float4(Position, 1.0f)).xyz;
     // -z axis is aligned with camera direction
-    if(ViewSpacePosition.z > 0) return false;
+    if(ViewSpacePosition.z >= -NearClip) return false;
     float4 Homogeneous = mul(C.Projection, float4(ViewSpacePosition, 1.0f));
     if(Ortho) {
         // FIXME
@@ -274,7 +274,7 @@ bool IsPointInFrustrum (CameraDescription C, float3 Position, out float3 ViewSpa
     } else {
         if(Homogeneous.w) {
             float3 Projected = Homogeneous.xyz / Homogeneous.w;
-            return all(abs(Projected.xy) < 1.0f + Expand) && Projected.z >= NearClip && Projected.z <= 1.0f + Expand;
+            return all(abs(Projected.xy) < 1.0f + Expand) && Projected.z >= 0.15 && Projected.z <= 1.0f;
         } else {
             return false;
         }
