@@ -5,28 +5,10 @@
 
 #include "3dgs_inc.hlsl"
 #include "select.hlsl"
-#include "math_constants.hlsl"
-
+#include "math.hlsl"
+#include "transforms.hlsl"
+#include "conventions.hlsl"
 #include "bluenoise.hlsl"
-
-void Swap(inout float a, inout float b) {
-    float temp = a;
-    a = b;
-    b = temp;
-}
-void Swap(inout int a, inout int b) {
-    int temp = a;
-    a = b;
-    b = temp;
-}
-
-float2 NDC2ToUV (float2 NDC2) {
-    return float2(0.5f, -0.5f) * NDC2 + 0.5f.xx;
-}
-
-float2 UVToNDC2 (float2 UV) {
-    return float2(2.f, -2.f) * (UV - 0.5f.xx);
-}
 
 // Convert NDC2 to screen position
 // NDC2: [-1, 1] -> Screen: [0, ScreenDimensions]
@@ -57,31 +39,6 @@ float3x4 FetchInstanceTransform (int Index) {
 }
 float3x4 FetchInstanceInverseTransform (int Index) {
     return g_InstanceInvTransformBuffer[Index];
-}
-
-float3 TransformPointWithPerspectiveDivide (float4x4 Transform, float3 Point) {
-    float4 Homogeneous = mul(Transform, float4(Point, 1.0f));
-    return Homogeneous.xyz / Homogeneous.w;
-}
-
-float3 TransformPoint (float3x4 Transform, float3 Point) {
-    return mul(Transform, float4(Point, 1.0f)).xyz;
-}
-
-float3 TransformVector (float3x4 Transform, float3 Vector) {
-    return mul(Transform, float4(Vector, 0.0f)).xyz;
-}
-
-float3x4 ClipMatrix (float4x4 M) {
-    return float3x4(
-        M[0][0], M[0][1], M[0][2], M[0][3],
-        M[1][0], M[1][1], M[1][2], M[1][3],
-        M[2][0], M[2][1], M[2][2], M[2][3]
-    );
-}
-
-float3 TransformVector (float3x3 Transform, float3 Vector) {
-    return mul(Transform, Vector);
 }
 
 float3 GaussianInstance_TransformLocalToWorld (float3 Position, int InstanceIndex) {
@@ -180,21 +137,6 @@ float EvaluateNormalizedGaussian (float3 Position) {
     return NormalizationFactor * exp(-0.5f * dot(Position, Position));
 }
 
-float3 QuaternionRotate (float3 Vector, float4 Quaternion) {
-    float3 q = Quaternion.xyz;
-    float3 t = 2.0f * cross(q, Vector);
-    return Vector + Quaternion.w * t + cross(q, t);
-}
-
-float4 QuaternionConjugate (float4 Quaternion) {
-    return float4(-Quaternion.x, -Quaternion.y, -Quaternion.z, Quaternion.w);
-}
-
-float3 QuaternionInverseRotate(float3 Vector, float4 Quaternion) {
-    float4 Conjugate = QuaternionConjugate(Quaternion);
-    return QuaternionRotate(Vector, Conjugate);
-}
-
 // Evaluate the alpha value of a gaussian at a given position
 float EvaluateGaussian (Gaussian GaussianData, float3 Position) {
     // x - mu:
@@ -223,15 +165,6 @@ float3x3 ExpandSymmetricMatrix (SymmetricMatrix C) {
         C.OffDiagonal.y, C.OffDiagonal.z, C.Diagonal.z
     );
     return MC;
-}
-
-float3x3 EvaluateRotationMatrix (float4 q) {
-    float3x3 R = float3x3(
-		1.f - 2.f * (q.y * q.y + q.z * q.z), 2.f * (q.x * q.y - q.w * q.z), 2.f * (q.x * q.z + q.w * q.y),
-		2.f * (q.x * q.y + q.w * q.z), 1.f - 2.f * (q.x * q.x + q.z * q.z), 2.f * (q.y * q.z - q.w * q.x),
-		2.f * (q.x * q.z - q.w * q.y), 2.f * (q.y * q.z + q.w * q.x), 1.f - 2.f * (q.x * q.x + q.y * q.y)
-    );
-    return R;
 }
 
 // Perform frustrum culling (copy pasted from original 3dgs impl)
@@ -279,30 +212,6 @@ bool IsPointInFrustrum (CameraDescription C, float3 Position, out float3 ViewSpa
             return false;
         }
     }
-}
-
-float3x3 GetScaleRotationTransform (float3 Scale, float4 Rotation) {
-    // Scaling matrix
-    float3x3 S = {
-        Scale.x, 0, 0,
-        0, Scale.y, 0,
-        0, 0, Scale.z
-    };
-    // Rotation matrix
-    float3x3 R = EvaluateRotationMatrix(Rotation);
-    return mul(S, R);
-}
-
-float3x3 GetRotationScaleTransform (float4 Rotation, float3 Scale) {
-    // Rotation matrix
-    float3x3 R = EvaluateRotationMatrix(Rotation);
-    // Scaling matrix
-    float3x3 S = {
-        Scale.x, 0, 0,
-        0, Scale.y, 0,
-        0, 0, Scale.z
-    };
-    return mul(R, S);
 }
 
 SymmetricMatrix ComputeCovarianceMatrix (float3 Scale, float4 Rotation) {
@@ -389,149 +298,6 @@ float3 ProjectCovarianceMatrixToNDC(float3x3 J, SymmetricMatrix Covariance3D, fl
     float3x3 C_2D = mul(mul(Mk, C), transpose(Mk));
 
     return float3(C_2D[0][0], C_2D[0][1], C_2D[1][1]);
-}
-
-float2 UnitVectorToOctahedron(float3 N)
-{
-	N.xy /= dot( 1, abs(N) );
-	if( N.z <= 0 )
-	{
-		N.xy = ( 1 - abs(N.yx) ) * select(N.xy >= 0, float2(1,1), float2(-1,-1));
-	}
-	return N.xy;
-}
-
-float2 UnitVectorToOctahedron01(float3 N)
-{
-    return (UnitVectorToOctahedron(N) + 1) * 0.5;
-}
-
-float3 OctahedronToUnitVector( float2 Oct )
-{
-	float3 N = float3( Oct, 1 - dot( 1, abs(Oct) ) );
-	float t = max( -N.z, 0 );
-	N.xy += select(N.xy >= 0, float2(-t, -t), float2(t, t));
-	return normalize(N);
-}
-
-float3 Octahedron01ToUnitVector (float2 Oct)
-{
-    return OctahedronToUnitVector(Oct * 2 - 1);
-}
-
-// Clamp to [0, 1)
-float saturateDown (float Value) {
-    return clamp(Value, 0.0f, 1.f - FLT_EPSILON);
-}
-float2 saturateDown (float2 Value) {
-    return clamp(Value, 0.0f.xx, 1.f.xx - FLT_EPSILON.xx);
-}
-float3 saturateDown (float3 Value) {
-    return clamp(Value, 0.0f.xxx, 1.f.xxx - FLT_EPSILON.xxx);
-}
-float4 saturateDown (float4 Value) {
-    return clamp(Value, 0.0f.xxxx, 1.f.xxxx - FLT_EPSILON.xxxx);
-}
-
-// Clamp to (0, 1]
-float saturateUp (float Value) {
-    return clamp(Value, FLT_EPSILON, 1.0f);
-}
-float2 saturateUp (float2 Value) {
-    return clamp(Value, FLT_EPSILON, 1.0f);
-}
-
-float UnpackUnorm16 (uint Packed) {
-    return Packed / 65535.0f;
-}
-
-uint PackUnorm16 (float Unpacked) {
-    Unpacked = saturateDown(Unpacked);
-    return uint(Unpacked * 65536.0f);
-}
-
-float2 UnpackUnorm16x2 (uint Packed) {
-    return float2(
-        (Packed & 0xFFFF) / 65535.0f,
-        (Packed >> 16) / 65535.0f
-    );
-}
-
-uint PackUnorm16x2 (float2 Unpacked) {
-    Unpacked = saturateDown(Unpacked);
-    return uint(Unpacked.x * 65536.0f) + (uint(Unpacked.y * 65536.0f) << 16);
-}
-
-uint2 PackFp16x4Safe (float4 Unpacked) {
-    // Clamp to fp16 range
-    Unpacked = clamp(Unpacked, -65504.0f, 65504.0f);
-    // Convert to fp16
-    uint2 Packed = uint2(
-        f32tof16(Unpacked.x) | (f32tof16(Unpacked.y) << 16),
-        f32tof16(Unpacked.z) | (f32tof16(Unpacked.w) << 16)
-    );
-    return Packed;
-}
-
-float4 UnpackFp16x4 (uint2 Packed) {
-    float4 Unpacked = float4(
-        f16tof32(Packed.x & 0xFFFF),
-        f16tof32(Packed.x >> 16),
-        f16tof32(Packed.y & 0xFFFF),
-        f16tof32(Packed.y >> 16)
-    );
-    return Unpacked;
-}
-
-uint2 PackFp16x3Safe (float3 Unpacked) {
-    // Clamp to fp16 range
-    Unpacked = clamp(Unpacked, -65504.0f, 65504.0f);
-    // Convert to fp16
-    uint2 Packed = uint2(
-        f32tof16(Unpacked.x) | (f32tof16(Unpacked.y) << 16),
-        f32tof16(Unpacked.z)
-    );
-    return Packed;
-}
-
-float3 UnpackFp16x3 (uint2 Packed) {
-    float3 Unpacked = float3(
-        f16tof32(Packed.x & 0xFFFF),
-        f16tof32(Packed.x >> 16),
-        f16tof32(Packed.y & 0xFFFF)
-    );
-    return Unpacked;
-}
-
-uint2 PackRadianceA16 (float4 Unpacked) {
-    uint2 RGBPacked = PackFp16x3Safe(Unpacked.xyz);
-    return uint2(
-        RGBPacked.x,
-        RGBPacked.y | (PackUnorm16(Unpacked.w) << 16)
-    );
-}
-
-float4 UnpackRadianceA16 (uint2 Packed) {
-    float3 RGBUnpacked = UnpackFp16x3(Packed);
-    float AUnpacked = UnpackUnorm16(Packed.y >> 16);
-    return float4(RGBUnpacked, AUnpacked);
-}
-
-uint PackRGBA8 (float4 Unpacked) {
-    Unpacked = saturateDown(Unpacked);
-    return uint(Unpacked.x * 256.0f) 
-        | (uint(Unpacked.y * 256.0f) << 8)
-        | (uint(Unpacked.z * 256.0f) << 16)
-        | (uint(Unpacked.w * 256.0f) << 24);
-}
-
-float4 UnpackRGBA8 (uint Packed) {
-    return float4(
-        (Packed & 0xFFu) / 256.0f,
-        ((Packed >> 8u) & 0xFF) / 256.0f,
-        ((Packed >> 16u) & 0xFFu) / 256.0f,
-        ((Packed >> 24u) & 0xFFu) / 256.0f
-    );
 }
 
 struct RayToTrace {
@@ -654,20 +420,6 @@ uint PackPadScreenPosition (float2 ScreenPosition, float2 InvScreenDimensions) {
     // Scale and pad the borders of the screen space position to make sure it's in the range [0, 1]
     float2 ScaledScreenPosition = saturateDown(.5f * ScreenPosition * InvScreenDimensions + 0.25f);
     return PackUnorm16x2(ScaledScreenPosition);
-}
-
-float squared (float Value) {
-    return Value * Value;
-}
-
-void GetOrthoVectors(in float3 n, out float3 b1, out float3 b2)
-{
-    bool sel = abs(n.z) > 0;
-    float3 p2 = sel ? n : n.zyx;
-    float k = 1.0f / sqrt(squared(p2.z) + squared(n.y));
-    b1 = float3(0.0f, -p2.z * k, n.y * k);
-    b1 = sel ? b1 : b1.zyx;
-    b2 = cross(n, b1);
 }
 
 bool IsOutOfFilm(CameraDescription C, int2 FilmPosition) {
@@ -801,13 +553,6 @@ float3 RecoverWorldSpacePosition (CameraDescription C, float2 FilmPosition, floa
     return RecoverWorldSpacePositionNDC2(C, NDC2, LinearDepth);
 }
 
-float  InterpolateBarycentrics (float A, float B, float C, float2 UV) {
-    return A * (1 - UV.x - UV.y) + B * UV.x + C * UV.y;
-}
-float3 InterpolateBarycentrics (float3 A, float3 B, float3 C, float2 UV) {
-    return A * (1 - UV.x - UV.y) + B * UV.x + C * UV.y;
-}
-
 float LinearToZDepth (CameraDescription C, float LinearDepth) {
     float A = C.Projection[2][2];
     float B = C.Projection[2][3];
@@ -842,6 +587,66 @@ float InterleavedGradientNoise( float2 uv, float FrameId )
 
 float3 ReprojectToHistoryUVWFromUVW (CameraDescription C, float3 UVW) {
     return TransformPointWithPerspectiveDivide(C.Reprojection, UVW);
+}
+
+
+float3 SH3Evaluate(float3 ViewDirection, SHCoefficents3 SH3, int Degree)
+{
+	const float SH_C0 = 0.28209479177387814f;
+	const float SH_C1 = 0.4886025119029199f;
+	const float SH_C2[] = {
+		1.0925484305920792f,
+		-1.0925484305920792f,
+		0.31539156525252005f,
+		-1.0925484305920792f,
+		0.5462742152960396f
+	};
+	const float SH_C3[] = {
+		-0.5900435899266435f,
+		2.890611442640554f,
+		-0.4570457994644658f,
+		0.3731763325901154f,
+		-0.4570457994644658f,
+		1.445305721320277f,
+		-0.5900435899266435f
+	};
+	// The SH stored in the gaussians is "flipped" compared to ordinary computer graphics
+	// conventions.
+	float3 NViewDirection = -ViewDirection;
+
+	float3 result = SH_C0 * SH3.Low.Color;
+
+	if(Degree >= 1) {
+		float x = NViewDirection.x;
+		float y = NViewDirection.y;
+		float z = NViewDirection.z;
+		result = result - SH_C1 * y * SH3.Low.SH1[0] + SH_C1 * z * SH3.Low.SH1[1] - SH_C1 * x * SH3.Low.SH1[2];
+
+		if(Degree >= 2) {
+			float xx = x * x, yy = y * y, zz = z * z;
+			float xy = x * y, yz = y * z, xz = x * z;
+			result = result +
+				SH_C2[0] * xy * SH3.Low.SH2[0] +
+				SH_C2[1] * yz * SH3.Low.SH2[1] +
+				SH_C2[2] * (2.0f * zz - xx - yy) * SH3.Low.SH2[2] +
+				SH_C2[3] * xz * SH3.Low.SH2[3] +
+				SH_C2[4] * (xx - yy) * SH3.Low.SH2[4];
+
+			if(Degree >= 3) {
+				result = result +
+					SH_C3[0] * y * (3.0f * xx - yy) * SH3.SH3[0] +
+					SH_C3[1] * xy * z * SH3.SH3[1] +
+					SH_C3[2] * y * (4.0f * zz - xx - yy) * SH3.SH3[2] +
+					SH_C3[3] * z * (2.0f * zz - 3.0f * xx - 3.0f * yy) * SH3.SH3[3] +
+					SH_C3[4] * x * (4.0f * zz - xx - yy) * SH3.SH3[4] +
+					SH_C3[5] * z * (xx - yy) * SH3.SH3[5] +
+					SH_C3[6] * x * (xx - 3.0f * yy) * SH3.SH3[6];
+			}
+		}
+	}
+	// Seems that 3DGS padded the SH (maybe this made optimization easier?)
+	result += 0.5f;
+	return max(result, 0.0f);
 }
 
 #endif // INC_3DGS_HLSL

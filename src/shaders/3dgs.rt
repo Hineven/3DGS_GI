@@ -1,5 +1,5 @@
 #define USING_3DGS_RT
-#include "3dgs.comp"
+#include "3dgs.hlsl"
 
 TriangleHitGroup Trace3DGSHitGroup =
 {

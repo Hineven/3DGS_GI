@@ -87,16 +87,33 @@ struct UniformBlock {
     float3 Debug_LightPosition;
     uint  SSRT_MaxNumIterations;
 
+    float4 LightGrid_GridCascadeMin[4];
+    
+    float4 LightGrid_GridCascadeMax[4];
+
+    float3 LightGrid_GridSize;
+    uint   LightGrid_GridResolution;
+
+    uint   LightGrid_GridResolution2;
+    uint   LightGrid_GridResolution3;
+    uint   LightGrid_NumGridCascades;
+    float  LightGrid_MinLightContributionForInjection;
+
+    float  LightGrid_MinResampleWeightForDirectIllumiation;
+    uint   Padding0;
+    uint   Padding1;
+    uint   Padding2;
+
     DeviceVirtualAddressRange RT_RayGenerationShaderRecord;
     
     DeviceVirtualAddressRangeAndStride RT_MissShaderTable;
-    uint2 Padding0;
+    uint2 Padding3;
 
     DeviceVirtualAddressRangeAndStride RT_HitGroupTable;
-    uint2 Padding1;
+    uint2 Padding4;
     
     DeviceVirtualAddressRangeAndStride RT_CallableShaderTable;
-    uint2 Padding2;
+    uint2 Padding5;
 };
 
 struct Gaussian {
@@ -145,5 +162,13 @@ struct SHCoefficents3 {
     SHCoefficients Low;
     float3 SH3[7];
 };
+
+#define LIGHT_GRID_NUM_CASCADES 4
+
+#define LIGHT_GRID_MAX_NUM_GRID_LIGHTS 8
+
+#define LIGHT_TYPE_DIRECTIONAL 0
+#define LIGHT_TYPE_SKY  1
+#define LIGHT_TYPE_AREA 2
 
 #endif // INC_3DGS_SHARED_HLSL

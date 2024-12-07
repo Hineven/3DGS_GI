@@ -4,67 +4,9 @@
 
 #include "ssrt.hlsl"
 
-float3 SH3Evaluate(float3 ViewDirection, SHCoefficents3 SH3, int Degree)
-{
-	const float SH_C0 = 0.28209479177387814f;
-	const float SH_C1 = 0.4886025119029199f;
-	const float SH_C2[] = {
-		1.0925484305920792f,
-		-1.0925484305920792f,
-		0.31539156525252005f,
-		-1.0925484305920792f,
-		0.5462742152960396f
-	};
-	const float SH_C3[] = {
-		-0.5900435899266435f,
-		2.890611442640554f,
-		-0.4570457994644658f,
-		0.3731763325901154f,
-		-0.4570457994644658f,
-		1.445305721320277f,
-		-0.5900435899266435f
-	};
-	// The SH stored in the gaussians is "flipped" compared to ordinary computer graphics
-	// conventions.
-	float3 NViewDirection = -ViewDirection;
+#include "lightgrid.hlsl"
 
-	float3 result = SH_C0 * SH3.Low.Color;
-
-	if(Degree >= 1) {
-		float x = NViewDirection.x;
-		float y = NViewDirection.y;
-		float z = NViewDirection.z;
-		result = result - SH_C1 * y * SH3.Low.SH1[0] + SH_C1 * z * SH3.Low.SH1[1] - SH_C1 * x * SH3.Low.SH1[2];
-
-		if(Degree >= 2) {
-			float xx = x * x, yy = y * y, zz = z * z;
-			float xy = x * y, yz = y * z, xz = x * z;
-			result = result +
-				SH_C2[0] * xy * SH3.Low.SH2[0] +
-				SH_C2[1] * yz * SH3.Low.SH2[1] +
-				SH_C2[2] * (2.0f * zz - xx - yy) * SH3.Low.SH2[2] +
-				SH_C2[3] * xz * SH3.Low.SH2[3] +
-				SH_C2[4] * (xx - yy) * SH3.Low.SH2[4];
-
-			if(Degree >= 3) {
-				result = result +
-					SH_C3[0] * y * (3.0f * xx - yy) * SH3.SH3[0] +
-					SH_C3[1] * xy * z * SH3.SH3[1] +
-					SH_C3[2] * y * (4.0f * zz - xx - yy) * SH3.SH3[2] +
-					SH_C3[3] * z * (2.0f * zz - 3.0f * xx - 3.0f * yy) * SH3.SH3[3] +
-					SH_C3[4] * x * (4.0f * zz - xx - yy) * SH3.SH3[4] +
-					SH_C3[5] * z * (xx - yy) * SH3.SH3[5] +
-					SH_C3[6] * x * (xx - 3.0f * yy) * SH3.SH3[6];
-			}
-		}
-	}
-	// Seems that 3DGS padded the SH (maybe this made optimization easier?)
-	result += 0.5f;
-	return max(result, 0.0f);
-}
-
-
-#ifndef USING_3DGS_RT
+#include "random.hlsl"
 
 [numthreads(1, 1, 1)]
 void GenerateDispatchRaysIndirect () {
@@ -385,13 +327,70 @@ void ReconstructNormals (uint2 DispatchID : SV_DispatchThreadID) {
 // 	float3 Depth012  = 
 // }
 
+
+[numthreads(1, 1, 1)]
+void InitializeCounters () {
+	g_LightGrid_GridLightListAllocator[0] = 0;
+}
+
+[numthreads(WAVE_SIZE, 1, 1)]
+void InjectLightGrids (uint DispatchID : SV_DispatchThreadID) {
+	int NumLights = GetNumLights();
+	uint4 GridIndex = LightGrid_GetGridIndex(DispatchID);
+	float3 GridMin; 
+	float GridSize;
+	GridMin = LightGrid_GetGridBounds(GridIndex, GridSize);
+	if(GridIndex.w >= UB.LightGrid_NumGridCascades) return ;
+	float GridLightU[LIGHT_GRID_MAX_NUM_GRID_LIGHTS];
+	uint  GridLightIndices[LIGHT_GRID_MAX_NUM_GRID_LIGHTS];
+	// Bias the initial weight to avoid precision issues
+	float GridLightWeightSum = 1e-7f;
+	// Scatter random numbers for RIS.
+	Random rng = MakeRandom(9918293 + DispatchID, UB.FrameIndex);
+	for(int i = 0; i < LIGHT_GRID_MAX_NUM_GRID_LIGHTS; i++) {
+		GridLightU[i] = (rng.rand() + i) * (1.f / LIGHT_GRID_MAX_NUM_GRID_LIGHTS);
+		GridLightIndices[i] = 0xffffffffu;
+	}
+	// Brute force algorithm. Assume that there're not many lights
+	for(int LightIndex = 0; LightIndex < NumLights; LightIndex ++) {
+		Light L = FetchLightHeader(LightIndex);
+		float LightWeight = EstimateLightGridContribution(L, GridMin, GridSize);
+		if(LightWeight >= UB.LightGrid_MinLightContributionForInjection) {
+			float NewGridLightWeightSum = GridLightWeightSum + LightWeight;
+			float LightU = LightWeight / NewGridLightWeightSum;
+			float Multiplier = GridLightWeightSum / NewGridLightWeightSum;
+			// Multi-reservoir sampling using LightWeight / TotalWeight as target cdf.
+			for(int i = 0; i < LIGHT_GRID_MAX_NUM_GRID_LIGHTS; i++) {
+				GridLightU[i] *= Multiplier;
+				if(GridLightU[i] < LightU) {
+					Swap(GridLightU[i], LightU);
+					Swap(GridLightIndices[i], LightIndex);
+				}
+			}
+		}
+	}
+	// Write back
+	int NumGridLights = 0;
+	for(int i = 0; i < LIGHT_GRID_MAX_NUM_GRID_LIGHTS; i++) {
+		if(GridLightIndices[i] != 0xffffffffu) {
+			NumGridLights ++;
+		} else break;
+	}
+	g_LightGrid_GridLightCountBuffer[DispatchID] = NumGridLights;
+	int LightGridListIndexBase = 0;
+	InterlockedAdd(g_LightGrid_GridLightListAllocator[0], NumGridLights, LightGridListIndexBase);
+	g_LightGrid_GridLightListOffsetBuffer[DispatchID] = LightGridListIndexBase;
+	g_LightGrid_GridLightSumWeightBuffer[DispatchID] = GridLightWeightSum;
+	for(int i = 0; i < NumGridLights; i++) {
+		int LightGridListIndex = LightGridListIndexBase + i;
+		g_LightGrid_GridLightListBuffer[LightGridListIndex] = GridLightIndices[i];
+	}
+}
+
 [numthreads(TILE_SIZE, TILE_SIZE, 1)]
 void SampleLightRays (uint2 DispatchID : SV_DispatchThreadID) {
 	CameraDescription C = GetCameraDescription();
 	if(IsOutOfFilm(C, DispatchID)) return;
-	// Just simply sample from a point light source
-	// TODO real light sample
-	float3 LightPosition = UB.Debug_LightPosition;
 	float2 FilmPosition = DispatchID + 0.5f.xx;
 	float  LinearDepth  = GetFilteredDepthTexture(C).Load(int3(DispatchID, 0)).r;
 	// Empty pixel
@@ -399,29 +398,87 @@ void SampleLightRays (uint2 DispatchID : SV_DispatchThreadID) {
 		return ;
 	}
 	float3 Origin = RecoverWorldSpacePosition(C, FilmPosition, LinearDepth);
-	float3 Direction = normalize(LightPosition - Origin);
-	// Direction = float3(0, 0, 1);
-	
-	// Allocate rays
-	int RayIndex = 0;
-	{
-		int RayIndexBase = 0;
-		int RayWarpCount = WaveActiveCountBits(1);
-		int RayWarpRank  = WavePrefixCountBits(1);
-		if(WaveIsFirstLane()) {
-			InterlockedAdd(g_RWRayToTraceCountBuffer[0], RayWarpCount, RayIndexBase);
+
+	// Sample lights using light grid
+	uint4 GridIndex  = LightGrid_GetGridIndex(Origin);
+	uint  GridIndex1 = LightGrid_GetGridIndex1(GridIndex);
+
+	Material M = FetchMaterial(C, DispatchID);
+
+	uint  SampledLightIndex = 0xffffffffu;
+	float SampledLightU = 0;
+	float SumResampleWeights = 0;
+	LightSample ReservedSample = (LightSample) 0;
+	uint  Seed = DispatchID.x + (DispatchID.y * C.FilmDimensions.x);
+	Random rng = MakeRandom(Seed ^ 0x51f49a7cu, UB.FrameIndex);
+	float2 u2 = rng.rand2();
+
+	// Cooperative sampling
+	while(true) {
+		uint MinGridIndex1 = WaveActiveMin(GridIndex1);
+		// Sample lights for the pixels within the same light grid with minimum id.
+		// Other threads keep idle.
+		if(GridIndex1 == MinGridIndex1) {
+			float U = rng.rand();
+			int NumGridLights = g_LightGrid_GridLightCountBuffer[GridIndex1];
+			int LightGridListOffset = g_LightGrid_GridLightListOffsetBuffer[GridIndex1];
+			// float GridLightSumWeight = g_LightGrid_GridLightSumWeightBuffer[GridIndex1];
+			// Resample grid lights using real lighting
+			for(int i = 0; i < NumGridLights; i++) {
+				int LightIndex = g_LightGrid_GridLightListBuffer[LightGridListOffset + i];
+				Light L = FetchLightHeader(LightIndex);
+				// We have to produce a full sample of the light to estimate the light contribution
+				LightData   Details = FetchLightDetails(LightIndex, L);
+				LightSample Sample = SampleLight(Origin, M, Details, u2);
+
+				float LightGridWeight = EstimateLightGridContribution(L, Origin, 0);
+				float LightCurrWeight = Luminance(Sample.Radiance);
+				// RIS
+				float ResampleWeight  = LightCurrWeight / LightGridWeight;
+				if(ResampleWeight > LightGrid_MinResampleWeightForDirectIllumiation) {
+					float CurrentLightU = ResampleWeight / (ResampleWeight + SumResampleWeights);
+					U *= SumResampleWeights / (SumResampleWeights + ResampleWeight);
+					if(CurrentLightU > U) {
+						ReservedSample = Sample;
+					}
+					SumResampleWeights += ResampleWeight;
+				}
+			}
 		}
-		RayIndexBase = WaveReadLaneFirst(RayIndexBase);
-		RayIndex = RayIndexBase + RayWarpRank;
+		// All the pixels are sampled. Break.
+		if(WaveActiveAllTrue(GridIndex1 == MinGridIndex1)) {
+			break;
+		}
 	}
 
-	RayToTrace Ray = InitRayToTrace(UB.RT_MaxTraceDistance);
-	Ray.Origin = Origin;
-	Ray.Direction = Direction;
-	Ray.Seed = BlueNoise_Sample1D(DispatchID, UB.FrameIndex) * UB.HWRT_StochasticRayTracingQuality;
-	WriteRayToTrace(RayIndex, Ray);
-	g_RWRayToTraceListBuffer[RayIndex] = RayIndex;
-	g_RWRayToTraceResultBuffer[RayIndex] = 0;
+	// Okay we have a sample for each pixel. Now encode a shadow ray for visibility testing.
+	
+	if(ReservedSample.IsValid()) {
+asdasdas
+		// float3 Direction = normalize(LightPosition - Origin);
+		// // Direction = float3(0, 0, 1);
+		
+		// // Allocate rays
+		// int RayIndex = 0;
+		// {
+		// 	int RayIndexBase = 0;
+		// 	int RayWarpCount = WaveActiveCountBits(1);
+		// 	int RayWarpRank  = WavePrefixCountBits(1);
+		// 	if(WaveIsFirstLane()) {
+		// 		InterlockedAdd(g_RWRayToTraceCountBuffer[0], RayWarpCount, RayIndexBase);
+		// 	}
+		// 	RayIndexBase = WaveReadLaneFirst(RayIndexBase);
+		// 	RayIndex = RayIndexBase + RayWarpRank;
+		// }
+
+		// RayToTrace Ray = InitRayToTrace(UB.RT_MaxTraceDistance);
+		// Ray.Origin = Origin;
+		// Ray.Direction = Direction;
+		// Ray.Seed = BlueNoise_Sample1D(DispatchID, UB.FrameIndex) * UB.HWRT_StochasticRayTracingQuality;
+		// WriteRayToTrace(RayIndex, Ray);
+		// g_RWRayToTraceListBuffer[RayIndex] = RayIndex;
+		// g_RWRayToTraceResultBuffer[RayIndex] = 0;
+	}
 }
 
 // Compound ray tracing. Trace rays in screen space first to cull the easy rays 
@@ -749,5 +806,3 @@ void GenerateRTMesh (uint DispatchID : SV_DispatchThreadID) {
 		g_RW_RTIndexBuffer[IndexBase + i * 3 + 2] = Face.z + IndexOffset;
 	}
 }
-
-#endif // USING_3DGS_RT
