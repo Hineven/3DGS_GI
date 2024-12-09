@@ -158,7 +158,11 @@ void Trace3DGSAnyHit (inout Trace3DGSPayload Payload, in BuiltInTriangleIntersec
 
 // Trace shadow rays. We only get the stochastic hit distances.
 [shader("raygeneration")]
+#ifndef DIRECT_ILLUMINATION_SHADOW_RAY_TRACING
 void Trace3DGSShadowRaygen ()
+#else
+void DirectIlluminationTrace3DGSShadowRaygen ()
+#endif
 {
     int RayRank = DispatchRaysIndex().x;
     if(RayRank >= g_RWRayToTraceCountBuffer[0]) return ;
@@ -166,7 +170,12 @@ void Trace3DGSShadowRaygen ()
     Trace3DGSShadowPayload Payload = (Trace3DGSShadowPayload) 0;
     RayDesc Ray;
     {
-        RayToTrace RayData = FetchRayToTrace(RayIndex, UB.RT_MaxTraceDistance);
+        float TraceDistance = UB.RT_MaxTraceDistance; 
+#ifdef DIRECT_ILLUMINATION_SHADOW_RAY_TRACING
+        // Clamp to the distance to the light source for direct illumination shadow rays
+        TraceDistance = g_RWDirectIlluminationRayOcclusionThresholdBuffer[RayIndex];
+#endif
+        RayToTrace RayData = FetchRayToTrace(RayIndex, TraceDistance);
         Ray.Origin = RayData.Origin;
         Ray.Direction = RayData.Direction;
         Ray.TMin = RayData.RayTMin;

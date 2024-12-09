@@ -109,8 +109,6 @@ RWStructuredBuffer<float> g_RWActiveGaussianLinearDepthBuffer;
 RWStructuredBuffer<uint>   g_RWActiveGaussianNDCPositionBuffer;
 RWStructuredBuffer<uint>   g_RWActiveGaussianQuadNDCVector0Buffer;
 RWStructuredBuffer<uint>   g_RWActiveGaussianQuadNDCVector1Buffer;
-// Linear depths of the 2d projected quad vertices (top, left)
-RWStructuredBuffer<float2> g_RWActiveGaussianQuadLinearDepthsBuffer;
 
 // Precomputed color values for active gaussians
 // Only used when OUTPUT_COLORED_GAUSSIANS is defined
@@ -132,6 +130,8 @@ RWStructuredBuffer<uint>   g_RWCompactedRayToTraceListBuffer;
 RWStructuredBuffer<uint>   g_RWRayToTraceDirectionBuffer;
 // Ray origins
 RWStructuredBuffer<float3> g_RWRayToTraceOriginBuffer;
+// Sometimes we use the film positions of ray origins. unorm16x2 packed
+RWStructuredBuffer<uint> g_RWRayToTraceUVPositionBuffer; 
 // Random number seed of the ray
 RWStructuredBuffer<float>  g_RWRayToTraceSeedBuffer;
 // Ray flags, including the hit flag and TMin
@@ -146,6 +146,11 @@ RWStructuredBuffer<uint>   g_RWRayToTraceFlagsBuffer;
 // Only written to in shading ray tracing, used to visualize the ray tracing scene.
 RWStructuredBuffer<uint2> g_RWRayToTraceResultBuffer;
 
+// Direct illumination required buffers
+// Threshould for shadow ray occlusion tests.
+RWStructuredBuffer<float> g_RWDirectIlluminationRayOcclusionThresholdBuffer;
+// Contribution of the direct illumination for each ray (fp16 packed)
+RWStructuredBuffer<uint2>  g_RWDirectIlluminationRayContributionBuffer;
 
 // G-Buffers
 RWTexture2D<float4>      g_RW_GColorTexture;
@@ -170,6 +175,8 @@ Texture2D<float>          g_PreviousZDepthTexture;
 Texture2D<float>          g_NearHZBTexture;
 
 // Output buffers
+RWTexture2D<float4>      g_RW_DirectIllumination;
+Texture2D<float4>        g_DirectIllumination;
 RWTexture2D<float4>      g_RW_Radiance;
 Texture2D<float4>        g_Radiance;
 Texture2D<float4>        g_PreviousRadiance;
@@ -186,5 +193,17 @@ SamplerState g_PointWrapSampler;
 // Output buffers for ray tracing proxy mesh building
 RWStructuredBuffer<float3> g_RW_RTVertexBuffer;
 RWStructuredBuffer<uint>   g_RW_RTIndexBuffer;
+
+#ifndef NDEBUG
+// Buffers for debugging purposes
+// Mapping from pixel index to ray index for direct illumination occlusion tests
+RWStructuredBuffer<uint> g_Debug_DirectIlluminationPixelRayIndexBuffer;
+// Ray visualization
+RWStructuredBuffer<uint>   g_Debug_VisualizeRayCountBuffer;
+RWStructuredBuffer<float3> g_Debug_VisualizeRayVertexBuffer;
+RWStructuredBuffer<float3> g_Debug_VisualizeRayColorBuffer;
+RWStructuredBuffer<uint>   g_Debug_VisualizeRayRayIndexBuffer; // This buffer keeps the indices for the visualized rays
+
+#endif
 
 #endif // INC_3DGS_INC_HLSL

@@ -20,6 +20,18 @@ bool Renderer::CreateResources () {
     buf_.dispatch_rays_indirect_command.setName("DispatchRaysIndirectCommand");
     buf_.draw_indirect_command = gfxCreateBuffer<DrawIndirectCommand>(gfx, 1);
     buf_.draw_indirect_command.setName("DrawIndirectCommand");
+
+
+    buf_.LightGrid_grid_light_list_allocator = gfxCreateBuffer<uint>(gfx, 1);
+    buf_.LightGrid_grid_light_list_allocator.setName("LightGridGridLightListAllocator");
+    buf_.LightGrid_grid_light_count = gfxCreateBuffer<uint>(gfx, 1);
+    buf_.LightGrid_grid_light_count.setName("LightGridGridLightCount");
+    int num_light_grids = options_.light_grid_size * options_.light_grid_size * options_.light_grid_size * options_.light_grid_num_cascades;
+    buf_.LightGrid_grid_light_list_offset = gfxCreateBuffer<uint>(gfx, num_light_grids);
+    buf_.LightGrid_grid_light_list_offset.setName("LightGridGridLightListOffset");
+    buf_.LightGrid_grid_light_list = gfxCreateBuffer<uint>(gfx, options_.light_grid_max_num_entries);
+    buf_.LightGrid_grid_light_list.setName("LightGridGridLightList");
+
     buf_.active_gaussian_count = gfxCreateBuffer<int>(gfx, 1);
     buf_.active_gaussian_count.setName("GaussianActiveCount");
     buf_.active_gaussian_list_src = gfxCreateBuffer<int>(gfx, max_num_gaussians);
@@ -63,12 +75,34 @@ bool Renderer::CreateResources () {
     buf_.ray_to_trace_direction.setName("RayToTraceDirection");
     buf_.ray_to_trace_origin = gfxCreateBuffer<glm::vec3>(gfx, max_num_rays);
     buf_.ray_to_trace_origin.setName("RayToTraceOrigin");
+    buf_.ray_to_trace_UV_position = gfxCreateBuffer<uint>(gfx, max_num_rays);
+    buf_.ray_to_trace_UV_position.setName("RayToTraceUVPosition");
     buf_.ray_to_trace_seed = gfxCreateBuffer<float>(gfx, max_num_rays);
     buf_.ray_to_trace_seed.setName("RayToTraceSeed");
     buf_.ray_to_trace_flags = gfxCreateBuffer<uint>(gfx, max_num_rays);
     buf_.ray_to_trace_flags.setName("RayToTraceFlags");
+
     buf_.ray_to_trace_result = gfxCreateBuffer<uint2>(gfx, max_num_rays);
     buf_.ray_to_trace_result.setName("RayToTraceResult");
+
+    int max_num_pixels = width * height;
+    buf_.direct_illumination_ray_occlusion_threshold = gfxCreateBuffer<float>(gfx, max_num_pixels);
+    buf_.direct_illumination_ray_occlusion_threshold.setName("DirectIlluminationRayOcclusionThreshold");
+    buf_.direct_illumination_ray_contribution = gfxCreateBuffer<uint2>(gfx, max_num_pixels);
+    buf_.direct_illumination_ray_contribution.setName("DirectIlluminationRayContribution");
+
+#ifndef _NDEBUG
+    buf_.Debug_direct_illumination_pixel_ray_index = gfxCreateBuffer<uint>(gfx, max_num_pixels);
+    buf_.Debug_direct_illumination_pixel_ray_index.setName("Debug_DirectIlluminationPixelRayIndex");
+    buf_.Debug_visualize_ray_count = gfxCreateBuffer<int>(gfx, 1);
+    buf_.Debug_visualize_ray_count.setName("Debug_VisualizeRayCount");
+    buf_.Debug_visualize_ray_vertex = gfxCreateBuffer<glm::vec3>(gfx, 512);
+    buf_.Debug_visualize_ray_vertex.setName("Debug_VisualizeRayVertex");
+    buf_.Debug_visualize_ray_color = gfxCreateBuffer<glm::vec3>(gfx, 512);
+    buf_.Debug_visualize_ray_color.setName("Debug_VisualizeRayColor");
+    buf_.Debug_visualize_ray_ray_index = gfxCreateBuffer<int>(gfx, 512);
+    buf_.Debug_visualize_ray_ray_index.setName("Debug_VisualizeRayRayIndex");
+#endif
 
     uint UB_stride = roundUp((uint32_t)sizeof(UniformBlock), 256u);
     buf_.UB = gfxCreateBuffer(gfx, UB_stride * gfxGetBackBufferCount(gfx), nullptr, kGfxCpuAccess_Write);
@@ -96,11 +130,13 @@ bool Renderer::CreateResources () {
     tex_.G_filtered_depth = gfxCreateTexture2D(gfx, width, height, DXGI_FORMAT_R32_FLOAT, 1, zero_clear_value);
     tex_.G_filtered_depth.setName("G_filtered_depth");
 
+    tex_.direct_illumination = gfxCreateTexture2D(gfx, width, height, DXGI_FORMAT_R16G16B16A16_FLOAT, 1, zero_clear_value);
+    tex_.direct_illumination.setName("DirectIllumination");
+
     tex_.radiance[0] = gfxCreateTexture2D(gfx, width, height, DXGI_FORMAT_R16G16B16A16_FLOAT, 1, zero_clear_value);
     tex_.radiance[0].setName("Radiance0");
     tex_.radiance[1] = gfxCreateTexture2D(gfx, width, height, DXGI_FORMAT_R16G16B16A16_FLOAT, 1, zero_clear_value);
     tex_.radiance[1].setName("Radiance1");
-//    tex_.output = gfxCreateTexture2D(gfx, width, height, DXGI_FORMAT_R8G8B8A8_UNORM);
 
     return true;
 }
@@ -110,6 +146,12 @@ void Renderer::DestroyResources() {
     gfxDestroyBuffer(gfx, buf_.dispatch_indirect_command);
     gfxDestroyBuffer(gfx, buf_.dispatch_rays_indirect_command);
     gfxDestroyBuffer(gfx, buf_.draw_indirect_command);
+
+    gfxDestroyBuffer(gfx, buf_.LightGrid_grid_light_list_allocator);
+    gfxDestroyBuffer(gfx, buf_.LightGrid_grid_light_count);
+    gfxDestroyBuffer(gfx, buf_.LightGrid_grid_light_list_offset);
+    gfxDestroyBuffer(gfx, buf_.LightGrid_grid_light_list);
+
     gfxDestroyBuffer(gfx, buf_.active_gaussian_count);
     gfxDestroyBuffer(gfx, buf_.active_gaussian_list_src);
     gfxDestroyBuffer(gfx, buf_.active_gaussian_list);
@@ -127,10 +169,23 @@ void Renderer::DestroyResources() {
     gfxDestroyBuffer(gfx, buf_.ray_to_trace_list[1]);
     gfxDestroyBuffer(gfx, buf_.ray_to_trace_direction);
     gfxDestroyBuffer(gfx, buf_.ray_to_trace_origin);
+    gfxDestroyBuffer(gfx, buf_.ray_to_trace_UV_position);
     gfxDestroyBuffer(gfx, buf_.ray_to_trace_seed);
     gfxDestroyBuffer(gfx, buf_.ray_to_trace_flags);
     gfxDestroyBuffer(gfx, buf_.ray_to_trace_result);
+
+    gfxDestroyBuffer(gfx, buf_.direct_illumination_ray_occlusion_threshold);
+    gfxDestroyBuffer(gfx, buf_.direct_illumination_ray_contribution);
+
     gfxDestroyBuffer(gfx, buf_.UB);
+
+#ifndef NDEBUG
+    gfxDestroyBuffer(gfx, buf_.Debug_direct_illumination_pixel_ray_index);
+    gfxDestroyBuffer(gfx, buf_.Debug_visualize_ray_count);
+    gfxDestroyBuffer(gfx, buf_.Debug_visualize_ray_vertex);
+    gfxDestroyBuffer(gfx, buf_.Debug_visualize_ray_color);
+    gfxDestroyBuffer(gfx, buf_.Debug_visualize_ray_ray_index);
+#endif
 
     gfxDestroyTexture(gfx, tex_.G_filtered_depth);
 
@@ -139,9 +194,9 @@ void Renderer::DestroyResources() {
     gfxDestroyTexture(gfx, tex_.G_material);
     gfxDestroyTexture(gfx, tex_.G_normal);
 
+    gfxDestroyTexture(gfx, tex_.direct_illumination);
     gfxDestroyTexture(gfx, tex_.radiance[0]);
     gfxDestroyTexture(gfx, tex_.radiance[1]);
-//    gfxDestroyTexture(gfx, tex_.output);
 }
 
 bool Renderer::CreateKernels () {
@@ -180,44 +235,46 @@ bool Renderer::CreateKernels () {
         }
     }
 
-    auto defines_c = std::make_unique<const char*[]>(defines.size());
+    std::vector<const char *> defines_c;
     for(int i = 0; i < defines.size(); i++) {
-        defines_c[i] = defines[i].c_str();
+        defines_c.push_back(defines[i].c_str());
     }
-    int define_count = defines.size();
+    int defines_c.size() = defines.size();
 
     // Compute kernels
 
     {
-        kernel_.GenerateRTMesh = gfxCreateComputeKernel(gfx, program_, "GenerateRTMesh", defines_c.get(), define_count);
+        kernel_.GenerateRTMesh = gfxCreateComputeKernel(gfx, program_, "GenerateRTMesh", defines_c.data(), defines_c.size());
 
         kernel_.GenerateDispatchRaysIndirect = gfxCreateComputeKernel(gfx, program_, "GenerateDispatchRaysIndirect",
-                                                                     defines_c.get(), define_count);
+                                                                     defines_c.data(), defines_c.size());
         kernel_.GenerateDispatchIndirect = gfxCreateComputeKernel(gfx, program_, "GenerateDispatchIndirect",
-                                                                  defines_c.get(), define_count);
+                                                                  defines_c.data(), defines_c.size());
         kernel_.GenerateDrawIndirect = gfxCreateComputeKernel(gfx, program_, "GenerateDrawIndirect",
-                                                              defines_c.get(), define_count);
+                                                              defines_c.data(), defines_c.size());
 
-        kernel_.ClearCounters = gfxCreateComputeKernel(gfx, program_, "ClearCounters", defines_c.get(), define_count);
+        kernel_.ClearCounters = gfxCreateComputeKernel(gfx, program_, "ClearCounters", defines_c.data(), defines_c.size());
         kernel_.FilterActiveGaussians = gfxCreateComputeKernel(gfx, program_, "FilterActiveGaussians",
-                                                               defines_c.get(), define_count);
+                                                               defines_c.data(), defines_c.size());
         kernel_.ProjectActiveGaussians = gfxCreateComputeKernel(gfx, program_, "ProjectActiveGaussians",
-                                                                defines_c.get(), define_count);
-        kernel_.ResolveGBuffers = gfxCreateComputeKernel(gfx, program_, "ResolveGBuffers", defines_c.get(), define_count);
-        kernel_.FilterDepth  = gfxCreateComputeKernel(gfx, program_, "FilterDepth", defines_c.get(), define_count);
-        kernel_.GenerateNearHZB = gfxCreateComputeKernel(gfx, program_, "GenerateNearHZB", defines_c.get(), define_count);
-        kernel_.ReconstructNormals = gfxCreateComputeKernel(gfx, program_, "ReconstructNormals", defines_c.get(), define_count);
-        kernel_.SampleLightRays    = gfxCreateComputeKernel(gfx, program_, "SampleLightRays", defines_c.get(), define_count);
-        kernel_.TraceRaysInScreenSpace = gfxCreateComputeKernel(gfx, program_, "TraceRaysInScreenSpace", defines_c.get(), define_count);
-        kernel_.CompactRayTraces = gfxCreateComputeKernel(gfx, program_, "CompactRayTraces", defines_c.get(), define_count);
-        kernel_.ResolveDirectLighting = gfxCreateComputeKernel(gfx, program_, "ResolveDirectLighting", defines_c.get(), define_count);
+                                                                defines_c.data(), defines_c.size());
+        kernel_.ResolveGBuffers = gfxCreateComputeKernel(gfx, program_, "ResolveGBuffers", defines_c.data(), defines_c.size());
+        kernel_.FilterDepth  = gfxCreateComputeKernel(gfx, program_, "FilterDepth", defines_c.data(), defines_c.size());
+        kernel_.GenerateNearHZB = gfxCreateComputeKernel(gfx, program_, "GenerateNearHZB", defines_c.data(), defines_c.size());
+        kernel_.ReconstructNormals = gfxCreateComputeKernel(gfx, program_, "ReconstructNormals", defines_c.data(), defines_c.size());
+        kernel_.InitializeCounters = gfxCreateComputeKernel(gfx, program_, "InitializeCounters", defines_c.data(), defines_c.size());
+        kernel_.InjectLights = gfxCreateComputeKernel(gfx, program_, "InjectLights", defines_c.data(), defines_c.size());
+        kernel_.SampleLightRays = gfxCreateComputeKernel(gfx, program_, "SampleLightRays", defines_c.data(), defines_c.size());
+        kernel_.TraceRaysInScreenSpace = gfxCreateComputeKernel(gfx, program_, "TraceRaysInScreenSpace", defines_c.data(), defines_c.size());
+        kernel_.CompactRayTraces = gfxCreateComputeKernel(gfx, program_, "CompactRayTraces", defines_c.data(), defines_c.size());
+        kernel_.ResolveDirectLighting = gfxCreateComputeKernel(gfx, program_, "ResolveDirectLighting", defines_c.data(), defines_c.size());
 
-        kernel_.FinalComposition = gfxCreateComputeKernel(gfx, program_, "FinalComposition", defines_c.get(), define_count);
+        kernel_.FinalComposition = gfxCreateComputeKernel(gfx, program_, "FinalComposition", defines_c.data(), defines_c.size());
 
-        kernel_.SpawnCameraRays = gfxCreateComputeKernel(gfx, program_, "SpawnCameraRays", defines_c.get(),
-                                                         define_count);
-        kernel_.DisplayCameraRays = gfxCreateComputeKernel(gfx, program_, "DisplayCameraRays", defines_c.get(),
-                                                           define_count);
+        kernel_.SpawnCameraRays = gfxCreateComputeKernel(gfx, program_, "SpawnCameraRays", defines_c.data(),
+                                                         defines_c.size());
+        kernel_.DisplayCameraRays = gfxCreateComputeKernel(gfx, program_, "DisplayCameraRays", defines_c.data(),
+                                                           defines_c.size());
     }
 
     // Raytracing kernels
@@ -235,7 +292,7 @@ bool Renderer::CreateKernels () {
         kernel_.Trace3DGSRays = gfxCreateRaytracingKernel(gfx, program_, nullptr, 0,
                Trace3DGS_kernel_exports.data(), (uint32_t)Trace3DGS_kernel_exports.size(),
                Trace3DGS_kernel_subobjects.data(), (uint32_t)Trace3DGS_kernel_subobjects.size(),
-               defines_c.get(), define_count);
+               defines_c.data(), defines_c.size());
         std::vector<char const *> Trace3DGSShadow_kernel_exports;
         Trace3DGSShadow_kernel_exports.push_back("Trace3DGSShadowRaygen");
         Trace3DGSShadow_kernel_exports.push_back("Trace3DGSShadowAnyHit");
@@ -243,11 +300,28 @@ bool Renderer::CreateKernels () {
         std::vector<char const *> Trace3DGSShadow_kernel_subobjects = base_subobjects;
         Trace3DGSShadow_kernel_subobjects.push_back("Trace3DGSShadowHitGroup");
         Trace3DGSShadow_kernel_subobjects.push_back("Trace3DGSShadowShaderConfig");
+        defines_c.push_back("DIRECT_ILLUMINATION_SHADOW_RAY_TRACING");
         kernel_.Trace3DGSShadowRays = gfxCreateRaytracingKernel(gfx, program_, nullptr, 0,
             Trace3DGSShadow_kernel_exports.data(), (uint32_t)Trace3DGSShadow_kernel_exports.size(),
             Trace3DGSShadow_kernel_subobjects.data(), (uint32_t)Trace3DGSShadow_kernel_subobjects.size(),
-            defines_c.get(), define_count
+            defines_c.data(), defines_c.size()
         );
+
+
+        std::vector<char const *> DirectIlluminationTrace3DGSShadow_kernel_exports;
+        DirectIlluminationTrace3DGSShadow_kernel_exports.push_back("DirectIlluminationTrace3DGSShadowRaygen");
+        DirectIlluminationTrace3DGSShadow_kernel_exports.push_back("Trace3DGSShadowAnyHit");
+        DirectIlluminationTrace3DGSShadow_kernel_exports.push_back("Trace3DGSShadowMiss");
+        std::vector<char const *> DirectIlluminationTrace3DGSShadow_kernel_subobjects = base_subobjects;
+        DirectIlluminationTrace3DGSShadow_kernel_subobjects.push_back("Trace3DGSShadowHitGroup");
+        DirectIlluminationTrace3DGSShadow_kernel_subobjects.push_back("Trace3DGSShadowShaderConfig");
+        defines_c.push_back("DIRECT_ILLUMINATION_SHADOW_RAY_TRACING");
+        kernel_.DirectIlluminationTrace3DGSShadowRays = gfxCreateRaytracingKernel(gfx, program_, nullptr, 0,
+            DirectIlluminationTrace3DGSShadow_kernel_exports.data(), (uint32_t)DirectIlluminationTrace3DGSShadow_kernel_exports.size(),
+            DirectIlluminationTrace3DGSShadow_kernel_subobjects.data(), (uint32_t)DirectIlluminationTrace3DGSShadow_kernel_subobjects.size(),
+            defines_c.data(), defines_c.size()
+        );
+        defines_c.pop_back();
 
         uint32_t entry_count[kGfxShaderGroupType_Count] {
                 1, // 1 raygen record
@@ -255,7 +329,7 @@ bool Renderer::CreateKernels () {
                 1, // 1 miss
                 1 // Actually we have no callables... but leave 1 here.
         };
-        GfxKernel sbt_kernels[] {kernel_.Trace3DGSRays, kernel_.Trace3DGSShadowRays};
+        GfxKernel sbt_kernels[] {kernel_.Trace3DGSRays, kernel_.Trace3DGSShadowRays, kernel_.DirectIlluminationTrace3DGSShadowRays};
         sbt_ = gfxCreateSbt(gfx, sbt_kernels, ARRAYSIZE(sbt_kernels), entry_count);
     }
 
@@ -280,14 +354,14 @@ bool Renderer::CreateKernels () {
         gfxDrawStateSetPrimitiveTopologyType(draw_state, D3D12_PRIMITIVE_TOPOLOGY_TYPE_POINT);
         gfxDrawStateSetCullMode(draw_state, D3D12_CULL_MODE_NONE);
         kernel_.DrawActiveGaussians = gfxCreateGraphicsKernel(
-                gfx, program_, draw_state, "DrawActiveGaussians", defines_c.get(), define_count
+                gfx, program_, draw_state, "DrawActiveGaussians", defines_c.data(), defines_c.size()
         );
     }
     {
         GfxDrawState draw_state = {};
         gfxDrawStateDisableGeometryShader(draw_state);
         kernel_.TonemapAndDraw = gfxCreateGraphicsKernel(
-                gfx, program_, draw_state, "TonemapAndDraw", defines_c.get(), define_count);
+                gfx, program_, draw_state, "TonemapAndDraw", defines_c.data(), defines_c.size());
     }
 
     return true;
@@ -308,6 +382,8 @@ void Renderer::DestroyKernels () {
     gfxDestroyKernel(gfx, kernel_.FilterDepth);
     gfxDestroyKernel(gfx, kernel_.GenerateNearHZB);
     gfxDestroyKernel(gfx, kernel_.ReconstructNormals);
+    gfxDestroyKernel(gfx, kernel_.InitializeCounters);
+    gfxDestroyKernel(gfx, kernel_.InjectLights);
     gfxDestroyKernel(gfx, kernel_.SampleLightRays);
     gfxDestroyKernel(gfx, kernel_.TraceRaysInScreenSpace);
     gfxDestroyKernel(gfx, kernel_.CompactRayTraces);
@@ -333,6 +409,8 @@ bool Renderer::Initialize () {
     should_build_acceleration_structure_ = true;
     frame_index_ = 0;
 
+    rng_ = std::mt19937(0);
+
     if (!blue_noise_sampler_.Initialize()) return false;
 
     if(!CreateResources()) {
@@ -341,6 +419,8 @@ bool Renderer::Initialize () {
     if(!CreateKernels()) {
         return false;
     }
+
+
     return true;
 }
 

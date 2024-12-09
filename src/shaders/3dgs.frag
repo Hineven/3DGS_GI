@@ -1,4 +1,5 @@
 #include "3dgs.hlsl"
+#include "radiometry.hlsl"
 
 struct DrawActiveGaussians_FSInput
 {
@@ -76,4 +77,15 @@ float4 TonemapAndDraw (float4 InPosition : SV_Position) : SV_Target {
     // Just simply do a gamma correction
     Color.rgb = RadianceToColor(Color.rgb);
     return Color;
+}
+
+struct Debug_VisualizeRays_FSInput {
+    float4 Position : SV_POSITION;
+    float4 Color    : COLOR;
+};
+
+float4 Debug_VisualizeRays (
+    Debug_VisualizeRays_FSInput Input
+) : SV_Target0 {
+    return Input.Color;
 }

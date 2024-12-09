@@ -24,3 +24,18 @@ float4 TonemapAndDraw (uint VertexIndex : SV_VertexID) : SV_Position {
     };
     return float4(Positions[VertexIndex] * 4 - 1, 0, 1);
 }
+
+struct Debug_VisualizeRays_FSInput {
+    float4 Position : SV_POSITION;
+    float4 Color    : COLOR;
+};
+
+Debug_VisualizeRays_FSInput Debug_VisualizeRays (
+    uint VertexIndex : SV_VertexID
+) {
+    Debug_VisualizeRays_FSInput Output;
+    float4 Position = float4(g_Debug_VisualizeRayVertexBuffer[VertexIndex], 1.f);
+    Output.Position = mul(UB.MainCamera.ProjectionView, Position);
+    Output.Color = g_Debug_VisualizeRayColorBuffer[VertexIndex / 2];
+    return Output;
+}

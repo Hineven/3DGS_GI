@@ -92,6 +92,14 @@ void DeviceScene::Upload (const Scene & scene) {
     gsi_normal_transform_ = gfxCreateBuffer(gfx, scene.num_instances_ * sizeof(glm::mat3x3), scene.gsi_normal_transforms_.data());
     gsi_normal_transform_.setName("GSINormalTransformBuffer");
 
+    int num_lights = scene.lights_.size();
+    light_count_ = gfxCreateBuffer<uint>(gfx, 1, &num_lights);
+    light_count_.setName("LightCountBuffer");
+    light_ = gfxCreateBuffer<uint2>(gfx, num_lights, scene.lights_.data());
+    light_.setName("LightBuffer");
+    light_data_ = gfxCreateBuffer<float3>(gfx, num_lights * 4, scene.light_data_.data());
+    light_data_.setName("LightDataBuffer");
+
     UpdateGfxScene(scene);
 
 }
@@ -212,6 +220,10 @@ void DeviceScene::Destroy () {
 
     gfxDestroyTexture(gfx, environment_map_);
 
+    gfxDestroyBuffer(gfx, light_count_);
+    gfxDestroyBuffer(gfx, light_);
+    gfxDestroyBuffer(gfx, light_data_);
+
     gfxDestroyScene(gfx_scene_);
 }
 
@@ -240,4 +252,9 @@ void DeviceScene::Bind(const GfxProgram &program) {
     gfxProgramSetParameter(gfx, program, "g_InstanceTransformBuffer", gsi_transform_);
     gfxProgramSetParameter(gfx, program, "g_InstanceInvTransformBuffer", gsi_inv_transform_);
     gfxProgramSetParameter(gfx, program, "g_InstanceNormalTransformBuffer", gsi_normal_transform_);
+
+    // Lights
+    gfxProgramSetParameter(gfx, program, "g_LightCountBuffer", light_count_);
+    gfxProgramSetParameter(gfx, program, "g_LightBuffer", light_);
+    gfxProgramSetParameter(gfx, program, "g_LightDataBuffer", light_data_);
 }

@@ -3,6 +3,7 @@
 struct Material {
     float3 Normal;
     float3 Albedo;
+    float  Alpha;
 };
 
 Material MakeMaterial (float3 Normal, float3 Albedo) {

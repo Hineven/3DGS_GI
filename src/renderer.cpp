@@ -3,12 +3,18 @@
  * Author:  hineven
  * See LICENSE for licensing.
  */
+
 #include <glm/glm.hpp>
 #include <d3d12.h>
 #include "gfx_imgui.h"
 #include "renderer.h"
 #include "device_scene.h"
 #include "3dgs_shared.hlsl"
+
+// Flag for debugging. Sometimes incorrect indirect dispatches will let my system panic.
+// This flag disables all the indirect shader dispatches so i can safely check for
+// shader compilation errors.
+// #define NO_INDIRECT_DISPATCH
 
 Renderer::Renderer () : Timed("Renderer"), blue_noise_sampler_(AppInternal::GetInstance().GetGfx()) {
 
@@ -43,14 +49,6 @@ void Renderer::GenerateDrawIndirect(const GfxBuffer &vertex_count_buffer) {
 void Renderer::RenderUI () {
     if(ImGui::CollapsingHeader("Renderer")) {
         ImGui::Checkbox("HWRT Visualize", &options_.visualize_HWRT);
-        if (options_.visualize_HWRT) {
-            ImGui::SliderFloat("Min Alpha For Gaussian Evaluation", &options_.HWRT_min_alpha_for_gaussian_evaluation, 0.0f, 0.5f);
-            ImGui::Checkbox("  Visualize Shading Rays", &options_.visualize_HWRT_shading_rays);
-        }
-        ImGui::SliderFloat("Gaussian RT Proxy Geometry Sigma", &options_.gaussian_RT_proxy_geometry_sigma, 0.01f, 1.0f);
-        ImGui::SliderFloat("Opaque Threshold", &options_.opaque_threshold, 0.0f, 1.0f);
-        ImGui::SliderFloat("Depth Alpha Clip", &options_.depth_alpha_clip_value, 0.0f, 1.0f);
-        ImGui::SliderFloat("HWRT Shadow Ray Quality", &options_.stochastic_ray_tracing_quality, 0.f, 1.f);
         const char * debug_modes[] = {
             "Default",
             "Albedo/Color",
@@ -74,12 +72,32 @@ void Renderer::RenderUI () {
             need_reload_shaders_ = true;
         }
         ImGui::Checkbox("SSRT Enable", &options_.SSRT_enable);
-        ImGui::SliderFloat("SSRT Max Trace Distance", &options_.SSRT_max_trace_distance, 0.f, 1.f);
-        ImGui::SliderFloat("SSRT Relative Texel Thickness", &options_.SSRT_relative_texel_thickness, 0.001f, 0.015f);
         ImGui::Checkbox("HWRT Enable", &options_.HWRT_enable);
-        ImGui::SliderFloat("Debug Light X", &options_.debug_light_position.x, -10.f, 10.f);
-        ImGui::SliderFloat("Debug Light Y", &options_.debug_light_position.y, -10.f, 10.f);
-        ImGui::SliderFloat("Debug Light Z", &options_.debug_light_position.z, -10.f, 10.f);
+
+        for (auto & var : cvar_) {
+            bool tmp_bv = false;
+            auto & ref = var.second;
+            switch (ref.type) {
+                case CVar::BOOL:
+                    tmp_bv = ref.v.i;
+                    ref.v.i = ImGui::Checkbox(ref.name.c_str(), &tmp_bv);
+                case CVar::FLOAT:
+                    if (ref.mn == ref.mx)
+                        ImGui::InputFloat(ref.name.c_str(), (float*)&ref.v);
+                    else ImGui::SliderFloat(ref.name.c_str(), (float*)&ref.v, ref.mn, ref.mx);
+                    break;
+                case CVar::INT:
+                    if (ref.mn == ref.mx) ImGui::InputInt(ref.name.c_str(), (int*)&ref.v);
+                    else ImGui::SliderInt(ref.name.c_str(), (int*)&ref.v, ref.mn, ref.mx);
+                case CVar::VEC2:
+                    if (ref.mn == ref.mx) ImGui::InputFloat2(ref.name.c_str(), (float*)&ref.v);
+                    else ImGui::SliderFloat2(ref.name.c_str(), (float*)&ref.v, ref.mn, ref.mx);
+                case CVar::VEC3:
+                    if (ref.mn == ref.mx) ImGui::InputFloat3(ref.name.c_str(), (float*)&ref.v);
+                    else ImGui::SliderFloat3(ref.name.c_str(), (float*)&ref.v, ref.mn, ref.mx);
+            }
+            ImGui::SetItemTooltip("%s", ref.name.c_str());
+        }
     }
 }
 
@@ -97,8 +115,44 @@ void Renderer::Render() {
     auto & scene = AppInternal::GetInstance().GetScene();
     auto & camera = scene.GetCamera();
 
-    UniformBlock UB = {};
+    UB = {};
     {
+        auto registerCVar = [&](std::string name, std::string desc, auto & var_ref, auto default_value, double mn = 0, double mx = 0) {
+            using raw_t = std::remove_cvref_t<decltype(var_ref)>;
+            using def_t = std::remove_cvref_t<decltype(default_value)>;
+            auto it = cvar_.find(&var_ref);
+            if (it != cvar_.end()) {
+                var_ref = it->second[frame_index_ % 8];
+            } else {
+                var_ref = default_value;
+                auto & cvar_ref = cvar_[var_ref];
+                cvar_ref.name = name;
+                cvar_ref.desc = desc;
+                cvar_ref.mn = mn;
+                cvar_ref.mx = mx;
+                if (std::is_same_v<def_t, bool>) {
+                    cvar_ref.type = CVar::BOOL;
+                    cvar_ref.v.i = default_value;
+                } else if (std::is_integral_v<raw_t>) {
+                    cvar_ref.type = CVar::INT;
+                    cvar_ref.v.i = default_value;
+                } else if (std::is_convertible_v<raw_t, float>) {
+                    cvar_ref.type = CVar::FLOAT;
+                    cvar_ref.v.f = default_value;
+                } else if (std::is_same_v<raw_t, glm::vec2>) {
+                    cvar_ref.type = CVar::VEC2;
+                    cvar_ref.v.f2 = default_value;
+                } else if (std::is_same_v<raw_t, glm::vec3>) {
+                    cvar_ref.type = CVar::VEC3;
+                    cvar_ref.v.f3 = default_value;
+                } else {
+                    app_assert(false);
+                }
+            }
+            auto & cvar_ref = cvar_[var_ref];
+            memcpy(var_ref, cvar_ref.v, sizeof(raw_t));
+        };
+#define REGISTER_CVAR(var, desc, ...) registerCVar(#var, desc, var, __VA_ARGS__)
         glm::ivec2 resolution = {
                 AppInternal::GetInstance().GetWindowWidth(),
                 AppInternal::GetInstance().GetWindowHeight()
@@ -106,9 +160,11 @@ void Renderer::Render() {
         UB.MainCamera = camera.PackDescription(resolution.x, resolution.y, previous_UB_.MainCamera);
 
         UB.NumGaussians     = scene.GetNumGaussians();
-        UB.GaussianRTProxyGeometrySigma = options_.gaussian_RT_proxy_geometry_sigma;
+        REGISTER_CVAR(UB.GaussianRTProxyGeometrySigma, "The scaling of the proxy geometry in 3DGS ray tracing."
+            "The original paper says 0.3 is good.", 0.3, 0.01, 1.0);
         UB.IndirectThreadGroupSize = cfg_.wave_lane_count;
-        UB.HWRT_MinAlphaForGaussianEvaluation = options_.HWRT_min_alpha_for_gaussian_evaluation;
+        REGISTER_CVAR(UB.HWRT_MinAlphaForGaussianEvaluation, "Minimum opacity at the ray-gayssian intersection for 3DGS to be evaluated in ray tracing."
+            "Otherwise, they are ignored.", 0.01f, 0.0f, 1.0f);
 
         UB.ScreenDimensions = resolution;
         UB.TileDimensions   = resolution / TILE_SIZE;
@@ -121,18 +177,78 @@ void Renderer::Render() {
         UB.FrameIndex = frame_index_;
 
         UB.DebugMode = options_.debug_mode;
-        UB.VisualizeShadingRays = options_.visualize_HWRT_shading_rays;
-        UB.OpaqueThreshold = options_.opaque_threshold;
-        UB.DepthAlphaClipValue = options_.depth_alpha_clip_value;
+        REGISTER_CVAR(UB.VisualizeShadingRays, "Visualize HWRT shading ray results. Otherwise, visualize shadow ray depth results.",
+            false);
+        REGISTER_CVAR(UB.OpaqueThreshold, "Pixels with alpha values higher than this threshold are considered opaque.",
+            0.1f, 0.0f, 1.0f);
+        // Not that useful.
+        UB.DepthAlphaClipValue = 0;
 
         float MaxTraceDistance = camera.far;
-        UB.HWRT_StochasticRayTracingQuality = options_.stochastic_ray_tracing_quality;
+        REGISTER_CVAR(UB.HWRT_StochasticRayTracingQuality, "The quality of stochastic ray tracing."
+                                                           "Lower values bring more biased but faster results.", 0.2f, 0.0f, 1.0f);
         UB.RT_MaxTraceDistance              = MaxTraceDistance;
-        UB.SSRT_MaxTraceDistance            = options_.SSRT_max_trace_distance;
-        UB.SSRT_RelativeTexelThickness      = options_.SSRT_relative_texel_thickness;
+        REGISTER_CVAR(UB.SSRT_MaxTraceDistance, "Normally, SSRT just helps to solve near field occlusions."
+        "Due to the depth bias in rasterization, SSRT in 3DGS is not as reliable as it is in regular context.",
+        0.25f);
+        REGISTER_CVAR(UB.SSRT_RelativeTexelThickness,
+            "How thick a texel is on Z axis in the projected space when doing screen space ray tracing."
+            "Thicker values may produce more artifacts but can cull more rays.", 0.005f, 0.001f, 0.01f);
 
-        UB.Debug_LightPosition              = options_.debug_light_position;
+        REGISTER_CVAR(UB.Debug_LightPosition, "", glm::vec3(0, 0, 0), -10, 10);
         UB.SSRT_MaxNumIterations            = 50; // Consistent with Lumen
+
+        // Light grid
+        {
+            glm::vec3 mn = scene.GetBoundsMin();
+            glm::vec3 mx = scene.GetBoundsMax();
+            glm::vec3 points[8];
+            points[0] = mn;
+            points[1] = glm::vec3(mx.x, mn.y, mn.z);
+            points[2] = glm::vec3(mn.x, mx.y, mn.z);
+            points[3] = glm::vec3(mx.x, mx.y, mn.z);
+            points[4] = glm::vec3(mn.x, mn.y, mx.z);
+            points[5] = glm::vec3(mx.x, mn.y, mx.z);
+            points[6] = glm::vec3(mn.x, mx.y, mx.z);
+            points[7] = mx;
+            float radius = 0;
+            for (int i = 0; i < 8; i++) {
+                auto p = abs(camera.position - points[i]);
+                radius = glm::max(glm::max(p.x, p.y), p.z);
+            }
+
+            int fid_mapping[8] = {
+                0, 7, 1, 6, 2, 5, 3, 4
+            };
+            int fid_mapped = fid_mapping[frame_index_% 8];
+            glm::vec3 fw = glm::vec3(fid_mapped & 1, (bool)(fid_mapped & 2), (bool)(fid_mapped & 4));
+            glm::vec3 jitter {nextFloat(), nextFloat(), nextFloat()};
+            jitter = glm::vec3(0.5f) * fw + 0.5f * jitter;
+
+            for (int i = 0; i < options_.light_grid_num_cascades; i++) {
+                double cascade_radius = radius / (1 << (options_.light_grid_num_cascades - i - 1));
+                double cascade_grid_size = cascade_radius / options_.light_grid_size;
+                glm::dvec3 cascade_center = glm::dvec3(camera.position) + cascade_grid_size * glm::dvec3(jitter);
+                glm::vec3 cascade_min = glm::vec3(cascade_center - cascade_radius);
+                glm::vec3 cascade_max = glm::vec3(cascade_center + cascade_radius);
+                UB.LightGrid_GridCascadeMin[i] = glm::vec4(cascade_min, 0.f);
+                UB.LightGrid_GridCascadeMax[i] = glm::vec4(cascade_max, 0.f);
+                if (i == 0) UB.LightGrid_GridSize = glm::vec3(cascade_grid_size);
+            }
+            UB.LightGrid_GridResolution = options_.light_grid_size;
+            UB.LightGrid_GridResolution2 = options_.light_grid_size * options_.light_grid_size;
+            UB.LightGrid_GridResolution3 = options_.light_grid_size * options_.light_grid_size * options_.light_grid_size;
+            UB.LightGrid_NumGridCascades = options_.light_grid_num_cascades;
+            REGISTER_CVAR(UB.LightGrid_MinLightContributionForInjection, "Minimum amount of contribution estimated from a light to any grid, "
+                                                                         "for the light be injected to the grid." , 1e-4f);
+
+            REGISTER_CVAR(UB.LightGrid_MinResampleWeightForDirectIllumiation, "Minimum resample weight for a light to be resampled when sampling from"
+                                                                              "light grids for pixel shading.", 1e-4f);
+            UB.LightGrid_MaxNumEntries = options_.light_grid_max_num_entries;
+        }
+
+        REGISTER_CVAR(UB.DI_OcclusionThresholdMinFactor, "Minimum factor of shadow ray length threshold upon DI occlusion tests.", 0.97f);
+        REGISTER_CVAR(UB.DI_OcclusionThresholdMaxFactor, "Maximum factor of shadow ray length threshold upon DI occlusion tests.", 0.99f);
 
         gfxSbtGetGpuVirtualAddressRangeAndStride(gfx, sbt_,
             (D3D12_GPU_VIRTUAL_ADDRESS_RANGE *)&UB.RT_RayGenerationShaderRecord,
@@ -153,6 +269,13 @@ void Renderer::Render() {
 
     blue_noise_sampler_.InstallParameters(program_);
 
+    // Light grid
+    gfxProgramSetBuffer(gfx, program_, "g_LightGrid_GridLightListAllocator", buf_.LightGrid_grid_light_list_allocator);
+    gfxProgramSetBuffer(gfx, program_, "g_LightGrid_GridLightCountBuffer", buf_.LightGrid_grid_light_count);
+    gfxProgramSetBuffer(gfx, program_, "g_LightGrid_GridLightListOffsetBuffer", buf_.LightGrid_grid_light_list_offset);
+    gfxProgramSetBuffer(gfx, program_, "g_LightGrid_GridLightListBuffer", buf_.LightGrid_grid_light_list);
+
+    // Common
     gfxProgramSetParameter(gfx, program_, "g_RWDispatchIndirectCommandBuffer", buf_.dispatch_indirect_command);
     gfxProgramSetParameter(gfx, program_, "g_RWDispatchRaysIndirectCommandBuffer", buf_.dispatch_rays_indirect_command);
     gfxProgramSetParameter(gfx, program_, "g_RWDrawIndirectCommandBuffer", buf_.draw_indirect_command);
@@ -300,7 +423,7 @@ void Renderer::Render() {
             gfxCommandDispatch(gfx, num_groups, 1, 1);
 
             int num_rays = num_groups * TILE_SIZE * TILE_SIZE;
-            if (options_.visualize_HWRT_shading_rays) {
+            if (UB.VisualizeShadingRays) {
                 gfxCommandBindKernel(gfx, kernel_.Trace3DGSRays);
                 gfxSbtSetShaderGroup(gfx, sbt_, kGfxShaderGroupType_Raygen, 0, "Trace3DGSRaygen");
                 gfxSbtSetShaderGroup(gfx, sbt_, kGfxShaderGroupType_Hit, 0, "Trace3DGSHitGroup");
@@ -345,7 +468,9 @@ void Renderer::Render() {
             auto section = TimedSection(*this, "ProjectActiveGaussians");
             GenerateDispatchIndirect(buf_.active_gaussian_count);
             gfxCommandBindKernel(gfx, kernel_.ProjectActiveGaussians);
+#ifndef NO_INDIRECT_DISPATCH
             gfxCommandDispatchIndirect(gfx, buf_.dispatch_indirect_command);
+#endif
         }
 
         {
@@ -364,7 +489,9 @@ void Renderer::Render() {
             if (!options_.reconstruct_normals) {
                 gfxCommandBindColorTarget(gfx, 3, tex_.G_normal);
             }
+#ifndef NO_INDIRECT_DISPATCH
             gfxCommandMultiDrawIndirect(gfx, buf_.draw_indirect_command, 1);
+#endif
         }
 
         {
@@ -417,7 +544,9 @@ void Renderer::Render() {
             {
                 auto section = TimedSection(*this, "CompactRayTraces");
                 gfxCommandBindKernel(gfx, kernel_.CompactRayTraces);
+#ifndef NO_INDIRECT_DISPATCH
                 gfxCommandDispatchIndirect(gfx, buf_.dispatch_indirect_command);
+#endif
             }
             // Swap the bound buffers
             gfxProgramSetParameter(gfx, program_, "g_RWRayToTraceCountBuffer", buf_.ray_to_trace_count[ray_compact_count & 1]);
@@ -451,7 +580,9 @@ void Renderer::Render() {
             auto section = TimedSection(*this, "TraceRaysInScreenSpace");
             GenerateDispatchIndirect(buf_.ray_to_trace_count[ray_compact_count & 1]);
             gfxCommandBindKernel(gfx, kernel_.TraceRaysInScreenSpace);
+#ifndef NO_INDIRECT_DISPATCH
             gfxCommandDispatchIndirect(gfx, buf_.dispatch_indirect_command);
+#endif
         }
 
         // Cull the rays that are simply completed by SSRT
@@ -464,11 +595,13 @@ void Renderer::Render() {
             GenerateDispatchRaysIndirect(buf_.ray_to_trace_count[ray_compact_count & 1]);
 
             gfxCommandBindKernel(gfx, kernel_.Trace3DGSShadowRays);
-            gfxSbtSetShaderGroup(gfx, sbt_, kGfxShaderGroupType_Raygen, 0, "Trace3DGSShadowRaygen");
+            gfxSbtSetShaderGroup(gfx, sbt_, kGfxShaderGroupType_Raygen, 0, "DirectIlluminationTrace3DGSShadowRaygen");
             gfxSbtSetShaderGroup(gfx, sbt_, kGfxShaderGroupType_Hit, 0, "Trace3DGSShadowHitGroup");
             gfxSbtSetShaderGroup(gfx, sbt_, kGfxShaderGroupType_Miss, 0, "Trace3DGSShadowMiss");
 
+#ifndef NO_INDIRECT_DISPATCH
             gfxCommandDispatchRaysIndirect(gfx, sbt_, buf_.dispatch_rays_indirect_command);
+#endif
         }
 
         // Resolve the ray trace results into direct lighting
@@ -476,7 +609,9 @@ void Renderer::Render() {
             auto section = TimedSection(*this, "ResolveDirectLighting");
             GenerateDispatchIndirect(buf_.ray_count);
             gfxCommandBindKernel(gfx, kernel_.ResolveDirectLighting);
+#ifndef NO_INDIRECT_DISPATCH
             gfxCommandDispatchIndirect(gfx, buf_.dispatch_indirect_command);
+#endif
         }
 
         // Final radiance composition

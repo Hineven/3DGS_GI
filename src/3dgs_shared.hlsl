@@ -73,7 +73,7 @@ struct UniformBlock {
     // whether we're tracing and visualizing shading rays (started from the camera) 
     // Otherwise only shadow ray depths are (possibly) visualized.
     uint VisualizeShadingRays;
-    // Pixels with alpha values passing this threshold will be considered opaque.
+    // Pixels with alpha values larger or equal to this threshold will be considered opaque.
     float OpaqueThreshold;
     // Alphas for blending depth values are reduced by a factor of this value.
     // Thus there can be smoother depth transitions between different gaussians.
@@ -85,7 +85,7 @@ struct UniformBlock {
     float SSRT_RelativeTexelThickness;
     
     float3 Debug_LightPosition;
-    uint  SSRT_MaxNumIterations;
+    uint   SSRT_MaxNumIterations;
 
     float4 LightGrid_GridCascadeMin[4];
     
@@ -100,9 +100,12 @@ struct UniformBlock {
     float  LightGrid_MinLightContributionForInjection;
 
     float  LightGrid_MinResampleWeightForDirectIllumiation;
-    uint   Padding0;
-    uint   Padding1;
-    uint   Padding2;
+    uint   LightGrid_MaxNumEntries; // Max number of entries in the light grids
+    uint   DI_OcclusionThresholdMinFactor;
+    uint   DI_OcclusionThresholdMaxFactor;
+
+    int2   Debug_CursorPixelCoords;
+    int2   Padding0_2;
 
     DeviceVirtualAddressRange RT_RayGenerationShaderRecord;
     
@@ -163,9 +166,11 @@ struct SHCoefficents3 {
     float3 SH3[7];
 };
 
-#define LIGHT_GRID_NUM_CASCADES 4
+#define LIGHT_GRID_MAX_NUM_CASCADES 4
 
 #define LIGHT_GRID_MAX_NUM_GRID_LIGHTS 8
+
+#define LIGHT_GRID_MAX_GRID_SIZE 32
 
 #define LIGHT_TYPE_DIRECTIONAL 0
 #define LIGHT_TYPE_SKY  1

@@ -57,6 +57,10 @@ public:
 
     GfxTexture environment_map_;
 
+    GfxBuffer light_count_;
+    GfxBuffer light_;
+    GfxBuffer light_data_;
+
 protected:
 
     GfxProgram ibl_program_;

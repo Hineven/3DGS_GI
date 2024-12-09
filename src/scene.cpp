@@ -3,6 +3,7 @@
  * Author:  hineven
  * See LICENSE for licensing.
  */
+#include <map>
 #include <happly.h>
 #include <gfx.h>
 #include <gfx_scene.h>
@@ -186,8 +187,63 @@ bool Scene::LoadGaussians (std::filesystem::path path, bool always_load_sh) {
     gsi_gs_counts_.resize(1);
     gsi_gs_counts_[0] = num_gaussians_;
 
+    UpdateBounds ();
+
     return true;
 }
+
+struct Bounds {
+    glm::vec3 mn;
+    glm::vec3 mx;
+};
+
+void Scene::UpdateBounds() {
+    std::map<std::pair<int, int> , Bounds> cached_bounds;
+    float scale_multiplier = 3.f;
+    gsi_bounds_min.clear();
+    gsi_bounds_max.clear();
+    bounds_min_ = glm::vec3(FLT_MAX);
+    bounds_max_ = glm::vec3(-FLT_MAX);
+    for (int i = 0; i < (int)gsi_transforms_.size(); i++) {
+        auto key = std::make_pair(gsi_gs_index_offsets_[i], gsi_gs_counts_[i]);
+        auto it = cached_bounds.find(key);
+        Bounds bounds;
+        if (it != cached_bounds.end()) {
+            bounds = it->second;
+        } else {
+            bounds.mn = glm::vec3(FLT_MAX);
+            bounds.mx = glm::vec3(-FLT_MAX);
+            for (int j = gsi_gs_index_offsets_[i]; j < gsi_gs_index_offsets_[i] + gsi_gs_counts_[i]; j++) {
+                auto & pos = gs_positions_[j];
+                auto & scale = gs_scales_[j];
+                auto mn = pos - scale * scale_multiplier;
+                auto mx = pos + scale * scale_multiplier;
+                bounds.mn = glm::min(bounds.mn, pos);
+                bounds.mx = glm::max(bounds.mx, pos);
+            }
+            cached_bounds[key] = bounds;
+        }
+        gsi_bounds_min.push_back(bounds.mn);
+        gsi_bounds_max.push_back(bounds.mx);
+        glm::vec3 points[8];
+        points[0] = bounds.mn;
+        points[1] = glm::vec3(bounds.mn.x, bounds.mn.y, bounds.mx.z);
+        points[2] = glm::vec3(bounds.mn.x, bounds.mx.y, bounds.mn.z);
+        points[3] = glm::vec3(bounds.mn.x, bounds.mx.y, bounds.mx.z);
+        points[4] = glm::vec3(bounds.mx.x, bounds.mn.y, bounds.mn.z);
+        points[5] = glm::vec3(bounds.mx.x, bounds.mn.y, bounds.mx.z);
+        points[6] = glm::vec3(bounds.mx.x, bounds.mx.y, bounds.mn.z);
+        points[7] = bounds.mx;
+        // Transform to world space and update scene bounds
+        for (int j = 0; j < 8; j++) {
+            auto p_w = gsi_transforms_[i] * glm::vec4(points[j], 1.f);
+            auto p = glm::vec3(p_w) / p_w[3];
+            bounds_min_ = glm::min(bounds_min_, p);
+            bounds_max_ = glm::max(bounds_max_, p);
+        }
+    }
+}
+
 
 void Scene::UpdateDeviceScene() {
     Scene & scene = *this;

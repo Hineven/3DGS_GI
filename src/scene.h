@@ -35,7 +35,7 @@ public:
     // radians
     float fov_y {1.f};
 
-    // Some windows header macro occupies these identifiers
+    // fk windows
 #undef near
 #undef far
     float near  {0.05f};
@@ -65,14 +65,23 @@ public:
 
     inline int GetNumInstances () const { return num_instances_; }
 
+    inline glm::vec3 GetBoundsMin () const { return bounds_min_; }
+
+    inline glm::vec3 GetBoundsMax () const { return bounds_max_; }
+
     ~Scene();
 
     friend class DeviceScene;
     friend class Renderer;
 protected:
 
+    // Update the bounds of all instances and the entire scene
+    void UpdateBounds ();
 
     Camera camera_ {};
+
+    glm::vec3 bounds_min_;
+    glm::vec3 bounds_max_;
 
     int num_gaussians_;
     std::vector<glm::vec3> gs_positions_;
@@ -90,7 +99,9 @@ protected:
     std::vector<float>     gs_roughnesses_;
 
     int num_instances_;
-    // GS instance transforms
+    // GS instances
+    std::vector<glm::vec3> gsi_bounds_min; // instance local bounds
+    std::vector<glm::vec3> gsi_bounds_max; // instance local bounds
     std::vector<glm::mat4x3> gsi_transforms_;
     std::vector<glm::mat4x3> gsi_inv_transforms_;
     std::vector<glm::mat3x3> gsi_normal_transforms_;

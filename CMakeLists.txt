@@ -8,6 +8,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # Disable C6553 warning
 add_compile_options(/wd6553)
+add_compile_definitions(NOMINMAX)
 
 # Tell gfx to use ImGui
 set(GFX_ENABLE_GUI                ON CACHE BOOL "")

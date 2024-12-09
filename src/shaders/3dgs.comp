@@ -7,6 +7,7 @@
 #include "lightgrid.hlsl"
 
 #include "random.hlsl"
+#include "radiometry.hlsl"
 
 [numthreads(1, 1, 1)]
 void GenerateDispatchRaysIndirect () {
@@ -334,7 +335,7 @@ void InitializeCounters () {
 }
 
 [numthreads(WAVE_SIZE, 1, 1)]
-void InjectLightGrids (uint DispatchID : SV_DispatchThreadID) {
+void InjectLights (uint DispatchID : SV_DispatchThreadID) {
 	int NumLights = GetNumLights();
 	uint4 GridIndex = LightGrid_GetGridIndex(DispatchID);
 	float3 GridMin; 
@@ -376,21 +377,90 @@ void InjectLightGrids (uint DispatchID : SV_DispatchThreadID) {
 			NumGridLights ++;
 		} else break;
 	}
-	g_LightGrid_GridLightCountBuffer[DispatchID] = NumGridLights;
 	int LightGridListIndexBase = 0;
 	InterlockedAdd(g_LightGrid_GridLightListAllocator[0], NumGridLights, LightGridListIndexBase);
 	g_LightGrid_GridLightListOffsetBuffer[DispatchID] = LightGridListIndexBase;
-	g_LightGrid_GridLightSumWeightBuffer[DispatchID] = GridLightWeightSum;
+	// Clamp the number of lights to avoid overflowing the list buffer
+	NumGridLights = min(NumGridLights, UB.LightGrid_MaxNumEntries - LightGridListIndexBase);
+	g_LightGrid_GridLightCountBuffer[DispatchID] = NumGridLights;
 	for(int i = 0; i < NumGridLights; i++) {
 		int LightGridListIndex = LightGridListIndexBase + i;
 		g_LightGrid_GridLightListBuffer[LightGridListIndex] = GridLightIndices[i];
 	}
 }
 
+struct LightData {
+	int Type;
+	float3 V1; // Light direction if this is a directional light
+	float3 V2;
+	float3 V3;
+	float3 Radiance;
+};
+
+LightData FetchLightDetails (int LightIndex, Light L) {
+	LightData Details = (LightData) 0;
+	int Offset = LightIndex * 4;
+	Details.Type = L.Type;
+	Details.V1 = g_LightDataBuffer[Offset + 0];
+	Details.V2 = g_LightDataBuffer[Offset + 1];
+	Details.V3 = g_LightDataBuffer[Offset + 2];
+	Details.Radiance = g_LightDataBuffer[Offset + 3];
+	return Details;
+}
+
+struct LightSample {
+	int LightType;
+	// If the sampled light is infinitely far, position is replaced by direction.
+	float3 Position;
+	float  Pdf;
+	float3 Radiance;
+	bool   bValid;
+
+	bool IsValid () {
+		return bValid;
+	}
+};
+
+Material FetchMaterial (CameraDescription C, uint2 TexelCoords) {
+	Material Result = (Material) 0;
+	Result.Normal = GetNormalTexture(C).Load(int3(TexelCoords, 0)).xyz;
+	Result.Normal = normalize(Result.Normal * 2 - 1);
+	float4 AlbedoAlpha = GetColorTexture(C).Load(int3(TexelCoords, 0));
+	Result.Albedo = AlbedoAlpha.xyz;
+	Result.Alpha = AlbedoAlpha.w;
+	// Result.Roughness = GetRoughnessTexture(TexelCoords).Load().x;
+	return Result;
+}
+
+LightSample SampleLight (float3 Position, Material M, LightData LD, float2 u2) {
+	LightSample Result = (LightSample) 0;
+	Result.LightType = LD.Type;
+	if(LD.Type == LIGHT_TYPE_DIRECTIONAL) {
+		Result.Position = LD.V1;
+		float CosineFactor = saturate(dot(LD.V1, M.Normal));
+		Result.Radiance = LD.Radiance * CosineFactor;
+		Result.Pdf = 1.f;
+	} else if(LD.Type == LIGHT_TYPE_SKY) {
+		Result.Position = SampleSkyLight(M.Normal, u2, Result.Pdf);
+		float CosineFactor = saturate(dot(Result.Position, M.Normal));
+		Result.Radiance = EvaluateSkyRadiance(Result.Position) * CosineFactor;
+	} else if(LD.Type == LIGHT_TYPE_AREA) {
+		Result.Position = SampleAreaLightArea(LD.V1, LD.V2, LD.V3, u2, Result.Pdf);
+		// Convert area pdf to solid angle pdf
+		float Distance = length(Result.Position - Position);
+		float Cosine = dot(Result.Position - Position, M.Normal);
+		Result.Pdf *= Distance * Distance / abs(Cosine);
+		Result.Radiance = LD.Radiance * saturate(Cosine);
+	}
+	Result.bValid = Result.Pdf > 0;
+	return Result;
+}
+
 [numthreads(TILE_SIZE, TILE_SIZE, 1)]
 void SampleLightRays (uint2 DispatchID : SV_DispatchThreadID) {
 	CameraDescription C = GetCameraDescription();
 	if(IsOutOfFilm(C, DispatchID)) return;
+	// No need to jitter film positions (already done in the rasterization pass via TAA)
 	float2 FilmPosition = DispatchID + 0.5f.xx;
 	float  LinearDepth  = GetFilteredDepthTexture(C).Load(int3(DispatchID, 0)).r;
 	// Empty pixel
@@ -400,53 +470,61 @@ void SampleLightRays (uint2 DispatchID : SV_DispatchThreadID) {
 	float3 Origin = RecoverWorldSpacePosition(C, FilmPosition, LinearDepth);
 
 	// Sample lights using light grid
-	uint4 GridIndex  = LightGrid_GetGridIndex(Origin);
-	uint  GridIndex1 = LightGrid_GetGridIndex1(GridIndex);
+	uint4 GridIndex      = LightGrid_GetGridIndex(Origin);
+	uint  WaveGridIndex1 = LightGrid_GetGridIndex1(GridIndex);
 
 	Material M = FetchMaterial(C, DispatchID);
 
 	uint  SampledLightIndex = 0xffffffffu;
-	float SampledLightU = 0;
+	float SampledLightResampleWeight = 0;
 	float SumResampleWeights = 0;
 	LightSample ReservedSample = (LightSample) 0;
 	uint  Seed = DispatchID.x + (DispatchID.y * C.FilmDimensions.x);
 	Random rng = MakeRandom(Seed ^ 0x51f49a7cu, UB.FrameIndex);
 	float2 u2 = rng.rand2();
 
+	bool bSampled = false;
+
 	// Cooperative sampling
 	while(true) {
-		uint MinGridIndex1 = WaveActiveMin(GridIndex1);
+		uint MinGridIndex1 = WaveActiveMin(WaveGridIndex1);
 		// Sample lights for the pixels within the same light grid with minimum id.
 		// Other threads keep idle.
-		if(GridIndex1 == MinGridIndex1) {
+		// It's likely that a tile is covered by a single light grid as light grids are large.
+		// So the memory reads can be effectively broadcasted to all threads.
+		if(!bSampled && WaveGridIndex1 == MinGridIndex1) {
 			float U = rng.rand();
-			int NumGridLights = g_LightGrid_GridLightCountBuffer[GridIndex1];
-			int LightGridListOffset = g_LightGrid_GridLightListOffsetBuffer[GridIndex1];
+			int NumGridLights = g_LightGrid_GridLightCountBuffer[WaveGridIndex1];
+			int LightGridListOffset = g_LightGrid_GridLightListOffsetBuffer[WaveGridIndex1];
 			// float GridLightSumWeight = g_LightGrid_GridLightSumWeightBuffer[GridIndex1];
-			// Resample grid lights using real lighting
+			// Resample grid lights using luminance as the weight
 			for(int i = 0; i < NumGridLights; i++) {
 				int LightIndex = g_LightGrid_GridLightListBuffer[LightGridListOffset + i];
 				Light L = FetchLightHeader(LightIndex);
-				// We have to produce a full sample of the light to estimate the light contribution
+				// We have to produce a full sample of the light to accurately estimate the light contribution
 				LightData   Details = FetchLightDetails(LightIndex, L);
-				LightSample Sample = SampleLight(Origin, M, Details, u2);
+				LightSample Sample  = SampleLight(Origin, M, Details, u2);
 
 				float LightGridWeight = EstimateLightGridContribution(L, Origin, 0);
-				float LightCurrWeight = Luminance(Sample.Radiance);
+				float LightCurrWeight = Luminance(Sample.Radiance); 
 				// RIS
 				float ResampleWeight  = LightCurrWeight / LightGridWeight;
-				if(ResampleWeight > LightGrid_MinResampleWeightForDirectIllumiation) {
-					float CurrentLightU = ResampleWeight / (ResampleWeight + SumResampleWeights);
-					U *= SumResampleWeights / (SumResampleWeights + ResampleWeight);
+				if(ResampleWeight > UB.LightGrid_MinResampleWeightForDirectIllumiation) {
+					float NewSumResampleWeights = SumResampleWeights + ResampleWeight;
+					float CurrentLightU = ResampleWeight / NewSumResampleWeights;
+					U *= 1.f - CurrentLightU;
 					if(CurrentLightU > U) {
 						ReservedSample = Sample;
+						SampledLightResampleWeight = ResampleWeight;
 					}
-					SumResampleWeights += ResampleWeight;
+					SumResampleWeights = NewSumResampleWeights;
 				}
 			}
+			bSampled = true;
 		}
+		WaveGridIndex1 = max(MinGridIndex1, WaveGridIndex1);
 		// All the pixels are sampled. Break.
-		if(WaveActiveAllTrue(GridIndex1 == MinGridIndex1)) {
+		if(WaveActiveAllTrue(WaveGridIndex1 == MinGridIndex1)) {
 			break;
 		}
 	}
@@ -454,30 +532,47 @@ void SampleLightRays (uint2 DispatchID : SV_DispatchThreadID) {
 	// Okay we have a sample for each pixel. Now encode a shadow ray for visibility testing.
 	
 	if(ReservedSample.IsValid()) {
-asdasdas
-		// float3 Direction = normalize(LightPosition - Origin);
-		// // Direction = float3(0, 0, 1);
-		
-		// // Allocate rays
-		// int RayIndex = 0;
-		// {
-		// 	int RayIndexBase = 0;
-		// 	int RayWarpCount = WaveActiveCountBits(1);
-		// 	int RayWarpRank  = WavePrefixCountBits(1);
-		// 	if(WaveIsFirstLane()) {
-		// 		InterlockedAdd(g_RWRayToTraceCountBuffer[0], RayWarpCount, RayIndexBase);
-		// 	}
-		// 	RayIndexBase = WaveReadLaneFirst(RayIndexBase);
-		// 	RayIndex = RayIndexBase + RayWarpRank;
-		// }
 
-		// RayToTrace Ray = InitRayToTrace(UB.RT_MaxTraceDistance);
+		// Calculate actual pdf, taking RIS into account.
+		// We omitted the '1 / NumGridLights' term cause it cancels out in later multiplications.
+		float Pdf = ReservedSample.Pdf * (SampledLightResampleWeight / SumResampleWeights);
+		// Modify the sample contribution
+		ReservedSample.Radiance /= max(Pdf, 1e-6f);
+
+		// Spawn shadow ray
+		float3 Direction = 0;
+		float OcclusionThreshold = 0;
+		if(IsInfinitelyFarLightType(ReservedSample.LightType)) {
+			Direction = ReservedSample.Position;
+			OcclusionThreshold = UB.RT_MaxTraceDistance;
+		} else {
+			Direction = normalize(ReservedSample.Position - Origin);
+			OcclusionThreshold = length(ReservedSample.Position - Origin);
+		}
+		// Allocate rays
+		int RayIndex = 0;
+		{
+			int RayIndexBase = 0;
+			int RayWarpCount = WaveActiveCountBits(1);
+			int RayWarpRank  = WavePrefixCountBits(1);
+			if(WaveIsFirstLane()) {
+				InterlockedAdd(g_RWRayToTraceCountBuffer[0], RayWarpCount, RayIndexBase);
+			}
+			RayIndexBase = WaveReadLaneFirst(RayIndexBase);
+			RayIndex = RayIndexBase + RayWarpRank;
+		}
+		// Write ray to memory for compound ray tracing
+		RayToTrace Ray = InitRayToTrace(UB.RT_MaxTraceDistance);
 		// Ray.Origin = Origin;
-		// Ray.Direction = Direction;
-		// Ray.Seed = BlueNoise_Sample1D(DispatchID, UB.FrameIndex) * UB.HWRT_StochasticRayTracingQuality;
-		// WriteRayToTrace(RayIndex, Ray);
-		// g_RWRayToTraceListBuffer[RayIndex] = RayIndex;
-		// g_RWRayToTraceResultBuffer[RayIndex] = 0;
+		Ray.Direction = Direction;
+		Ray.Seed = BlueNoise_Sample1D(DispatchID, UB.FrameIndex) * UB.HWRT_StochasticRayTracingQuality;
+		WriteRayToTrace(RayIndex, Ray, false);
+		g_RWRayToTraceUVPositionBuffer[RayIndex] = PackUnorm16x2(FilmPosition / C.FilmDimensions);
+		g_RWRayToTraceListBuffer[RayIndex] = RayIndex;
+		// Keep in mind the occulusion threshold for direct illumination visibility testing
+		g_RWDirectIlluminationRayOcclusionThresholdBuffer[RayIndex] = OcclusionThreshold;
+		// Store the sample contribution for direct illumination (if it passed the visibility test)
+		g_RWDirectIlluminationRayContributionBuffer[RayIndex] = PackRadianceA16(float4(ReservedSample.Radiance, 1.f));
 	}
 }
 
@@ -487,7 +582,12 @@ asdasdas
 void TraceRaysInScreenSpace (uint DispatchID : SV_DispatchThreadID) {
 	if(DispatchID >= g_RWRayToTraceCountBuffer[0]) return;
 	int RayIndex = g_RWRayToTraceListBuffer[DispatchID];
-	RayToTrace Ray = FetchRayToTrace(RayIndex, UB.RT_MaxTraceDistance);
+	RayToTrace Ray = FetchRayToTrace(RayIndex, UB.RT_MaxTraceDistance, false);
+	// Manually recover the origin from the screen position
+	float2 FilmPosition = UnpackUnorm16x2(g_RWRayToTraceUVPositionBuffer[RayIndex])
+		 * GetCameraDescription().FilmDimensions;
+	float  LinearDepth = GetFilteredDepthTexture(GetCameraDescription()).Load(int3(FilmPosition, 0)).r;
+	Ray.Origin = RecoverWorldSpacePosition(GetCameraDescription(), FilmPosition, LinearDepth);
 	CameraDescription C = GetCameraDescription();
 	
 	float3 OriginUVW   = TransformPointWithPerspectiveDivide(C.ProjectionView, Ray.Origin);
@@ -583,7 +683,8 @@ void TraceRaysInScreenSpace (uint DispatchID : SV_DispatchThreadID) {
 void CompactRayTraces (uint DispatchID : SV_DispatchThreadID) {
 	if(DispatchID >= g_RWRayToTraceCountBuffer[0]) return;
 	int RayIndex = g_RWRayToTraceListBuffer[DispatchID];
-	RayToTrace Ray = FetchRayToTrace(RayIndex, UB.RT_MaxTraceDistance);
+	// Compact only happens after screen space ray tracing, so we dont need to fetch ray origins.
+	RayToTrace Ray = FetchRayToTrace(RayIndex, UB.RT_MaxTraceDistance, false);
 	if(!Ray.bHit) {
 		int RayCount = WaveActiveCountBits(1);
 		int RayWarpRank  = WavePrefixCountBits(1);
@@ -609,32 +710,66 @@ void ResolveDirectLighting (uint DispatchID : SV_DispatchThreadID) {
 
 	// Splat ray origins onto the film
 	int RayIndex = DispatchID;
-	RayToTrace Ray = FetchRayToTrace(RayIndex, UB.RT_MaxTraceDistance);
-	float3 Homogeneous  = TransformPointWithPerspectiveDivide(C.ProjectionView, Ray.Origin);
-	float2 FilmPosition = NDC2ToFilm(C, Homogeneous.xy);
+	RayToTrace Ray = FetchRayToTrace(RayIndex, UB.RT_MaxTraceDistance, false);
+	float2 FilmPosition = UnpackUnorm16x2(g_RWRayToTraceUVPositionBuffer[RayIndex]) * C.FilmDimensions;
 	int2   PixelCoords  = int2(FilmPosition);
+
+#ifndef NDEBUG
+	{
+		// Build the mapping from pixel to ray index for debugging
+		int PixelIndex = PixelCoords.x + PixelCoords.y * C.FilmDimensions.x;
+		g_Debug_DirectIlluminationPixelRayIndexBuffer[PixelIndex] = RayIndex;
+	}
+#endif
 	
 	if(IsOutOfFilm(C, PixelCoords)) return;
 
-	float3 PixelNormal  = normalize(GetNormalTexture(C).Load(int3(PixelCoords, 0)).rgb * 2 - 1);
-	float4 PixelAlbedoA = GetColorTexture(C).Load(int3(PixelCoords, 0));
+	Material M = FetchMaterial(C, PixelCoords);
 
 	// Transparent
-	if(PixelAlbedoA.w < UB.OpaqueThreshold) return;
-	// GetRWRadianceTexture(C)[PixelCoords] = float4(Ray.bHit, Ray.RayTMin, 0, PixelAlbedoA.w);
-	float  FreeTravelDistance = distance(Ray.Origin, UB.Debug_LightPosition);
-	// bool   bNotOccluded = Ray.RayTMin >= FreeTravelDistance;
-	// TODO jitter visibility test
-	float  ShadowFactor = Ray.RayTMin >= FreeTravelDistance * 0.99f;
+	if(M.Alpha < UB.OpaqueThreshold) {
+		GetRWDirectIlluminationTexture(C)[PixelCoords] = 0.f.xxxx;
+		return;
+	}
 
-	float3 PixelAlbedo  = PixelAlbedoA.rgb;
-	float3 ViewDirection  = normalize(C.Position - Ray.Origin);
-	float3 LightDirection = Ray.Direction;
-	float3 LightRadiance = 0.5 * float3(5, 3.7, 3);
-	Material PixelMaterial = MakeMaterial(PixelNormal, PixelAlbedo);
-	float3 Radiance = LightRadiance * EvaluateBSDF(PixelMaterial, LightDirection, ViewDirection) * ShadowFactor;
-	GetRWRadianceTexture(C)[PixelCoords] = float4(Radiance, PixelAlbedoA.w);
+	float  Threshold = g_RWDirectIlluminationRayOcclusionThresholdBuffer[RayIndex];
+	float  Noise = BlueNoise_Sample1D(PixelCoords, UB.FrameIndex, 1);
+	Threshold *= lerp(UB.DI_OcclusionThresholdMinFactor, UB.DI_OcclusionThresholdMaxFactor, Noise);
+	float3 Radiance = UnpackRadianceA16(g_RWDirectIlluminationRayContributionBuffer[RayIndex]).xyz;
+	Radiance *= (Threshold < Ray.RayTMin) ? 1 : 0;
+
+	GetRWDirectIlluminationTexture(C)[PixelCoords] = float4(Radiance, M.Alpha);
 }
+
+#ifndef NDEBUG
+[numthreads(1, 1, 1)]
+void Debug_PrepareVisualizeDIRay () {
+	int2 PixelCoords = UB.Debug_CursorPixelCoords;
+	Material M = FetchMaterial(GetCameraDescription(), PixelCoords);
+	if(!IsMaterialValid(M)) {
+		// No rays to visualize
+		g_Debug_VisualizeRayCountBuffer[0] = 0;
+		return ;
+	}
+	int RayIndex = g_Debug_DirectIlluminationPixelRayIndexBuffer[PixelCoords.x + PixelCoords.y * UB.ScreenDimensions.x];
+	if(RayIndex == 0xffffffffu) {
+		// No rays to visualize
+		g_Debug_VisualizeRayCountBuffer[0] = 0;
+		return ;
+	}
+	g_Debug_VisualizeRayCountBuffer[0] = 1;
+	RayToTrace Ray = FetchRayToTrace(RayIndex, UB.RT_MaxTraceDistance, false);
+	float LinearDepth = GetFilteredDepthTexture(GetCameraDescription()).Load(int3(PixelCoords, 0)).r;
+	float3 Origin = RecoverWorldSpacePosition(GetCameraDescription(), PixelCoords, LinearDepth);
+	g_Debug_VisualizeRayVertexBuffer[0] = Origin;
+	g_Debug_VisualizeRayVertexBuffer[1] = Origin + Ray.Direction * Ray.RayTMin;
+	g_Debug_VisualizeRayRayIndexBuffer[0]  = RayIndex;
+}
+#endif
+
+// [numthreads(TILE_SIZE, TILE_SIZE, 1)]
+// void FilterDirectIllumination (uint2 DispatchID : SV_DispatchThreadID) {
+// }
 
 // [numthreads(TILE_SIZE, TILE_SIZE, 1)]
 // void TemporalDenoise (uint2 DispatchID : SV_DispatchThreadID) {

@@ -8,9 +8,12 @@
 
 #include "material.hlsl"
 
+// Scene-related lighting info (these buffers are set in device_scene.cpp)
 // Number of lights
 RWStructuredBuffer<uint>  g_LightCountBuffer;
 RWStructuredBuffer<uint2> g_LightBuffer;
+// 12 x 4 bytes per light
+RWStructuredBuffer<float3> g_LightDataBuffer;
 // Bloom filter alike technique to reuse occlusion infomation
 // Stores the set of the grids that the light is successfully sampled from.
 // RWStructuredBuffer<uint>  g_LightGridHashBuffer;
@@ -72,17 +75,11 @@ RWStructuredBuffer<uint> g_LightGrid_GridLightCountBuffer;
 // Offset of light list rank in each grid
 RWStructuredBuffer<uint> g_LightGrid_GridLightListOffsetBuffer;
 // Sum of the estimated contribution of lights that overlaped with the grid
-// Seems unnecessary. RIS does not require the source distribution to be normalized.
+// Seems unnecessary. RIS does not require the source distribution to be normalized
 // RWStructuredBuffer<float> g_LightGrid_GridLightSumWeightBuffer;
 // Light indices in each grid
 RWStructuredBuffer<uint> g_LightGrid_GridLightListBuffer;
 
-// A single light (directional light) buffer
-// Specifies the direction & color of the light
-RWStructuredBuffer<uint4>   g_LightGrid_DirectionalLightBuffer;
-
-RWStructuredBuffer<uint2> g_LightGrid_LightColorBuffer;
-RWStructuredBuffer<float3> g_LightGrid_AreaLightVertexBuffer;
 
 uint LightGrid_GetGridIndex1 (uint4 GridIndex) {
     return (GridIndex.x + GridIndex.y * UB.LightGrid_GridResolution
@@ -139,7 +136,9 @@ bool LightGrid_IsInsideAnyCascade (float3 Position) {
 
 int4 LightGrid_GetGridIndex (float3 Position) {
     float GridSize = UB.LightGrid_GridSize;
-    for(int i = 0; i < LIGHT_GRID_NUM_CASCADES; i ++) {
+
+    [unroll(LIGHT_GRID_MAX_NUM_CASCADES)]
+    for(int i = 0; i < UB.LightGrid_NumGridCascades; i ++) {
         if(all(Position >= UB.LightGrid_GridCascadeMin[i].xyz) 
          && all(Position < UB.LightGrid_GridCascadeMax[i].xyz)) {
             return int4(
@@ -152,21 +151,21 @@ int4 LightGrid_GetGridIndex (float3 Position) {
     return int4(-1, -1, -1, -1);
 }
 
-float3 SampleSkyLight (float3 Normal, float2 u) {
-    float3 LocalDirection = UniformSampleHemisphere(u);
+float3 SampleSkyLight (float3 Normal, float2 u, out float Pdf) {
+    float3 LocalDirection = CosineWeightedSampleHemisphere(u);
     float3 Tangent, Bitangent;
     GetOrthoVectors(Normal, Tangent, Bitangent);
+    Pdf = CosineWeightedSampleHemispherePDF(LocalDirection.z);
     return Tangent * LocalDirection.x + Bitangent * LocalDirection.y + Normal * LocalDirection.z; 
 }
 
-float3 SampleDirectionalLightRadiance () {
-    return asfloat(g_LightGrid_DirectionalLightBuffer[0].yzw);
-}
-
-float3 SampleDirectionalLight () {
-    uint4 Light = g_LightGrid_DirectionalLightBuffer[0];
-    float3 Direction = Octahedron01ToUnitVector(UnpackUnorm16x2(Light.x));
-    return Direction;
+float3 SampleAreaLightArea (float3 V0, float3 V1, float3 V2, float2 u, out float AreaPdf) {
+    if(u.x + u.y > 1.f) {
+        u = 1.f - u;
+    }
+    float3 Position = InterpolateBarycentrics(V0, V1, V2, u);
+    AreaPdf = 1.f / length(cross(V1 - V0, V2 - V0));
+    return Position;
 }
 
 float3 GetLightWorldPosition (Light L) {
@@ -197,15 +196,11 @@ float EstimateLightGridContribution (Light L, float3 GridMin, float GridSize) {
     }
 }
 
-// A more precise estimation for light - pixel contribution
-// Used when resampling lights from light grid for shadow ray tracing
-float EstimateLightPixelContribution (Light L, float3 PixelPosition, Material PixelMaterial) {
-    float LightCosineFactor = dot(L.Normal, normalize(L.Position - Origin));
-    float PointLightEstimation 
-        = L.Intensity * LightCosineFactor * EvaluateBSDF(M, g_LightGrid_DirectionalLightBuffer, ViewDirection);
-    float GridEstimation = LightWeight;
-    // Favor point light estimation if the light is 
-    float CompositeEstimation = 
+bool IsInfinitelyFarLightType (uint Type) {
+    if(Type == LIGHT_TYPE_DIRECTIONAL || Type == LIGHT_TYPE_SKY) {
+        return true;
+    }
+    return false;
 }
 
 #endif

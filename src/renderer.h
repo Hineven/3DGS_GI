@@ -6,7 +6,10 @@
 
 #ifndef INC_3DGS_ADVGI_RENDERER_H
 #define INC_3DGS_ADVGI_RENDERER_H
+#include <map>
 #include <gfx.h>
+#include <random>
+
 #include "common.h"
 #include "timed.h"
 #include "app_internal.h"
@@ -41,6 +44,13 @@ void DestroyKernels ();
         GfxBuffer dispatch_rays_indirect_command;
         GfxBuffer draw_indirect_command;
 
+        // Light grid
+        GfxBuffer LightGrid_grid_light_list_allocator;
+        GfxBuffer LightGrid_grid_light_count;
+        GfxBuffer LightGrid_grid_light_list_offset;
+        GfxBuffer LightGrid_grid_light_list;
+
+        // Rasterization
         GfxBuffer active_gaussian_count;
         GfxBuffer active_gaussian_list_src;
         GfxBuffer active_gaussian_list;
@@ -53,17 +63,32 @@ void DestroyKernels ();
 
         GfxBuffer active_gaussian_color;
 
+        // Raytracing
         GfxBuffer ray_count;
         GfxBuffer ray_to_trace_count[2];
         GfxBuffer ray_to_trace_list[2];
         GfxBuffer ray_to_trace_direction;
         GfxBuffer ray_to_trace_origin;
+        GfxBuffer ray_to_trace_UV_position;
         GfxBuffer ray_to_trace_seed;
         GfxBuffer ray_to_trace_flags;
 
         GfxBuffer ray_to_trace_result;
 
+        // Direct illumintion
+        GfxBuffer direct_illumination_ray_occlusion_threshold;
+        GfxBuffer direct_illumination_ray_contribution;
+
+        // Uniform block
         GfxBuffer UB;
+
+#ifndef NDEBUG
+        GfxBuffer Debug_direct_illumination_pixel_ray_index;
+        GfxBuffer Debug_visualize_ray_count;
+        GfxBuffer Debug_visualize_ray_vertex;
+        GfxBuffer Debug_visualize_ray_color;
+        GfxBuffer Debug_visualize_ray_ray_index;
+#endif
     } buf_ {};
 
     struct {
@@ -87,8 +112,9 @@ void DestroyKernels ();
         GfxTexture near_HZB;
 
         // fp16x4
+        GfxTexture direct_illumination;
+        // fp16x4
         GfxTexture radiance[2];
-//        GfxTexture output;
     } tex_ {};
 
     struct {
@@ -106,6 +132,8 @@ void DestroyKernels ();
         GfxKernel FilterDepth;
         GfxKernel GenerateNearHZB;
         GfxKernel ReconstructNormals;
+        GfxKernel InitializeCounters;
+        GfxKernel InjectLights;
         GfxKernel SampleLightRays;
         GfxKernel TraceRaysInScreenSpace;
         GfxKernel CompactRayTraces;
@@ -116,6 +144,7 @@ void DestroyKernels ();
         GfxKernel Trace3DGSRays;
         // Trace shadow rays
         GfxKernel Trace3DGSShadowRays;
+        GfxKernel DirectIlluminationTrace3DGSShadowRays;
         GfxKernel SpawnCameraRays;
         GfxKernel DisplayCameraRays;
 
@@ -129,34 +158,14 @@ void DestroyKernels ();
 
         // Visualize HWRT results (dispatch a bunch of camera rays and visualize)
         bool visualize_HWRT {false};
-        // Visualize HWRT shading ray results. Otherwise, visualize shadow ray depth results.
-        bool visualize_HWRT_shading_rays {false};
 
-        // The scaling of the proxy geometry in 3DGS ray tracing.
-        // The original paper says 0.3 is good.
-        float gaussian_RT_proxy_geometry_sigma {0.3f};
+        // The width/height/depth of the light grid. should not exceed LIGHT_GRID_MAX_GRID_SIZE
+        int light_grid_size {16};
 
-        // Minimum opacity at the ray-gayssian intersection for 3DGS to be evaluated in ray tracing.
-        // Otherwise, they are ignored.
-        float HWRT_min_alpha_for_gaussian_evaluation {0.01f};
+        int light_grid_max_num_entries {256 * 1024};
 
-        // Pixels with alpha values higher than this threshold are considered opaque.
-        float opaque_threshold {0.1f};
-
-        // The clip value for depth rasterization. Making it smoother.
-        float depth_alpha_clip_value {0.01f};
-
-        // The quality of stochastic ray tracing [0, 1].
-        // Lower values bring more biased but faster results.
-        float stochastic_ray_tracing_quality {0.20f};
-
-        // How thick a texel is on Z axis in the projected space when doing screen space ray tracing.
-        // Thicker values may produce more artifacts but can cull more rays.
-        float SSRT_relative_texel_thickness {0.005f};
-
-        // Normally, SSRT just helps to solve near field occlusions.
-        // Due to the depth bias in rasterization, SSRT in 3DGS is not as reliable as it is in regular context.
-        float SSRT_max_trace_distance {0.25f};
+        // Number of cascades of the light grid, should not exceed LIGHT_GRID_MAX_NUM_CASCADES
+        int light_grid_num_cascades {3};
 
         // Render color only when doing rasterization
         bool no_G_buffers {false};
@@ -169,8 +178,6 @@ void DestroyKernels ();
         bool reconstruct_normals {false};
 
         DXGI_FORMAT depth_format {DXGI_FORMAT_R16G16_FLOAT};
-
-        float3 debug_light_position {0, 0, 0};
 
         uint debug_mode {0};
     } options_;
@@ -189,7 +196,35 @@ void DestroyKernels ();
 
     bool need_reload_shaders_ {false};
 
+    UniformBlock UB;
     UniformBlock previous_UB_;
+
+    struct CVar {
+        std::string name;
+        std::string desc;
+        enum type {
+            BOOL,
+            FLOAT,
+            INT,
+            VEC2,
+            VEC3
+        } type {};
+        union {
+            glm::vec3 f3;
+            glm::vec2 f2;
+            float f;
+            int i;
+        } v {};
+        double mn;
+        double mx;
+    };
+    std::map<void*, CVar> cvar_;
+
+    std::mt19937 rng_;
+
+    inline float nextFloat () {
+        return std::uniform_real_distribution<float>(0, 1)(rng_);
+    }
 };
 
 #endif //INC_3DGS_ADVGI_RENDERER_H

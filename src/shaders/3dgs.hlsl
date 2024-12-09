@@ -9,6 +9,7 @@
 #include "transforms.hlsl"
 #include "conventions.hlsl"
 #include "bluenoise.hlsl"
+#include "material.hlsl"
 
 // Convert NDC2 to screen position
 // NDC2: [-1, 1] -> Screen: [0, ScreenDimensions]
@@ -320,10 +321,10 @@ RayToTrace InitRayToTrace (float RayTMax) {
 }
 
 // Fetch the ray to trace by its index
-RayToTrace FetchRayToTrace (int RayIndex, float RayTMax) {
+RayToTrace FetchRayToTrace (int RayIndex, float RayTMax, bool bFetchOrigin = true) {
     RayToTrace Ray = (RayToTrace)0;
     Ray.Direction = Octahedron01ToUnitVector(UnpackUnorm16x2(g_RWRayToTraceDirectionBuffer[RayIndex]));
-    Ray.Origin    = g_RWRayToTraceOriginBuffer[RayIndex];
+    if(bFetchOrigin) Ray.Origin    = g_RWRayToTraceOriginBuffer[RayIndex];
     uint Flags    = g_RWRayToTraceFlagsBuffer[RayIndex];
     Ray.RayTMax   = RayTMax;
     Ray.RayTMin   = asfloat(Flags & RAY_FLAG_TMIN_MASK);
@@ -333,9 +334,9 @@ RayToTrace FetchRayToTrace (int RayIndex, float RayTMax) {
 }
 
 // Write the ray to trace by its index
-void WriteRayToTrace (int RayIndex, RayToTrace Ray) {
+void WriteRayToTrace (int RayIndex, RayToTrace Ray, bool bWriteOrigin = true) {
     g_RWRayToTraceDirectionBuffer[RayIndex] = PackUnorm16x2(UnitVectorToOctahedron01(Ray.Direction));
-    g_RWRayToTraceOriginBuffer[RayIndex] = Ray.Origin;
+    if(bWriteOrigin) g_RWRayToTraceOriginBuffer[RayIndex] = Ray.Origin;
     uint Flags = ((uint)Ray.bHit * RAY_FLAG_HIT_BIT) | asuint(abs(Ray.RayTMin));
     g_RWRayToTraceFlagsBuffer[RayIndex] = Flags;
     g_RWRayToTraceSeedBuffer[RayIndex] = Ray.Seed;
@@ -381,16 +382,6 @@ float EvaluateGaussianResponse (float3 Origin, float3 Direction, Gaussian G, out
     RayMaxResponseT = EvaluateGaussianResponseRayT(Origin, Direction, G, InvCov);
     float3 Position = Origin + RayMaxResponseT * Direction;
     return exp(dot(G.Position - Position, mul(InvCov, Position - G.Position))) * G.Alpha;//EvaluateGaussian(G, Position);
-}
-
-// Map color to radiance (using a simple inverse gamma correction)
-float3 ColorToRadiance (float3 Color, float Gamma = 2.2f) {
-    return pow(Color, Gamma);
-}
-
-// Map radiance to color (using a simple gamma correction)
-float3 RadianceToColor (float3 Radiance, float Gamma = 2.2f) {
-    return pow(Radiance, 1.0f / Gamma);
 }
 
 // Map (film space) NDC to a direction in world space
@@ -541,6 +532,16 @@ Texture2D<float4> GetPreviousRadianceTexture (CameraDescription C) {
     return g_PreviousRadiance;
 }
 
+Texture2D<float4> GetDirectIlluminationTexture (CameraDescription C) {
+    // TODO meshcards
+    return g_DirectIllumination;
+}
+
+RWTexture2D<float4> GetRWDirectIlluminationTexture (CameraDescription C) {
+    // TODO meshcards
+    return g_RW_DirectIllumination;
+}
+
 float3 RecoverWorldSpacePositionNDC2 (CameraDescription C, float2 NDC2, float LinearDepth) {
     float3 Direction = NDC2ToCameraDirectionUnnormalized(C, NDC2);
     float3 Origin = C.Position;
@@ -589,6 +590,9 @@ float3 ReprojectToHistoryUVWFromUVW (CameraDescription C, float3 UVW) {
     return TransformPointWithPerspectiveDivide(C.Reprojection, UVW);
 }
 
+bool IsMaterialValid (Material M) {
+    return M.Alpha >= UB.OpaqueThreshold;
+}
 
 float3 SH3Evaluate(float3 ViewDirection, SHCoefficents3 SH3, int Degree)
 {
