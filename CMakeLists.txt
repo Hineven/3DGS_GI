@@ -16,6 +16,7 @@ set(GFX_ENABLE_GUI                ON CACHE BOOL "")
 set(GFX_ENABLE_SCENE              ON CACHE BOOL "")
 add_subdirectory(ext/gfx)
 add_subdirectory(ext/glm)
+include_directories(ext/half/include)
 # happly
 include_directories(ext/happly)
 

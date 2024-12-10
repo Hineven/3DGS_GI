@@ -21,6 +21,11 @@ void Swap(inout int a, inout int b) {
     a = b;
     b = temp;
 }
+void Swap(inout uint a, inout uint b) {
+    uint temp = a;
+    a = b;
+    b = temp;
+}
 
 float2 NDC2ToUV (float2 NDC2) {
     return float2(0.5f, -0.5f) * NDC2 + 0.5f.xx;

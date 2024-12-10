@@ -36,6 +36,6 @@ Debug_VisualizeRays_FSInput Debug_VisualizeRays (
     Debug_VisualizeRays_FSInput Output;
     float4 Position = float4(g_Debug_VisualizeRayVertexBuffer[VertexIndex], 1.f);
     Output.Position = mul(UB.MainCamera.ProjectionView, Position);
-    Output.Color = g_Debug_VisualizeRayColorBuffer[VertexIndex / 2];
+    Output.Color = float4(g_Debug_VisualizeRayColorBuffer[VertexIndex / 2], 1);
     return Output;
 }

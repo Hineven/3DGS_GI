@@ -91,8 +91,9 @@ struct UniformBlock {
     
     float4 LightGrid_GridCascadeMax[4];
 
-    float3 LightGrid_GridSize;
+    float  LightGrid_GridSize;
     uint   LightGrid_GridResolution;
+    uint2  Padding_0_1;
 
     uint   LightGrid_GridResolution2;
     uint   LightGrid_GridResolution3;
@@ -101,8 +102,8 @@ struct UniformBlock {
 
     float  LightGrid_MinResampleWeightForDirectIllumiation;
     uint   LightGrid_MaxNumEntries; // Max number of entries in the light grids
-    uint   DI_OcclusionThresholdMinFactor;
-    uint   DI_OcclusionThresholdMaxFactor;
+    float  DI_OcclusionThresholdMinFactor;
+    float  DI_OcclusionThresholdMaxFactor;
 
     int2   Debug_CursorPixelCoords;
     int2   Padding0_2;
@@ -164,6 +165,27 @@ struct SHCoefficients {
 struct SHCoefficents3 {
     SHCoefficients Low;
     float3 SH3[7];
+};
+
+struct Light {
+    // 3 types, directional, sky, area
+    uint Type;
+    // Infomation used to approximate light contribution to grids
+    float  Intensity;
+    // Grid index
+    int4   GridIndex;
+    // Grid local position (low precision)
+    float3 LocalPosition;
+    // Light normal / direction (low precision)
+    float3 Normal;
+};
+
+struct LightData {
+	int Type;
+	float3 V1; // Light direction if this is a directional light
+	float3 V2;
+	float3 V3;
+	float3 Radiance;
 };
 
 #define LIGHT_GRID_MAX_NUM_CASCADES 4

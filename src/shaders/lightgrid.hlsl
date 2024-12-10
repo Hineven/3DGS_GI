@@ -24,19 +24,6 @@ int GetNumLights () {
     return g_LightCountBuffer[0];
 }
 
-struct Light {
-    // 3 types, directional, sky, area
-    uint Type;
-    // Infomation used to approximate light contribution to grids
-    float  Intensity;
-    // Grid index
-    int4   GridIndex;
-    // Grid local position (low precision)
-    float3 LocalPosition;
-    // Light normal / direction (low precision)
-    float3 Normal;
-};
-
 Light UnpackLightHeader (uint2 Packed) {
     Light L = (Light)0;
     // Grid index: 6 x 3 + 2 = 20 bits 
@@ -51,7 +38,7 @@ Light UnpackLightHeader (uint2 Packed) {
         (Packed.x >> 20) & 0xf,
         (Packed.x >> 24) & 0xf,
         (Packed.x >> 28) & 0xf
-    );
+    ) * (1 / 16.f) + (1 / 32.f);
     // Light type: 2 bits
     L.Type = Packed.y & 0x3;
     // Light normal: 2 x 7 bits
@@ -61,7 +48,7 @@ Light UnpackLightHeader (uint2 Packed) {
     );
     L.Normal = Octahedron01ToUnitVector((Oct01 + 0.5f) / 128.f);
     // Intensity: fp16
-    L.Intensity = asfloat(Packed.y >> 16);
+    L.Intensity = f16tof32(Packed.y >> 16);
     return L;
 }
 
@@ -99,19 +86,22 @@ uint4 LightGrid_GetGridIndex (uint GridIndex1) {
 
 uint2 PackLightHeader (Light L) {
     uint2 Packed = 0;
-    // Type: 2 bits
-    Packed.x = L.Type << 30;
-    // Grid index: 6 x 4 = 24 bits
-    Packed.x |= (L.GridIndex.x & 0x3f) << 6;
-    Packed.x |= (L.GridIndex.y & 0x3f) << 12;
-    Packed.x |= (L.GridIndex.z & 0x3f) << 18;
-    Packed.x |= (L.GridIndex.w & 0x3f) << 24;
-    // Grid local position: 3 x 6 bits
-    Packed.x |= uint(L.LocalPosition.x * 64.f) & 0x3f;
-    Packed.y |= uint(L.LocalPosition.y * 64.f) & 0x3f;
-    Packed.y |= uint(L.LocalPosition.z * 64.f) << 6;
+    // Grid index: 6 x 3 + 2 = 20 bits
+    Packed.x |= (L.GridIndex.x & 0x3f);
+    Packed.x |= (L.GridIndex.y & 0x3f) << 6;
+    Packed.x |= (L.GridIndex.z & 0x3f) << 12;
+    Packed.x |= (L.GridIndex.w & 0x3)  << 18;
+    // Grid local position: 3 x 4 bits
+    Packed.x |= uint(saturateDown(L.LocalPosition.x) * 16.f) << 20;
+    Packed.y |= uint(saturateDown(L.LocalPosition.y) * 16.f) << 24;
+    Packed.y |= uint(saturateDown(L.LocalPosition.z) * 16.f) << 28;
+    // Light type: 2 bits
+    Packed.y |= L.Type & 0x3;
+    // Light normal: 2 x 7 bits
+    uint2 Oct01 = uint2(saturateDown(UnitVectorToOctahedron01(L.Normal)) * 128);
+    Packed.y |= (Oct01.x << 2) | (Oct01.y << 9);
     // Intensity: fp16
-    Packed.y |= asuint(L.Intensity) << 16;
+    Packed.y |= f32tof16(L.Intensity) << 16;
     return Packed;
 }
 
@@ -123,7 +113,7 @@ float3 LightGrid_GetGridBounds (int4 GridIndex, out float GridSize) {
 }
 
 bool LightGrid_IsInsideGrid (int4 GridIndex, float3 Position) {
-    float3 GridSize;
+    float  GridSize;
     float3 GridMin = LightGrid_GetGridBounds(GridIndex, GridSize);
     return all(Position >= GridMin) && all(Position < GridMin + GridSize);
 }
@@ -169,7 +159,7 @@ float3 SampleAreaLightArea (float3 V0, float3 V1, float3 V2, float2 u, out float
 }
 
 float3 GetLightWorldPosition (Light L) {
-    float3 GridSize;
+    float  GridSize;
     float3 GridMin = LightGrid_GetGridBounds(L.GridIndex, GridSize);
     return GridMin + L.LocalPosition * GridSize;
 }
@@ -194,6 +184,8 @@ float EstimateLightGridContribution (Light L, float3 GridMin, float GridSize) {
         float SolidAngle     = CosineFactor / (Distance * Distance);
         return L.Intensity * SolidAngle;
     }
+    // This should never happen
+    return 0.f;
 }
 
 bool IsInfinitelyFarLightType (uint Type) {

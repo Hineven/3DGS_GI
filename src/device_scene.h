@@ -67,6 +67,7 @@ protected:
     GfxKernel draw_sky_kernel_;
     GfxKernel blur_sky_kernel_;
 
+    void UpdateLights (const Scene & scene);
     void UpdateGfxScene (const Scene & scene);
 
 };

@@ -189,6 +189,20 @@ bool Scene::LoadGaussians (std::filesystem::path path, bool always_load_sh) {
 
     UpdateBounds ();
 
+    // Manually insert lights
+    // only 1 directional light for now.
+    lights_.resize(1);
+    lights_[0] = Light {
+        LIGHT_TYPE_DIRECTIONAL,
+        1.f, {}, {},
+        glm::vec3(0.f, 0.f, 1.f),
+    };
+    light_data_.resize(lights_.size() * 4);
+    light_data_[0] = {0.f, 0.f, 1.f};
+    light_data_[1] = {0.f, 0.f, 0.f};
+    light_data_[2] = {0.f, 0.f, 0.f};
+    light_data_[3] = {3.f, 2.2f, 2.f};
+
     return true;
 }
 
@@ -236,8 +250,7 @@ void Scene::UpdateBounds() {
         points[7] = bounds.mx;
         // Transform to world space and update scene bounds
         for (int j = 0; j < 8; j++) {
-            auto p_w = gsi_transforms_[i] * glm::vec4(points[j], 1.f);
-            auto p = glm::vec3(p_w) / p_w[3];
+            auto p = gsi_transforms_[i] * glm::vec4(points[j], 1.f);
             bounds_min_ = glm::min(bounds_min_, p);
             bounds_max_ = glm::max(bounds_max_, p);
         }

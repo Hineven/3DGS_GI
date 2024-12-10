@@ -196,8 +196,8 @@ void DestroyKernels ();
 
     bool need_reload_shaders_ {false};
 
-    UniformBlock UB;
-    UniformBlock previous_UB_;
+    UniformBlock UB {};
+    UniformBlock previous_UB_ {};
 
     struct CVar {
         std::string name;

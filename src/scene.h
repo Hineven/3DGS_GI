@@ -69,6 +69,8 @@ public:
 
     inline glm::vec3 GetBoundsMax () const { return bounds_max_; }
 
+    inline int GetNumLights () const { return lights_.size(); }
+
     ~Scene();
 
     friend class DeviceScene;
@@ -111,6 +113,10 @@ protected:
     std::vector<int> gsi_gs_counts_;
 
     std::unique_ptr<DeviceScene> device_scene_;
+
+    // Lights (packed)
+    std::vector<Light> lights_;
+    std::vector<glm::vec3> light_data_;
 
     std::filesystem::path environment_map_path_;
 };

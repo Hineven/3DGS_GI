@@ -1,5 +1,6 @@
 #define USING_3DGS_RT
 #include "3dgs.hlsl"
+#include "radiometry.hlsl"
 
 TriangleHitGroup Trace3DGSHitGroup =
 {

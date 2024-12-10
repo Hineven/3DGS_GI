@@ -336,12 +336,12 @@ void InitializeCounters () {
 
 [numthreads(WAVE_SIZE, 1, 1)]
 void InjectLights (uint DispatchID : SV_DispatchThreadID) {
-	int NumLights = GetNumLights();
+	uint NumLights = GetNumLights();
 	uint4 GridIndex = LightGrid_GetGridIndex(DispatchID);
+	if(GridIndex.w >= UB.LightGrid_NumGridCascades) return ;
 	float3 GridMin; 
 	float GridSize;
 	GridMin = LightGrid_GetGridBounds(GridIndex, GridSize);
-	if(GridIndex.w >= UB.LightGrid_NumGridCascades) return ;
 	float GridLightU[LIGHT_GRID_MAX_NUM_GRID_LIGHTS];
 	uint  GridLightIndices[LIGHT_GRID_MAX_NUM_GRID_LIGHTS];
 	// Bias the initial weight to avoid precision issues
@@ -353,14 +353,15 @@ void InjectLights (uint DispatchID : SV_DispatchThreadID) {
 		GridLightIndices[i] = 0xffffffffu;
 	}
 	// Brute force algorithm. Assume that there're not many lights
-	for(int LightIndex = 0; LightIndex < NumLights; LightIndex ++) {
-		Light L = FetchLightHeader(LightIndex);
+	for(uint ItLightIndex = 0; ItLightIndex < NumLights; ItLightIndex ++) {
+		Light L = FetchLightHeader(ItLightIndex);
 		float LightWeight = EstimateLightGridContribution(L, GridMin, GridSize);
 		if(LightWeight >= UB.LightGrid_MinLightContributionForInjection) {
 			float NewGridLightWeightSum = GridLightWeightSum + LightWeight;
 			float LightU = LightWeight / NewGridLightWeightSum;
 			float Multiplier = GridLightWeightSum / NewGridLightWeightSum;
 			// Multi-reservoir sampling using LightWeight / TotalWeight as target cdf.
+			uint LightIndex = ItLightIndex;
 			for(int i = 0; i < LIGHT_GRID_MAX_NUM_GRID_LIGHTS; i++) {
 				GridLightU[i] *= Multiplier;
 				if(GridLightU[i] < LightU) {
@@ -389,13 +390,7 @@ void InjectLights (uint DispatchID : SV_DispatchThreadID) {
 	}
 }
 
-struct LightData {
-	int Type;
-	float3 V1; // Light direction if this is a directional light
-	float3 V2;
-	float3 V3;
-	float3 Radiance;
-};
+
 
 LightData FetchLightDetails (int LightIndex, Light L) {
 	LightData Details = (LightData) 0;

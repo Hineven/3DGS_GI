@@ -24,9 +24,9 @@ bool Renderer::CreateResources () {
 
     buf_.LightGrid_grid_light_list_allocator = gfxCreateBuffer<uint>(gfx, 1);
     buf_.LightGrid_grid_light_list_allocator.setName("LightGridGridLightListAllocator");
-    buf_.LightGrid_grid_light_count = gfxCreateBuffer<uint>(gfx, 1);
-    buf_.LightGrid_grid_light_count.setName("LightGridGridLightCount");
     int num_light_grids = options_.light_grid_size * options_.light_grid_size * options_.light_grid_size * options_.light_grid_num_cascades;
+    buf_.LightGrid_grid_light_count = gfxCreateBuffer<uint>(gfx, num_light_grids);
+    buf_.LightGrid_grid_light_count.setName("LightGridGridLightCount");
     buf_.LightGrid_grid_light_list_offset = gfxCreateBuffer<uint>(gfx, num_light_grids);
     buf_.LightGrid_grid_light_list_offset.setName("LightGridGridLightListOffset");
     buf_.LightGrid_grid_light_list = gfxCreateBuffer<uint>(gfx, options_.light_grid_max_num_entries);
@@ -239,7 +239,6 @@ bool Renderer::CreateKernels () {
     for(int i = 0; i < defines.size(); i++) {
         defines_c.push_back(defines[i].c_str());
     }
-    int defines_c.size() = defines.size();
 
     // Compute kernels
 
@@ -300,7 +299,6 @@ bool Renderer::CreateKernels () {
         std::vector<char const *> Trace3DGSShadow_kernel_subobjects = base_subobjects;
         Trace3DGSShadow_kernel_subobjects.push_back("Trace3DGSShadowHitGroup");
         Trace3DGSShadow_kernel_subobjects.push_back("Trace3DGSShadowShaderConfig");
-        defines_c.push_back("DIRECT_ILLUMINATION_SHADOW_RAY_TRACING");
         kernel_.Trace3DGSShadowRays = gfxCreateRaytracingKernel(gfx, program_, nullptr, 0,
             Trace3DGSShadow_kernel_exports.data(), (uint32_t)Trace3DGSShadow_kernel_exports.size(),
             Trace3DGSShadow_kernel_subobjects.data(), (uint32_t)Trace3DGSShadow_kernel_subobjects.size(),

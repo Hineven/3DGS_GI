@@ -8,13 +8,16 @@
 #include <d3d12.h>
 #include "gfx_imgui.h"
 #include "renderer.h"
+
+#include <ranges>
+
 #include "device_scene.h"
 #include "3dgs_shared.hlsl"
 
 // Flag for debugging. Sometimes incorrect indirect dispatches will let my system panic.
 // This flag disables all the indirect shader dispatches so i can safely check for
 // shader compilation errors.
-// #define NO_INDIRECT_DISPATCH
+#define NO_INDIRECT_DISPATCH
 
 Renderer::Renderer () : Timed("Renderer"), blue_noise_sampler_(AppInternal::GetInstance().GetGfx()) {
 
@@ -74,9 +77,9 @@ void Renderer::RenderUI () {
         ImGui::Checkbox("SSRT Enable", &options_.SSRT_enable);
         ImGui::Checkbox("HWRT Enable", &options_.HWRT_enable);
 
-        for (auto & var : cvar_) {
+        for (auto &val: cvar_ | std::views::values) {
             bool tmp_bv = false;
-            auto & ref = var.second;
+            auto & ref = val;
             switch (ref.type) {
                 case CVar::BOOL:
                     tmp_bv = ref.v.i;
@@ -96,7 +99,7 @@ void Renderer::RenderUI () {
                     if (ref.mn == ref.mx) ImGui::InputFloat3(ref.name.c_str(), (float*)&ref.v);
                     else ImGui::SliderFloat3(ref.name.c_str(), (float*)&ref.v, ref.mn, ref.mx);
             }
-            ImGui::SetItemTooltip("%s", ref.name.c_str());
+            ImGui::SetItemTooltip("%s", ref.desc.c_str());
         }
     }
 }
@@ -122,35 +125,35 @@ void Renderer::Render() {
             using def_t = std::remove_cvref_t<decltype(default_value)>;
             auto it = cvar_.find(&var_ref);
             if (it != cvar_.end()) {
-                var_ref = it->second[frame_index_ % 8];
+                // use the cached value is the default behavior
             } else {
                 var_ref = default_value;
-                auto & cvar_ref = cvar_[var_ref];
+                auto & cvar_ref = cvar_[(void*)&var_ref];
                 cvar_ref.name = name;
                 cvar_ref.desc = desc;
                 cvar_ref.mn = mn;
                 cvar_ref.mx = mx;
-                if (std::is_same_v<def_t, bool>) {
+                if constexpr (std::is_same_v<def_t, bool>) {
                     cvar_ref.type = CVar::BOOL;
                     cvar_ref.v.i = default_value;
-                } else if (std::is_integral_v<raw_t>) {
+                } else if constexpr (std::is_integral_v<raw_t>) {
                     cvar_ref.type = CVar::INT;
                     cvar_ref.v.i = default_value;
-                } else if (std::is_convertible_v<raw_t, float>) {
+                } else if constexpr (std::is_convertible_v<raw_t, float>) {
                     cvar_ref.type = CVar::FLOAT;
                     cvar_ref.v.f = default_value;
-                } else if (std::is_same_v<raw_t, glm::vec2>) {
+                } else if constexpr (std::is_same_v<raw_t, glm::vec2>) {
                     cvar_ref.type = CVar::VEC2;
                     cvar_ref.v.f2 = default_value;
-                } else if (std::is_same_v<raw_t, glm::vec3>) {
+                } else if constexpr (std::is_same_v<raw_t, glm::vec3>) {
                     cvar_ref.type = CVar::VEC3;
                     cvar_ref.v.f3 = default_value;
                 } else {
                     app_assert(false);
                 }
             }
-            auto & cvar_ref = cvar_[var_ref];
-            memcpy(var_ref, cvar_ref.v, sizeof(raw_t));
+            auto & cvar_ref = cvar_[(void*)&var_ref];
+            memcpy(&var_ref, &(cvar_ref.v), sizeof(raw_t));
         };
 #define REGISTER_CVAR(var, desc, ...) registerCVar(#var, desc, var, __VA_ARGS__)
         glm::ivec2 resolution = {
@@ -233,7 +236,7 @@ void Renderer::Render() {
                 glm::vec3 cascade_max = glm::vec3(cascade_center + cascade_radius);
                 UB.LightGrid_GridCascadeMin[i] = glm::vec4(cascade_min, 0.f);
                 UB.LightGrid_GridCascadeMax[i] = glm::vec4(cascade_max, 0.f);
-                if (i == 0) UB.LightGrid_GridSize = glm::vec3(cascade_grid_size);
+                if (i == 0) UB.LightGrid_GridSize = cascade_grid_size;
             }
             UB.LightGrid_GridResolution = options_.light_grid_size;
             UB.LightGrid_GridResolution2 = options_.light_grid_size * options_.light_grid_size;
@@ -249,6 +252,10 @@ void Renderer::Render() {
 
         REGISTER_CVAR(UB.DI_OcclusionThresholdMinFactor, "Minimum factor of shadow ray length threshold upon DI occlusion tests.", 0.97f);
         REGISTER_CVAR(UB.DI_OcclusionThresholdMaxFactor, "Maximum factor of shadow ray length threshold upon DI occlusion tests.", 0.99f);
+
+        auto im_mouse_pos = ImGui::GetMousePos();
+        glm::vec2 mouse_pos = {im_mouse_pos.x, im_mouse_pos.y};
+        UB.Debug_CursorPixelCoords = glm::ivec2(mouse_pos);
 
         gfxSbtGetGpuVirtualAddressRangeAndStride(gfx, sbt_,
             (D3D12_GPU_VIRTUAL_ADDRESS_RANGE *)&UB.RT_RayGenerationShaderRecord,
@@ -516,7 +523,7 @@ void Renderer::Render() {
             int num_mips = gfxCalculateMipCount(UB.ScreenDimensions.x, UB.ScreenDimensions.y);
             for (int i = 1; i < num_mips; i++) {
                 GfxTexture in_texture = i == 1 ? tex_.G_zdepth[frame_index_ & 1] : tex_.near_HZB;
-                gfxProgramSetParameter(gfx, program_, "g_InNearHZBTexture", in_texture, max(i - 2, 0));
+                gfxProgramSetParameter(gfx, program_, "g_InNearHZBTexture", in_texture, std::max(i - 2, 0));
                 gfxProgramSetParameter(gfx, program_, "g_OutNearHZBTexture", tex_.near_HZB, i - 1);
                 gfxCommandBindKernel(gfx, kernel_.GenerateNearHZB);
                 int curr_width = divideAndRoundUp(UB.ScreenDimensions.x, (1 << i));
@@ -558,9 +565,26 @@ void Renderer::Render() {
         {
             auto section = TimedSection(*this, "ClearFilm");
             gfxCommandClearTexture(gfx, tex_.radiance[frame_index_ & 1]);
+            gfxCommandClearTexture(gfx, tex_.direct_illumination);
+        }
+
+        {
+            auto section = TimedSection(*this, "InitializeCounters");
+            gfxCommandBindKernel(gfx, kernel_.InitializeCounters);
+            gfxCommandDispatch(gfx, 1, 1, 1);
         }
 
         // Direct lighting phase!
+
+        // Inject lights into the light grid
+        {
+            auto section = TimedSection(*this, "InjectLights");
+            gfxCommandBindKernel(gfx, kernel_.InjectLights);
+            // int num_lights = scene.GetNumLights();
+            int num_grids = UB.LightGrid_GridResolution3 * UB.LightGrid_NumGridCascades;
+            auto threads = gfxKernelGetNumThreads(gfx, kernel_.InjectLights);
+            gfxCommandDispatch(gfx, divideAndRoundUp(num_grids, (int)threads[0]), 1, 1);
+        }
 
         // Spawn light samples and prepare shadow rays to be traced.
         {
@@ -594,7 +618,7 @@ void Renderer::Render() {
 
             GenerateDispatchRaysIndirect(buf_.ray_to_trace_count[ray_compact_count & 1]);
 
-            gfxCommandBindKernel(gfx, kernel_.Trace3DGSShadowRays);
+            gfxCommandBindKernel(gfx, kernel_.DirectIlluminationTrace3DGSShadowRays);
             gfxSbtSetShaderGroup(gfx, sbt_, kGfxShaderGroupType_Raygen, 0, "DirectIlluminationTrace3DGSShadowRaygen");
             gfxSbtSetShaderGroup(gfx, sbt_, kGfxShaderGroupType_Hit, 0, "Trace3DGSShadowHitGroup");
             gfxSbtSetShaderGroup(gfx, sbt_, kGfxShaderGroupType_Miss, 0, "Trace3DGSShadowMiss");
