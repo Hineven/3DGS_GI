@@ -17,7 +17,8 @@
 // Flag for debugging. Sometimes incorrect indirect dispatches will let my system panic.
 // This flag disables all the indirect shader dispatches so i can safely check for
 // shader compilation errors.
-#define NO_INDIRECT_DISPATCH
+// #define NO_INDIRECT_DISPATCH
+// #define NO_RAYTRACING_INDIRECT_DISPATCH
 
 Renderer::Renderer () : Timed("Renderer"), blue_noise_sampler_(AppInternal::GetInstance().GetGfx()) {
 
@@ -58,7 +59,8 @@ void Renderer::RenderUI () {
             "Roughness",
             "Normal",
             "Depth",
-            "Alpha"
+            "Alpha",
+            "Debug"
         };
         if (ImGui::BeginCombo("DebugMode", debug_modes[options_.debug_mode])) {
             for (int i = 0; i < IM_ARRAYSIZE(debug_modes); i++) {
@@ -83,7 +85,9 @@ void Renderer::RenderUI () {
             switch (ref.type) {
                 case CVar::BOOL:
                     tmp_bv = ref.v.i;
-                    ref.v.i = ImGui::Checkbox(ref.name.c_str(), &tmp_bv);
+                    ImGui::Checkbox(ref.name.c_str(), &tmp_bv);
+                    ref.v.i = tmp_bv;
+                    break;
                 case CVar::FLOAT:
                     if (ref.mn == ref.mx)
                         ImGui::InputFloat(ref.name.c_str(), (float*)&ref.v);
@@ -92,12 +96,15 @@ void Renderer::RenderUI () {
                 case CVar::INT:
                     if (ref.mn == ref.mx) ImGui::InputInt(ref.name.c_str(), (int*)&ref.v);
                     else ImGui::SliderInt(ref.name.c_str(), (int*)&ref.v, ref.mn, ref.mx);
+                    break;
                 case CVar::VEC2:
                     if (ref.mn == ref.mx) ImGui::InputFloat2(ref.name.c_str(), (float*)&ref.v);
                     else ImGui::SliderFloat2(ref.name.c_str(), (float*)&ref.v, ref.mn, ref.mx);
+                    break;
                 case CVar::VEC3:
                     if (ref.mn == ref.mx) ImGui::InputFloat3(ref.name.c_str(), (float*)&ref.v);
                     else ImGui::SliderFloat3(ref.name.c_str(), (float*)&ref.v, ref.mn, ref.mx);
+                    break;
             }
             ImGui::SetItemTooltip("%s", ref.desc.c_str());
         }
@@ -201,6 +208,8 @@ void Renderer::Render() {
         REGISTER_CVAR(UB.Debug_LightPosition, "", glm::vec3(0, 0, 0), -10, 10);
         UB.SSRT_MaxNumIterations            = 50; // Consistent with Lumen
 
+        REGISTER_CVAR(UB.Debug_VisualizeLightGridCascade, "", false);
+
         // Light grid
         {
             glm::vec3 mn = scene.GetBoundsMin();
@@ -219,6 +228,8 @@ void Renderer::Render() {
                 auto p = abs(camera.position - points[i]);
                 radius = glm::max(glm::max(p.x, p.y), p.z);
             }
+            // Expand the radius to make sure jittering won't produce artifacts
+            radius *= options_.light_grid_size / (options_.light_grid_size - 1);
 
             int fid_mapping[8] = {
                 0, 7, 1, 6, 2, 5, 3, 4
@@ -230,7 +241,7 @@ void Renderer::Render() {
 
             for (int i = 0; i < options_.light_grid_num_cascades; i++) {
                 double cascade_radius = radius / (1 << (options_.light_grid_num_cascades - i - 1));
-                double cascade_grid_size = cascade_radius / options_.light_grid_size;
+                double cascade_grid_size = 2 * cascade_radius / options_.light_grid_size;
                 glm::dvec3 cascade_center = glm::dvec3(camera.position) + cascade_grid_size * glm::dvec3(jitter);
                 glm::vec3 cascade_min = glm::vec3(cascade_center - cascade_radius);
                 glm::vec3 cascade_max = glm::vec3(cascade_center + cascade_radius);
@@ -303,11 +314,14 @@ void Renderer::Render() {
     gfxProgramSetParameter(gfx, program_, "g_RWRayToTraceListBuffer", buf_.ray_to_trace_list[0]);
     gfxProgramSetParameter(gfx, program_, "g_RWRayToTraceDirectionBuffer", buf_.ray_to_trace_direction);
     gfxProgramSetParameter(gfx, program_, "g_RWRayToTraceOriginBuffer", buf_.ray_to_trace_origin);
+    gfxProgramSetParameter(gfx, program_, "g_RWRayToTraceUVPositionBuffer", buf_.ray_to_trace_UV_position);
     gfxProgramSetParameter(gfx, program_, "g_RWRayToTraceSeedBuffer", buf_.ray_to_trace_seed);
     gfxProgramSetParameter(gfx, program_, "g_RWRayToTraceFlagsBuffer", buf_.ray_to_trace_flags);
 
     gfxProgramSetParameter(gfx, program_, "g_RWRayToTraceResultBuffer", buf_.ray_to_trace_result);
 
+    gfxProgramSetParameter(gfx, program_, "g_RWDirectIlluminationRayOcclusionThresholdBuffer", buf_.direct_illumination_ray_occlusion_threshold);
+    gfxProgramSetParameter(gfx, program_, "g_RWDirectIlluminationRayContributionBuffer", buf_.direct_illumination_ray_contribution);
 
     gfxProgramSetParameter(gfx, program_, "g_RW_GColorTexture", tex_.G_albedo_alpha);
     gfxProgramSetParameter(gfx, program_, "g_GColorTexture", tex_.G_albedo_alpha);
@@ -326,6 +340,11 @@ void Renderer::Render() {
 
     gfxProgramSetParameter(gfx, program_, "g_NearHZBTexture", tex_.near_HZB);
 
+    gfxProgramSetParameter(gfx, program_, "g_DebugTexture", tex_.debug);
+    gfxProgramSetParameter(gfx, program_, "g_RW_DebugTexture", tex_.debug);
+
+    gfxProgramSetParameter(gfx, program_, "g_RW_DirectIllumination", tex_.direct_illumination);
+    gfxProgramSetParameter(gfx, program_, "g_DirectIllumination", tex_.direct_illumination);
     gfxProgramSetParameter(gfx, program_, "g_RW_Radiance", tex_.radiance[frame_index_ & 1]);
     gfxProgramSetParameter(gfx, program_, "g_Radiance", tex_.radiance[frame_index_ & 1]);
     gfxProgramSetParameter(gfx, program_, "g_PreviousRadiance", tex_.radiance[(frame_index_ + 1) & 1]);
@@ -411,6 +430,9 @@ void Renderer::Render() {
     {
         auto section = TimedSection(*this, "ClearTextures");
         gfxCommandClearTexture(gfx, tex_.G_albedo_alpha);
+        gfxCommandClearTexture(gfx, tex_.debug);
+        gfxCommandClearTexture(gfx, tex_.radiance[frame_index_ & 1]);
+        gfxCommandClearTexture(gfx, tex_.direct_illumination);
     }
 
     {
@@ -562,11 +584,6 @@ void Renderer::Render() {
         };
 
         // Shading begins
-        {
-            auto section = TimedSection(*this, "ClearFilm");
-            gfxCommandClearTexture(gfx, tex_.radiance[frame_index_ & 1]);
-            gfxCommandClearTexture(gfx, tex_.direct_illumination);
-        }
 
         {
             auto section = TimedSection(*this, "InitializeCounters");
@@ -623,7 +640,7 @@ void Renderer::Render() {
             gfxSbtSetShaderGroup(gfx, sbt_, kGfxShaderGroupType_Hit, 0, "Trace3DGSShadowHitGroup");
             gfxSbtSetShaderGroup(gfx, sbt_, kGfxShaderGroupType_Miss, 0, "Trace3DGSShadowMiss");
 
-#ifndef NO_INDIRECT_DISPATCH
+#if !(defined(NO_INDIRECT_DISPATCH) || defined(NO_RAYTRACING_INDIRECT_DISPATCH))
             gfxCommandDispatchRaysIndirect(gfx, sbt_, buf_.dispatch_rays_indirect_command);
 #endif
         }

@@ -112,6 +112,9 @@ void DestroyKernels ();
         GfxTexture near_HZB;
 
         // fp16x4
+        GfxTexture debug;
+
+        // fp16x4
         GfxTexture direct_illumination;
         // fp16x4
         GfxTexture radiance[2];

@@ -127,6 +127,9 @@ bool Renderer::CreateResources () {
     tex_.near_HZB = gfxCreateTexture2D(gfx, divideAndRoundUp(width, 2), divideAndRoundUp(height, 2), DXGI_FORMAT_R32_FLOAT, num_mips - 1, zero_clear_value);
     tex_.near_HZB.setName("NearHZB");
 
+    tex_.debug = gfxCreateTexture2D(gfx, width, height, DXGI_FORMAT_R16G16B16A16_FLOAT, 1, zero_clear_value);
+    tex_.debug.setName("Debug");
+
     tex_.G_filtered_depth = gfxCreateTexture2D(gfx, width, height, DXGI_FORMAT_R32_FLOAT, 1, zero_clear_value);
     tex_.G_filtered_depth.setName("G_filtered_depth");
 
@@ -187,12 +190,18 @@ void Renderer::DestroyResources() {
     gfxDestroyBuffer(gfx, buf_.Debug_visualize_ray_ray_index);
 #endif
 
-    gfxDestroyTexture(gfx, tex_.G_filtered_depth);
 
     gfxDestroyTexture(gfx, tex_.G_depth);
     gfxDestroyTexture(gfx, tex_.G_albedo_alpha);
     gfxDestroyTexture(gfx, tex_.G_material);
     gfxDestroyTexture(gfx, tex_.G_normal);
+
+    gfxDestroyTexture(gfx, tex_.G_filtered_depth);
+    gfxDestroyTexture(gfx, tex_.G_zdepth[0]);
+    gfxDestroyTexture(gfx, tex_.G_zdepth[1]);
+    gfxDestroyTexture(gfx, tex_.near_HZB);
+
+    gfxDestroyTexture(gfx, tex_.debug);
 
     gfxDestroyTexture(gfx, tex_.direct_illumination);
     gfxDestroyTexture(gfx, tex_.radiance[0]);

@@ -106,7 +106,8 @@ struct UniformBlock {
     float  DI_OcclusionThresholdMaxFactor;
 
     int2   Debug_CursorPixelCoords;
-    int2   Padding0_2;
+    uint   Debug_VisualizeLightGridCascade;
+    int    Padding0_2;
 
     DeviceVirtualAddressRange RT_RayGenerationShaderRecord;
     

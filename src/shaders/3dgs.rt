@@ -165,18 +165,27 @@ void Trace3DGSShadowRaygen ()
 void DirectIlluminationTrace3DGSShadowRaygen ()
 #endif
 {
+    CameraDescription C = GetCameraDescription();
     int RayRank = DispatchRaysIndex().x;
     if(RayRank >= g_RWRayToTraceCountBuffer[0]) return ;
     int RayIndex = g_RWRayToTraceListBuffer[RayRank];
     Trace3DGSShadowPayload Payload = (Trace3DGSShadowPayload) 0;
     RayDesc Ray;
     {
+        bool bFetchOrigin = true;
         float TraceDistance = UB.RT_MaxTraceDistance; 
 #ifdef DIRECT_ILLUMINATION_SHADOW_RAY_TRACING
         // Clamp to the distance to the light source for direct illumination shadow rays
         TraceDistance = g_RWDirectIlluminationRayOcclusionThresholdBuffer[RayIndex];
+        // The origin lies witin the screen. So no need to fetch it from memory.
+        bFetchOrigin = false;
 #endif
-        RayToTrace RayData = FetchRayToTrace(RayIndex, TraceDistance);
+        RayToTrace RayData = FetchRayToTrace(RayIndex, TraceDistance, bFetchOrigin);
+#ifdef DIRECT_ILLUMINATION_SHADOW_RAY_TRACING
+        float2 FilmPosition = UnpackUnorm16x2(g_RWRayToTraceUVPositionBuffer[RayIndex]) * C.FilmDimensions;
+        float  LinearDepth  = GetFilteredDepthTexture(C).Load(int3(FilmPosition, 0)).x;
+        RayData.Origin = RecoverWorldSpacePosition(C, FilmPosition, LinearDepth);
+#endif
         Ray.Origin = RayData.Origin;
         Ray.Direction = RayData.Direction;
         Ray.TMin = RayData.RayTMin;

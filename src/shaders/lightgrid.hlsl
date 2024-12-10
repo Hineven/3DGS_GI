@@ -124,7 +124,7 @@ bool LightGrid_IsInsideAnyCascade (float3 Position) {
         && all(Position < UB.LightGrid_GridCascadeMax[UB.LightGrid_NumGridCascades - 1].xyz);
 }
 
-int4 LightGrid_GetGridIndex (float3 Position) {
+uint4 LightGrid_GetGridIndex (float3 Position) {
     float GridSize = UB.LightGrid_GridSize;
 
     [unroll(LIGHT_GRID_MAX_NUM_CASCADES)]
@@ -138,7 +138,7 @@ int4 LightGrid_GetGridIndex (float3 Position) {
         }
         GridSize = GridSize * 2;
     }
-    return int4(-1, -1, -1, -1);
+    return INVALID_U32.xxxx;
 }
 
 float3 SampleSkyLight (float3 Normal, float2 u, out float Pdf) {

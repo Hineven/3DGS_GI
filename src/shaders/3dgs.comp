@@ -468,6 +468,12 @@ void SampleLightRays (uint2 DispatchID : SV_DispatchThreadID) {
 	uint4 GridIndex      = LightGrid_GetGridIndex(Origin);
 	uint  WaveGridIndex1 = LightGrid_GetGridIndex1(GridIndex);
 
+	if(UB.Debug_VisualizeLightGridCascade && !IsInvalid(GridIndex.w)) {
+		int Level = 2;
+		bool bInGrid = all(UB.LightGrid_GridCascadeMin[Level].rgb <= Origin) && all(Origin < UB.LightGrid_GridCascadeMax[Level].rgb);
+		g_RW_DebugTexture[DispatchID] =  bInGrid ? 1 : 0;//float(1 + GridIndex.w) / UB.LightGrid_NumGridCascades;
+	}
+
 	Material M = FetchMaterial(C, DispatchID);
 
 	uint  SampledLightIndex = 0xffffffffu;
@@ -478,11 +484,13 @@ void SampleLightRays (uint2 DispatchID : SV_DispatchThreadID) {
 	Random rng = MakeRandom(Seed ^ 0x51f49a7cu, UB.FrameIndex);
 	float2 u2 = rng.rand2();
 
-	bool bSampled = false;
+	// Filter out invalid pixels falling outside of the light grid
+	bool bSampled = IsInvalid(GridIndex.w);
+	int Iteration = 0;
 
 	// Cooperative sampling
-	while(true) {
-		uint MinGridIndex1 = WaveActiveMin(WaveGridIndex1);
+	while(Iteration < 16) {
+		uint MinGridIndex1 = WaveActiveMin(bSampled ? 0x7fffffffu : WaveGridIndex1);
 		// Sample lights for the pixels within the same light grid with minimum id.
 		// Other threads keep idle.
 		// It's likely that a tile is covered by a single light grid as light grids are large.
@@ -517,11 +525,11 @@ void SampleLightRays (uint2 DispatchID : SV_DispatchThreadID) {
 			}
 			bSampled = true;
 		}
-		WaveGridIndex1 = max(MinGridIndex1, WaveGridIndex1);
 		// All the pixels are sampled. Break.
-		if(WaveActiveAllTrue(WaveGridIndex1 == MinGridIndex1)) {
+		if(WaveActiveAllTrue(bSampled)) {
 			break;
 		}
+		Iteration ++;
 	}
 
 	// Okay we have a sample for each pixel. Now encode a shadow ray for visibility testing.
@@ -781,7 +789,11 @@ void FinalComposition (uint2 DispatchID : SV_DispatchThreadID) {
 	// TODO
 	// I simply copy the color buffer to the final buffer
 	// for now.
-	float4 RadianceW = g_Radiance.Load(int3(DispatchID, 0));
+	float3 DirectIllumination = GetDirectIlluminationTexture(C).Load(int3(DispatchID, 0)).rgb;
+	float4 RadianceW = 0;
+	RadianceW.rgb += DirectIllumination;//float3(g_Radiance.Load(int3(DispatchID, 0)).rgb);
+	// Slightly increases the alpha value to prevent skylight leaking from the background
+	RadianceW.w = saturate(g_GColorTexture.Load(int3(DispatchID, 0)).a + 0.03f);
 	if(UB.DebugMode == 1) {
 		RadianceW.rgb = g_GColorTexture.Load(int3(DispatchID, 0)).rgb;
     } else if(UB.DebugMode == 2) {
@@ -791,15 +803,18 @@ void FinalComposition (uint2 DispatchID : SV_DispatchThreadID) {
     } else if(UB.DebugMode == 4) {
 		float Depth = g_GDepthTexture.Load(int3(DispatchID, 0)).r * 0.2f;
         RadianceW = float4(Depth.xxx, 1);
-    } else if(UB.DebugMode == 4) {
+    } else if(UB.DebugMode == 5) {
         float Alpha = g_GColorTexture.Load(int3(DispatchID, 0)).a;
         RadianceW = float4(Alpha.xxx, 1);
-    }
+    } else if(UB.DebugMode == 6) {
+		float3 Color = g_DebugTexture.Load(int3(DispatchID, 0)).rgb;
+		RadianceW = float4(Color.xxx, 1);
+	}
 	float3 ViewDirection = -NDC2ToCameraDirection(C, FilmToNDC2(C, DispatchID + 0.5f.xx));
 	float3 SkyRadiance = EvaluateSkyRadiance(ViewDirection);
 	GetRWRadianceTexture(C)[DispatchID] = float4(
 		RadianceW.rgb + SkyRadiance * (1.f - RadianceW.w),
-		RadianceW.w
+		1
 	);
 }
 

@@ -230,10 +230,12 @@ void Scene::UpdateBounds() {
             for (int j = gsi_gs_index_offsets_[i]; j < gsi_gs_index_offsets_[i] + gsi_gs_counts_[i]; j++) {
                 auto & pos = gs_positions_[j];
                 auto & scale = gs_scales_[j];
-                auto mn = pos - scale * scale_multiplier;
-                auto mx = pos + scale * scale_multiplier;
-                bounds.mn = glm::min(bounds.mn, pos);
-                bounds.mx = glm::max(bounds.mx, pos);
+                // TODO consider rotation
+                float mscale = glm::max(scale.x, glm::max(scale.y, scale.z));
+                auto mn = pos - mscale * scale_multiplier;
+                auto mx = pos + mscale * scale_multiplier;
+                bounds.mn = glm::min(bounds.mn, mn);
+                bounds.mx = glm::max(bounds.mx, mx);
             }
             cached_bounds[key] = bounds;
         }

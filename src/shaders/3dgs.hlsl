@@ -11,6 +11,10 @@
 #include "bluenoise.hlsl"
 #include "material.hlsl"
 
+bool IsInvalid (uint Value) {
+    return Value == INVALID_U32;
+}
+
 // Convert NDC2 to screen position
 // NDC2: [-1, 1] -> Screen: [0, ScreenDimensions]
 float2 NDC2ToScreen(float2 NDC2) {

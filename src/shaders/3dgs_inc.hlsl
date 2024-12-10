@@ -167,6 +167,9 @@ Texture2D<float4>        g_GNormalTexture;
 RWTexture2D<float>       g_RW_GFilteredDepthTexture;
 Texture2D<float>         g_GFilteredDepthTexture;
 
+RWTexture2D<float4>      g_RW_DebugTexture;
+Texture2D<float4>        g_DebugTexture;
+
 // ZDepth is reconstructed from the filtered depth texture.
 RWTexture2D<float>        g_RW_GZDepthTexture;
 Texture2D<float>          g_GZDepthTexture;
