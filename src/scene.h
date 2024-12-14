@@ -16,6 +16,13 @@
 class DeviceScene;
 
 
+enum class LightType {
+    eDirectional = LIGHT_TYPE_DIRECTIONAL,
+    eSky = LIGHT_TYPE_SKY,
+    eArea = LIGHT_TYPE_AREA
+};
+
+
 class Camera {
 public:
     Camera() = default;
@@ -57,6 +64,19 @@ public:
     void UpdateDeviceScene () ;
     void DestroyDeviceScene () ;
 
+    void UpdateDeviceLights ();
+
+    void SetLight (LightType type, const LightData & LD, int index = 0) ;
+
+    LightData GetDirectionalLight ();
+    LightData GetSkyLight ();
+
+    void SetDirectionalLight (const LightData & light);
+    void SetSkyLight (const LightData & light);
+    void SetAreaLight (int area_light_index, const LightData & light);
+
+    LightData GetLight (int index) ;
+
     inline Camera & GetCamera() { return camera_; }
 
     inline DeviceScene & GetDeviceScene() { return *device_scene_; }
@@ -69,13 +89,15 @@ public:
 
     inline glm::vec3 GetBoundsMax () const { return bounds_max_; }
 
-    inline int GetNumLights () const { return lights_.size(); }
+    inline int GetNumLights () const { return light_data_.size(); }
 
     ~Scene();
 
     friend class DeviceScene;
     friend class Renderer;
 protected:
+
+    void InitializeLights ();
 
     // Update the bounds of all instances and the entire scene
     void UpdateBounds ();
@@ -115,8 +137,8 @@ protected:
     std::unique_ptr<DeviceScene> device_scene_;
 
     // Lights (packed)
-    std::vector<Light> lights_;
-    std::vector<glm::vec3> light_data_;
+    // std::vector<Light> lights_;
+    std::vector<LightData> light_data_;
 
     std::filesystem::path environment_map_path_;
 };

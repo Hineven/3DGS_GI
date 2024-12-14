@@ -7,6 +7,7 @@
 #include <happly.h>
 #include <gfx.h>
 #include <gfx_scene.h>
+#include "3dgs_shared_lib.hlsl"
 #include "scene.h"
 #include "device_scene.h"
 #include "glm/ext/matrix_transform.hpp"
@@ -189,21 +190,58 @@ bool Scene::LoadGaussians (std::filesystem::path path, bool always_load_sh) {
 
     UpdateBounds ();
 
-    // Manually insert lights
-    // only 1 directional light for now.
-    lights_.resize(1);
-    lights_[0] = Light {
-        LIGHT_TYPE_DIRECTIONAL,
-        1.f, {}, {},
-        glm::vec3(0.f, 0.f, 1.f),
-    };
-    light_data_.resize(lights_.size() * 4);
-    light_data_[0] = {0.f, 0.f, 1.f};
-    light_data_[1] = {0.f, 0.f, 0.f};
-    light_data_[2] = {0.f, 0.f, 0.f};
-    light_data_[3] = {3.f, 2.2f, 2.f};
+    InitializeLights ();
 
     return true;
+}
+
+void Scene::SetLight (LightType type, const LightData & LD, int index) {
+    if (type == LightType::eDirectional && index) {
+        app_warning("Directional light is always the first light.");
+        index = 0;
+    }
+    if (type == LightType::eSky) {
+        if (index != 1) {
+            if (index) app_warning("Sky light is always the second light.");
+            index = 1;
+        }
+    }
+    if (type == LightType::eArea && index <= 1) {
+        app_warning("The first two lights are reserved for directional and sky lights.");
+        return ;
+    }
+    light_data_[index] = LD;
+}
+
+void Scene::SetDirectionalLight(const LightData &light) {
+    SetLight(LightType::eDirectional, light, 0);
+}
+
+void Scene::SetSkyLight(const LightData &light) {
+    SetLight(LightType::eSky, light, 1);
+}
+
+void Scene::SetAreaLight(int area_light_index, const LightData &light) {
+    SetLight(LightType::eArea, light, area_light_index + 2);
+}
+
+LightData Scene::GetDirectionalLight() {
+    return light_data_[0];
+}
+
+LightData Scene::GetSkyLight() {
+    return light_data_[1];
+}
+
+void Scene::InitializeLights () {
+    // Manually insert lights
+    // only 1 directional light & 1 sky light for now.
+    glm::vec3 di_radiance = {1.f, 0.62f, 0.5f};
+
+    light_data_.resize(2);
+    light_data_[0].Radiance = di_radiance;
+    light_data_[0].V1 = {0.f, 0.f, 1.f};
+    // Skylight data is not used for now, no initialization required
 }
 
 struct Bounds {
@@ -266,6 +304,14 @@ void Scene::UpdateDeviceScene() {
         device_scene_ = std::make_unique<DeviceScene>();
     }
     device_scene_->Upload(scene);
+}
+
+void Scene::UpdateDeviceLights() {
+    Scene & scene = *this;
+    if(!device_scene_) {
+        device_scene_ = std::make_unique<DeviceScene>();
+    }
+    device_scene_->UpdateLights(scene);
 }
 
 Scene::~Scene () {

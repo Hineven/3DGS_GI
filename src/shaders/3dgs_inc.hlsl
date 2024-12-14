@@ -173,16 +173,19 @@ Texture2D<float4>        g_DebugTexture;
 // ZDepth is reconstructed from the filtered depth texture.
 RWTexture2D<float>        g_RW_GZDepthTexture;
 Texture2D<float>          g_GZDepthTexture;
-Texture2D<float>          g_PreviousZDepthTexture;
+Texture2D<float>          g_HistoryZDepthTexture;
 // HiZ buffer
 Texture2D<float>          g_NearHZBTexture;
 
 // Output buffers
 RWTexture2D<float4>      g_RW_DirectIllumination;
 Texture2D<float4>        g_DirectIllumination;
+Texture2D<float4>        g_HistoryDirectIllumination;
+RWTexture2D<float4>      g_RW_FilteredDirectIllumination;
+Texture2D<float4>        g_FilteredDirectIllumination;
 RWTexture2D<float4>      g_RW_Radiance;
 Texture2D<float4>        g_Radiance;
-Texture2D<float4>        g_PreviousRadiance;
+Texture2D<float4>        g_HistoryRadiance;
 
 
 // All non-resource uniforms

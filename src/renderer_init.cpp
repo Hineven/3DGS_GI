@@ -133,8 +133,12 @@ bool Renderer::CreateResources () {
     tex_.G_filtered_depth = gfxCreateTexture2D(gfx, width, height, DXGI_FORMAT_R32_FLOAT, 1, zero_clear_value);
     tex_.G_filtered_depth.setName("G_filtered_depth");
 
-    tex_.direct_illumination = gfxCreateTexture2D(gfx, width, height, DXGI_FORMAT_R16G16B16A16_FLOAT, 1, zero_clear_value);
-    tex_.direct_illumination.setName("DirectIllumination");
+    tex_.direct_illumination[0] = gfxCreateTexture2D(gfx, width, height, DXGI_FORMAT_R16G16B16A16_FLOAT, 1, zero_clear_value);
+    tex_.direct_illumination[0].setName("DirectIllumination0");
+    tex_.direct_illumination[1] = gfxCreateTexture2D(gfx, width, height, DXGI_FORMAT_R16G16B16A16_FLOAT, 1, zero_clear_value);
+    tex_.direct_illumination[1].setName("DirectIllumination1");
+    tex_.filtered_direct_illumination = gfxCreateTexture2D(gfx, width, height, DXGI_FORMAT_R16G16B16A16_FLOAT, 1, zero_clear_value);
+    tex_.filtered_direct_illumination.setName("FilteredDirectIllumination");
 
     tex_.radiance[0] = gfxCreateTexture2D(gfx, width, height, DXGI_FORMAT_R16G16B16A16_FLOAT, 1, zero_clear_value);
     tex_.radiance[0].setName("Radiance0");
@@ -203,7 +207,9 @@ void Renderer::DestroyResources() {
 
     gfxDestroyTexture(gfx, tex_.debug);
 
-    gfxDestroyTexture(gfx, tex_.direct_illumination);
+    gfxDestroyTexture(gfx, tex_.direct_illumination[0]);
+    gfxDestroyTexture(gfx, tex_.direct_illumination[1]);
+    gfxDestroyTexture(gfx, tex_.filtered_direct_illumination);
     gfxDestroyTexture(gfx, tex_.radiance[0]);
     gfxDestroyTexture(gfx, tex_.radiance[1]);
 }
@@ -242,6 +248,8 @@ bool Renderer::CreateKernels () {
         if (options_.reconstruct_normals) {
             defines.push_back("RECONSTRUCT_NORMALS_FROM_DEPTH");
         }
+
+        defines.push_back("FILTER_RADIUS=" + std::to_string(options_.filter_radius));
     }
 
     std::vector<const char *> defines_c;
@@ -271,11 +279,19 @@ bool Renderer::CreateKernels () {
         kernel_.GenerateNearHZB = gfxCreateComputeKernel(gfx, program_, "GenerateNearHZB", defines_c.data(), defines_c.size());
         kernel_.ReconstructNormals = gfxCreateComputeKernel(gfx, program_, "ReconstructNormals", defines_c.data(), defines_c.size());
         kernel_.InitializeCounters = gfxCreateComputeKernel(gfx, program_, "InitializeCounters", defines_c.data(), defines_c.size());
+        kernel_.UpdateLightHeaders = gfxCreateComputeKernel(gfx, program_, "UpdateLightHeaders", defines_c.data(), defines_c.size());
         kernel_.InjectLights = gfxCreateComputeKernel(gfx, program_, "InjectLights", defines_c.data(), defines_c.size());
         kernel_.SampleLightRays = gfxCreateComputeKernel(gfx, program_, "SampleLightRays", defines_c.data(), defines_c.size());
         kernel_.TraceRaysInScreenSpace = gfxCreateComputeKernel(gfx, program_, "TraceRaysInScreenSpace", defines_c.data(), defines_c.size());
         kernel_.CompactRayTraces = gfxCreateComputeKernel(gfx, program_, "CompactRayTraces", defines_c.data(), defines_c.size());
         kernel_.ResolveDirectLighting = gfxCreateComputeKernel(gfx, program_, "ResolveDirectLighting", defines_c.data(), defines_c.size());
+        defines_c.push_back("FILTER_PASS=0");
+        kernel_.SpatialFilterDirectIllumination[0] = gfxCreateComputeKernel(gfx, program_, "SpatialFilterDirectIllumination", defines_c.data(), defines_c.size());
+        defines_c.pop_back();
+        defines_c.push_back("FILTER_PASS=1");
+        kernel_.SpatialFilterDirectIllumination[1] = gfxCreateComputeKernel(gfx, program_, "SpatialFilterDirectIllumination", defines_c.data(), defines_c.size());
+        defines_c.pop_back();
+        kernel_.TemporalFilterDirectIllumination = gfxCreateComputeKernel(gfx, program_, "TemporalFilterDirectIllumination", defines_c.data(), defines_c.size());
 
         kernel_.FinalComposition = gfxCreateComputeKernel(gfx, program_, "FinalComposition", defines_c.data(), defines_c.size());
 
@@ -390,11 +406,15 @@ void Renderer::DestroyKernels () {
     gfxDestroyKernel(gfx, kernel_.GenerateNearHZB);
     gfxDestroyKernel(gfx, kernel_.ReconstructNormals);
     gfxDestroyKernel(gfx, kernel_.InitializeCounters);
+    gfxDestroyKernel(gfx, kernel_.UpdateLightHeaders);
     gfxDestroyKernel(gfx, kernel_.InjectLights);
     gfxDestroyKernel(gfx, kernel_.SampleLightRays);
     gfxDestroyKernel(gfx, kernel_.TraceRaysInScreenSpace);
     gfxDestroyKernel(gfx, kernel_.CompactRayTraces);
     gfxDestroyKernel(gfx, kernel_.ResolveDirectLighting);
+    gfxDestroyKernel(gfx, kernel_.SpatialFilterDirectIllumination[0]);
+    gfxDestroyKernel(gfx, kernel_.SpatialFilterDirectIllumination[1]);
+    gfxDestroyKernel(gfx, kernel_.TemporalFilterDirectIllumination);
     gfxDestroyKernel(gfx, kernel_.FinalComposition);
 
     gfxDestroyKernel(gfx, kernel_.Trace3DGSRays);

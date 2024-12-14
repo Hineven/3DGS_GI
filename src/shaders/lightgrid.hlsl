@@ -11,6 +11,7 @@
 // Scene-related lighting info (these buffers are set in device_scene.cpp)
 // Number of lights
 RWStructuredBuffer<uint>  g_LightCountBuffer;
+// This buffer is updated from LightDataBuffer via a kernel that generates the light list every frame
 RWStructuredBuffer<uint2> g_LightBuffer;
 // 12 x 4 bytes per light
 RWStructuredBuffer<float3> g_LightDataBuffer;
@@ -105,6 +106,10 @@ uint2 PackLightHeader (Light L) {
     return Packed;
 }
 
+void WriteLightHeader (uint LightIndex, Light L) {
+    g_LightBuffer[LightIndex] = PackLightHeader(L);
+}
+
 // returns the wold grid min
 float3 LightGrid_GetGridBounds (int4 GridIndex, out float GridSize) {
     GridSize = UB.LightGrid_GridSize * pow(2, GridIndex.w);
@@ -145,7 +150,7 @@ float3 SampleSkyLight (float3 Normal, float2 u, out float Pdf) {
     float3 LocalDirection = CosineWeightedSampleHemisphere(u);
     float3 Tangent, Bitangent;
     GetOrthoVectors(Normal, Tangent, Bitangent);
-    Pdf = CosineWeightedSampleHemispherePDF(LocalDirection.z);
+    Pdf = CosineWeightedSampleHemispherePdf(LocalDirection.z);
     return Tangent * LocalDirection.x + Bitangent * LocalDirection.y + Normal * LocalDirection.z; 
 }
 
@@ -167,9 +172,12 @@ float3 GetLightWorldPosition (Light L) {
 // A coarse estimtion used for light grid injection
 float EstimateLightGridContribution (Light L, float3 GridMin, float GridSize) {
     if(L.Type == LIGHT_TYPE_DIRECTIONAL || L.Type == LIGHT_TYPE_SKY) {
-        return L.Intensity;
+        // The estimated irradiance is constant accross the scene
+        // for sky and directional lights
+        return L.Intensity; // Irradiance
     } else if (L.Type == LIGHT_TYPE_AREA) {
         // Estimate the contribution from the area light using appriximated solid angle
+        // Here, L.Intensity is the luminance of the light x the area of the light
 
         // Calculate the distance from the light to the grid
         float3 LightPosition = GetLightWorldPosition(L);

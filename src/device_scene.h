@@ -61,13 +61,16 @@ public:
     GfxBuffer light_;
     GfxBuffer light_data_;
 
+    GfxBuffer light_data_staging_;
+
+    void UpdateLights (const Scene & scene);
+
 protected:
 
     GfxProgram ibl_program_;
     GfxKernel draw_sky_kernel_;
     GfxKernel blur_sky_kernel_;
 
-    void UpdateLights (const Scene & scene);
     void UpdateGfxScene (const Scene & scene);
 
 };

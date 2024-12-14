@@ -1,6 +1,8 @@
 #ifndef RADIOMETRY_HLSL
 #define RADIOMETRY_HLSL
 
+#include "../3dgs_shared_lib.hlsl"
+
 // Map color to radiance (using a simple inverse gamma correction)
 float3 ColorToRadiance (float3 Color, float Gamma = 2.2f) {
     return pow(Color, Gamma);
@@ -19,7 +21,7 @@ float Luminance (float3 Radiance) {
     // Note: DO NOT use the "color to luminance" conversion widely accessible on the 
     // internet. COLOR IS NOT RADIANCE.
     // Maybe i should convert to color and then to luminance?
-    return dot(Radiance, 0.3333333f.xxx);
+    return Luminance_Shared(Radiance);
 }
 
 #endif

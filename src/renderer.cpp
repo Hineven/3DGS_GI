@@ -62,6 +62,30 @@ void Renderer::RenderUI () {
             "Alpha",
             "Debug"
         };
+
+        // Check if any of the debug flags are enabled. If true, switch to debug view automatically
+        bool any_debug_flag_enabled = false;
+        for (auto &val: cvar_ | std::views::values) {
+            bool tmp_bv = false;
+            auto & ref = val;
+            if (val.name.starts_with("UB.Debug_")) {
+                if (val.type == CVar::BOOL) {
+                    tmp_bv = val.v.i;
+                    if (tmp_bv) {
+                        options_.debug_mode = 6;
+                        auto_switch_debug_ = true;
+                        any_debug_flag_enabled = true;
+                        break;
+                    }
+                }
+            }
+        }
+        // Return to color mode if no debug flag is set and auto-switch is enabled.
+        if (!any_debug_flag_enabled && auto_switch_debug_) {
+            auto_switch_debug_ = false;
+            options_.debug_mode = 0;
+        }
+
         if (ImGui::BeginCombo("DebugMode", debug_modes[options_.debug_mode])) {
             for (int i = 0; i < IM_ARRAYSIZE(debug_modes); i++) {
                 if (ImGui::Selectable(debug_modes[i])) {
@@ -74,6 +98,9 @@ void Renderer::RenderUI () {
             need_reload_shaders_ = true;
         }
         if (ImGui::Checkbox("Reconstruct Normals", &options_.reconstruct_normals)) {
+            need_reload_shaders_ = true;
+        }
+        if (ImGui::SliderInt("A-trous Filter Radius", &options_.filter_radius, 1, 7)) {
             need_reload_shaders_ = true;
         }
         ImGui::Checkbox("SSRT Enable", &options_.SSRT_enable);
@@ -125,49 +152,50 @@ void Renderer::Render() {
     auto & scene = AppInternal::GetInstance().GetScene();
     auto & camera = scene.GetCamera();
 
+    auto registerCVar = [&](std::string name, std::string desc, auto & var_ref, auto default_value, double mn = 0, double mx = 0) {
+        using raw_t = std::remove_cvref_t<decltype(var_ref)>;
+        using def_t = std::remove_cvref_t<decltype(default_value)>;
+        auto it = cvar_.find(&var_ref);
+        if (it != cvar_.end()) {
+            // use the cached value is the default behavior
+        } else {
+            var_ref = default_value;
+            auto & cvar_ref = cvar_[(void*)&var_ref];
+            cvar_ref.name = name;
+            cvar_ref.desc = desc;
+            cvar_ref.mn = mn;
+            cvar_ref.mx = mx;
+            if constexpr (std::is_same_v<def_t, bool>) {
+                cvar_ref.type = CVar::BOOL;
+                cvar_ref.v.i = default_value;
+            } else if constexpr (std::is_integral_v<raw_t>) {
+                cvar_ref.type = CVar::INT;
+                cvar_ref.v.i = default_value;
+            } else if constexpr (std::is_convertible_v<raw_t, float>) {
+                cvar_ref.type = CVar::FLOAT;
+                cvar_ref.v.f = default_value;
+            } else if constexpr (std::is_same_v<raw_t, glm::vec2>) {
+                cvar_ref.type = CVar::VEC2;
+                cvar_ref.v.f2 = default_value;
+            } else if constexpr (std::is_same_v<raw_t, glm::vec3>) {
+                cvar_ref.type = CVar::VEC3;
+                cvar_ref.v.f3 = default_value;
+            } else {
+                app_assert(false);
+            }
+        }
+        auto & cvar_ref = cvar_[(void*)&var_ref];
+        memcpy(&var_ref, &(cvar_ref.v), sizeof(raw_t));
+    };
+#define REGISTER_CVAR(var, desc, ...) registerCVar(#var, desc, var, __VA_ARGS__)
+
     UB = {};
     {
-        auto registerCVar = [&](std::string name, std::string desc, auto & var_ref, auto default_value, double mn = 0, double mx = 0) {
-            using raw_t = std::remove_cvref_t<decltype(var_ref)>;
-            using def_t = std::remove_cvref_t<decltype(default_value)>;
-            auto it = cvar_.find(&var_ref);
-            if (it != cvar_.end()) {
-                // use the cached value is the default behavior
-            } else {
-                var_ref = default_value;
-                auto & cvar_ref = cvar_[(void*)&var_ref];
-                cvar_ref.name = name;
-                cvar_ref.desc = desc;
-                cvar_ref.mn = mn;
-                cvar_ref.mx = mx;
-                if constexpr (std::is_same_v<def_t, bool>) {
-                    cvar_ref.type = CVar::BOOL;
-                    cvar_ref.v.i = default_value;
-                } else if constexpr (std::is_integral_v<raw_t>) {
-                    cvar_ref.type = CVar::INT;
-                    cvar_ref.v.i = default_value;
-                } else if constexpr (std::is_convertible_v<raw_t, float>) {
-                    cvar_ref.type = CVar::FLOAT;
-                    cvar_ref.v.f = default_value;
-                } else if constexpr (std::is_same_v<raw_t, glm::vec2>) {
-                    cvar_ref.type = CVar::VEC2;
-                    cvar_ref.v.f2 = default_value;
-                } else if constexpr (std::is_same_v<raw_t, glm::vec3>) {
-                    cvar_ref.type = CVar::VEC3;
-                    cvar_ref.v.f3 = default_value;
-                } else {
-                    app_assert(false);
-                }
-            }
-            auto & cvar_ref = cvar_[(void*)&var_ref];
-            memcpy(&var_ref, &(cvar_ref.v), sizeof(raw_t));
-        };
-#define REGISTER_CVAR(var, desc, ...) registerCVar(#var, desc, var, __VA_ARGS__)
         glm::ivec2 resolution = {
                 AppInternal::GetInstance().GetWindowWidth(),
                 AppInternal::GetInstance().GetWindowHeight()
         };
-        UB.MainCamera = camera.PackDescription(resolution.x, resolution.y, previous_UB_.MainCamera);
+        UB.MainCamera = camera.PackDescription(resolution.x, resolution.y, history_UB_.MainCamera);
 
         UB.NumGaussians     = scene.GetNumGaussians();
         REGISTER_CVAR(UB.GaussianRTProxyGeometrySigma, "The scaling of the proxy geometry in 3DGS ray tracing."
@@ -226,10 +254,11 @@ void Renderer::Render() {
             float radius = 0;
             for (int i = 0; i < 8; i++) {
                 auto p = abs(camera.position - points[i]);
-                radius = glm::max(glm::max(p.x, p.y), p.z);
+                radius = glm::max(radius, glm::max(glm::max(p.x, p.y), p.z));
             }
-            // Expand the radius to make sure jittering won't produce artifacts
-            radius *= options_.light_grid_size / (options_.light_grid_size - 1);
+            // Expand the radius to make sure jittering won't let pixels go out of the grid.
+            float mx_grid_radius = 2.f * radius / (options_.light_grid_size - 1);
+            radius += mx_grid_radius;
 
             int fid_mapping[8] = {
                 0, 7, 1, 6, 2, 5, 3, 4
@@ -240,14 +269,14 @@ void Renderer::Render() {
             jitter = glm::vec3(0.5f) * fw + 0.5f * jitter;
 
             for (int i = 0; i < options_.light_grid_num_cascades; i++) {
-                double cascade_radius = radius / (1 << (options_.light_grid_num_cascades - i - 1));
-                double cascade_grid_size = 2 * cascade_radius / options_.light_grid_size;
-                glm::dvec3 cascade_center = glm::dvec3(camera.position) + cascade_grid_size * glm::dvec3(jitter);
+                double cascade_radius = double(radius) / (1 << (options_.light_grid_num_cascades - i - 1));
+                double cascade_grid_width = 2 * cascade_radius / options_.light_grid_size;
+                glm::dvec3 cascade_center = glm::dvec3(camera.position) + cascade_grid_width * glm::dvec3(jitter - 0.5f);
                 glm::vec3 cascade_min = glm::vec3(cascade_center - cascade_radius);
                 glm::vec3 cascade_max = glm::vec3(cascade_center + cascade_radius);
                 UB.LightGrid_GridCascadeMin[i] = glm::vec4(cascade_min, 0.f);
                 UB.LightGrid_GridCascadeMax[i] = glm::vec4(cascade_max, 0.f);
-                if (i == 0) UB.LightGrid_GridSize = cascade_grid_size;
+                if (i == 0) UB.LightGrid_GridSize = cascade_grid_width;
             }
             UB.LightGrid_GridResolution = options_.light_grid_size;
             UB.LightGrid_GridResolution2 = options_.light_grid_size * options_.light_grid_size;
@@ -264,9 +293,22 @@ void Renderer::Render() {
         REGISTER_CVAR(UB.DI_OcclusionThresholdMinFactor, "Minimum factor of shadow ray length threshold upon DI occlusion tests.", 0.97f);
         REGISTER_CVAR(UB.DI_OcclusionThresholdMaxFactor, "Maximum factor of shadow ray length threshold upon DI occlusion tests.", 0.99f);
 
+        REGISTER_CVAR(UB.DI_FilterGaussianRadius, "Direct illumination spatial filter gaussian kernel multiplier.", 1.3f, 0.5f, 4.f);
+        UB.DI_InvFilterGaussianRadius2 = 1.f / (UB.DI_FilterGaussianRadius * UB.DI_FilterGaussianRadius);
+
+        REGISTER_CVAR(UB.DI_Denoiser_DepthThreshold, "Direct illumination relative depth difference threshold for depth occlusion rejection", 5e-3f);
+        REGISTER_CVAR(UB.DI_NoTemporalDenoising, "Disable temporal denoising for direct illumination.", false);
+
+        REGISTER_CVAR(UB.DI_NoSpatialDenoising, "Disable spatial denoising for direct illumination.", false);
+        REGISTER_CVAR(UB.DI_Denoiser_TargetNumSamples, "The target number of samples to achieve for direct illumination denoising.", 48, 1, 100);
+
+        REGISTER_CVAR(UB.DepthFilterRadius, "Filter radius for depth reconstruction.", 1, 0, 3);
+
         auto im_mouse_pos = ImGui::GetMousePos();
         glm::vec2 mouse_pos = {im_mouse_pos.x, im_mouse_pos.y};
         UB.Debug_CursorPixelCoords = glm::ivec2(mouse_pos);
+
+        REGISTER_CVAR(UB.TonemapExposure, "Exposure", 1.0f, 0.1f, 10.0f);
 
         gfxSbtGetGpuVirtualAddressRangeAndStride(gfx, sbt_,
             (D3D12_GPU_VIRTUAL_ADDRESS_RANGE *)&UB.RT_RayGenerationShaderRecord,
@@ -280,7 +322,28 @@ void Renderer::Render() {
     UB_range.setStride(UB_stride);
     gfxBufferGetData<UniformBlock>(gfx, UB_range)[0] = UB;
 
-    previous_UB_ = UB;
+    history_UB_ = UB;
+
+    // other constants
+    {
+        REGISTER_CVAR(CB.directional_light_dir, "", glm::vec3{0, 0, 1});
+        REGISTER_CVAR(CB.directional_light_color, "", glm::vec3{1, 0.62, 0.5});
+    }
+
+    {
+        LightData di = scene.GetDirectionalLight();
+        di.Radiance = CB.directional_light_color;
+        di.V1       = CB.directional_light_dir;
+        scene.SetDirectionalLight(di);
+    }
+    {
+        LightData ei = scene.GetSkyLight();
+        // No need to do anything.
+        scene.SetSkyLight(ei);
+    }
+
+    // Update lights
+    scene.UpdateDeviceLights();
 
     auto & device_scene = scene.GetDeviceScene();
     device_scene.Bind(program_);
@@ -336,22 +399,27 @@ void Renderer::Render() {
     gfxProgramSetParameter(gfx, program_, "g_GFilteredDepthTexture", tex_.G_filtered_depth);
     gfxProgramSetParameter(gfx, program_, "g_RW_GZDepthTexture", tex_.G_zdepth[frame_index_ & 1]);
     gfxProgramSetParameter(gfx, program_, "g_GZDepthTexture", tex_.G_zdepth[frame_index_ & 1]);
-    gfxProgramSetParameter(gfx, program_, "g_PreviousZDepthTexture", tex_.G_zdepth[(frame_index_ + 1) & 1]);
+    gfxProgramSetParameter(gfx, program_, "g_HistoryZDepthTexture", tex_.G_zdepth[(frame_index_ + 1) & 1]);
 
     gfxProgramSetParameter(gfx, program_, "g_NearHZBTexture", tex_.near_HZB);
 
     gfxProgramSetParameter(gfx, program_, "g_DebugTexture", tex_.debug);
     gfxProgramSetParameter(gfx, program_, "g_RW_DebugTexture", tex_.debug);
 
-    gfxProgramSetParameter(gfx, program_, "g_RW_DirectIllumination", tex_.direct_illumination);
-    gfxProgramSetParameter(gfx, program_, "g_DirectIllumination", tex_.direct_illumination);
+    gfxProgramSetParameter(gfx, program_, "g_RW_DirectIllumination", tex_.direct_illumination[frame_index_ & 1]);
+    gfxProgramSetParameter(gfx, program_, "g_DirectIllumination", tex_.direct_illumination[frame_index_ & 1]);
+    gfxProgramSetParameter(gfx, program_, "g_HistoryDirectIllumination", tex_.direct_illumination[(frame_index_ + 1) & 1]);
+    gfxProgramSetParameter(gfx, program_, "g_RW_FilteredDirectIllumination", tex_.filtered_direct_illumination);
+    gfxProgramSetParameter(gfx, program_, "g_FilteredDirectIllumination", tex_.filtered_direct_illumination);
     gfxProgramSetParameter(gfx, program_, "g_RW_Radiance", tex_.radiance[frame_index_ & 1]);
     gfxProgramSetParameter(gfx, program_, "g_Radiance", tex_.radiance[frame_index_ & 1]);
-    gfxProgramSetParameter(gfx, program_, "g_PreviousRadiance", tex_.radiance[(frame_index_ + 1) & 1]);
+    gfxProgramSetParameter(gfx, program_, "g_HistoryRadiance", tex_.radiance[(frame_index_ + 1) & 1]);
 
     auto & samplers = AppInternal::GetInstance().GetSamplers();
     gfxProgramSetParameter(gfx, program_, "g_LinearClampSampler", samplers.linear_clamp);
     gfxProgramSetParameter(gfx, program_, "g_LinearWrapSampler", samplers.linear_wrap);
+    gfxProgramSetParameter(gfx, program_, "g_PointClampSampler", samplers.point_clamp);
+    gfxProgramSetParameter(gfx, program_, "g_PointWrapSampler", samplers.point_wrap);
 
     gfxProgramSetBuffer(gfx, program_, "UB", UB_range);
 
@@ -432,7 +500,8 @@ void Renderer::Render() {
         gfxCommandClearTexture(gfx, tex_.G_albedo_alpha);
         gfxCommandClearTexture(gfx, tex_.debug);
         gfxCommandClearTexture(gfx, tex_.radiance[frame_index_ & 1]);
-        gfxCommandClearTexture(gfx, tex_.direct_illumination);
+        gfxCommandClearTexture(gfx, tex_.direct_illumination[frame_index_ & 1]);
+        gfxCommandClearTexture(gfx, tex_.filtered_direct_illumination);
     }
 
     {
@@ -593,6 +662,15 @@ void Renderer::Render() {
 
         // Direct lighting phase!
 
+        // Update light headers for injection and sampling
+        {
+            auto section = TimedSection(*this, "UpdateLightHeaders");
+            gfxCommandBindKernel(gfx, kernel_.UpdateLightHeaders);
+            auto threads = gfxKernelGetNumThreads(gfx, kernel_.UpdateLightHeaders);
+            int num_lights = scene.GetNumLights();
+            gfxCommandDispatch(gfx, divideAndRoundUp(num_lights, (int)threads[0]), 1, 1);
+        }
+
         // Inject lights into the light grid
         {
             auto section = TimedSection(*this, "InjectLights");
@@ -653,6 +731,29 @@ void Renderer::Render() {
 #ifndef NO_INDIRECT_DISPATCH
             gfxCommandDispatchIndirect(gfx, buf_.dispatch_indirect_command);
 #endif
+        }
+
+        // Filter direct illumination
+        if (!UB.DI_NoSpatialDenoising) {
+            {
+                auto section = TimedSection(*this, "SpatialFilterDirectIllumination Pass #0");
+                gfxCommandBindKernel(gfx, kernel_.SpatialFilterDirectIllumination[0]);
+                gfxCommandDispatch(gfx, UB.TileDimensions.x, UB.TileDimensions.y, 1);
+            }
+
+            {
+                auto section = TimedSection(*this, "SpatialFilterDirectIllumination Pass #1");
+                gfxCommandBindKernel(gfx, kernel_.SpatialFilterDirectIllumination[1]);
+                gfxCommandDispatch(gfx, UB.TileDimensions.x, UB.TileDimensions.y, 1);
+            }
+        }
+
+        {
+            auto section = TimedSection(*this, "TemporalFilterDirectIllumination");
+            gfxCommandBindKernel(gfx, kernel_.TemporalFilterDirectIllumination);
+            gfxCommandDispatch(gfx, UB.TileDimensions.x, UB.TileDimensions.y, 1);
+
+            gfxCommandCopyTexture(gfx, tex_.direct_illumination[frame_index_ & 1], tex_.filtered_direct_illumination);
         }
 
         // Final radiance composition

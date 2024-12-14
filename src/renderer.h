@@ -115,7 +115,8 @@ void DestroyKernels ();
         GfxTexture debug;
 
         // fp16x4
-        GfxTexture direct_illumination;
+        GfxTexture direct_illumination[2];
+        GfxTexture filtered_direct_illumination;
         // fp16x4
         GfxTexture radiance[2];
     } tex_ {};
@@ -136,11 +137,14 @@ void DestroyKernels ();
         GfxKernel GenerateNearHZB;
         GfxKernel ReconstructNormals;
         GfxKernel InitializeCounters;
+        GfxKernel UpdateLightHeaders;
         GfxKernel InjectLights;
         GfxKernel SampleLightRays;
         GfxKernel TraceRaysInScreenSpace;
         GfxKernel CompactRayTraces;
         GfxKernel ResolveDirectLighting;
+        GfxKernel SpatialFilterDirectIllumination[2];
+        GfxKernel TemporalFilterDirectIllumination;
         GfxKernel FinalComposition;
 
         // Trace shading rays
@@ -170,6 +174,9 @@ void DestroyKernels ();
         // Number of cascades of the light grid, should not exceed LIGHT_GRID_MAX_NUM_CASCADES
         int light_grid_num_cascades {3};
 
+        // Spatial radius for all denoising. Defined as a shader macro for loop unrolling.
+        int filter_radius {2};
+
         // Render color only when doing rasterization
         bool no_G_buffers {false};
 
@@ -178,7 +185,7 @@ void DestroyKernels ();
         bool HWRT_enable {true};
 
         // Normals are reconstructed from the depth buffer rather than rasterized from gaussians.
-        bool reconstruct_normals {false};
+        bool reconstruct_normals {true};
 
         DXGI_FORMAT depth_format {DXGI_FORMAT_R16G16_FLOAT};
 
@@ -199,8 +206,13 @@ void DestroyKernels ();
 
     bool need_reload_shaders_ {false};
 
+    struct {
+        glm::vec3 directional_light_dir;
+        glm::vec3 directional_light_color;
+    } CB {};
+
     UniformBlock UB {};
-    UniformBlock previous_UB_ {};
+    UniformBlock history_UB_ {};
 
     struct CVar {
         std::string name;
@@ -222,6 +234,7 @@ void DestroyKernels ();
         double mx;
     };
     std::map<void*, CVar> cvar_;
+    bool auto_switch_debug_ = false;
 
     std::mt19937 rng_;
 

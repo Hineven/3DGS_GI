@@ -38,11 +38,11 @@ float3 CosineWeightedSampleHemisphere (float2 u) {
     return float3(R * SinCos.y, R * SinCos.x, Z);
 }
 
-float CosineWeightedSampleHemispherePDF (float CosTheta) {
+float CosineWeightedSampleHemispherePdf (float CosTheta) {
     return CosTheta * (1.f / PI);
 }
 
-float CosineWeightedSampleHemispherePDF (float3 Direction, float3 Normal) {
+float CosineWeightedSampleHemispherePdf (float3 Direction, float3 Normal) {
     return max(0.f, dot(Direction, Normal)) * (1.f / PI);
 }
 

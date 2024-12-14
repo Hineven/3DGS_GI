@@ -197,8 +197,8 @@ void FilterDepth (uint2 DispatchID : SV_DispatchThreadID) {
 	float SumWeight = 0;
 	float SumDepth  = 0;
 	bool  bTransparent = false;
-	for(int dx = -1; dx <= 1; dx++) {
-		for(int dy = -1; dy <= 1; dy++) {
+	for(int dx = -UB.DepthFilterRadius; dx <= UB.DepthFilterRadius; dx++) {
+		for(int dy = -UB.DepthFilterRadius; dy <= UB.DepthFilterRadius; dy++) {
 			int2 TapCoords = DispatchID + int2(dx, dy);
 			if(IsOutOfFilm(C, TapCoords)) continue;
 			float Depth  = TapDepth(C, TapCoords);
@@ -334,6 +334,58 @@ void InitializeCounters () {
 	g_LightGrid_GridLightListAllocator[0] = 0;
 }
 
+LightData FetchLightDetails (int LightIndex) {
+	LightData Details = (LightData) 0;
+	int Offset = LightIndex * 4;
+	Details.V1 = g_LightDataBuffer[Offset + 0];
+	Details.V2 = g_LightDataBuffer[Offset + 1];
+	Details.V3 = g_LightDataBuffer[Offset + 2];
+	Details.Radiance = g_LightDataBuffer[Offset + 3];
+	return Details;
+}
+
+// Update light headers (mainly grid local positions) for each light 
+// Because the grid bounds may be modified by the camera movement and jittering
+// also the lights may be moved.
+[numthreads(WAVE_SIZE, 1, 1)]
+void UpdateLightHeaders (uint DispatchID : SV_DispatchThreadID) {
+	uint NumLights = GetNumLights();
+	// Ignore the first two lights (directional and sky light)
+	if(DispatchID >= NumLights) return;
+	int LightIndex = DispatchID;
+	LightData LD = FetchLightDetails(LightIndex); 
+	Light L = (Light)0;
+	L.Type      = LIGHT_TYPE_AREA;
+	if(DispatchID == 0) {
+		L.Type = LIGHT_TYPE_DIRECTIONAL;
+		L.Intensity = Luminance(LD.Radiance);
+		L.Normal = normalize(LD.V1);
+	} else if(DispatchID == 1) {
+		L.Type = LIGHT_TYPE_SKY;
+		float SumLuminance = 0;
+		// Sample the average radiance of all faces of the sky box
+		for(int i = 0; i < 6; i++) {
+			float3 Direction = GetSkyBoxDirection(i);
+			float3 Radiance = EvaluateSkyRadiance(Direction, 99.f);
+			SumLuminance += Luminance(Radiance);
+		}
+		L.Intensity = SumLuminance / 6 * PI;
+	} else {
+		float3 WorldCenter = (LD.V1 + LD.V2 + LD.V3) / 3;
+		uint4 GridIndex = LightGrid_GetGridIndex(WorldCenter);
+		if(IsInvalid(GridIndex.w)) return ;
+		float  GridSize;
+		float3 GridMin = LightGrid_GetGridBounds(GridIndex, GridSize);
+		float3 LocalCenter = saturateDown((WorldCenter - GridMin) / GridSize);
+		float Area = length(cross(LD.V2 - LD.V1, LD.V3 - LD.V1));
+		L.Intensity = Luminance(LD.Radiance) * Area;
+		L.GridIndex = GridIndex;
+		L.LocalPosition = LocalCenter;
+		L.Normal = normalize(cross(LD.V2 - LD.V1, LD.V3 - LD.V1));
+	}
+	WriteLightHeader(LightIndex, L);
+}
+
 [numthreads(WAVE_SIZE, 1, 1)]
 void InjectLights (uint DispatchID : SV_DispatchThreadID) {
 	uint NumLights = GetNumLights();
@@ -359,14 +411,15 @@ void InjectLights (uint DispatchID : SV_DispatchThreadID) {
 		if(LightWeight >= UB.LightGrid_MinLightContributionForInjection) {
 			float NewGridLightWeightSum = GridLightWeightSum + LightWeight;
 			float LightU = LightWeight / NewGridLightWeightSum;
-			float Multiplier = GridLightWeightSum / NewGridLightWeightSum;
 			// Multi-reservoir sampling using LightWeight / TotalWeight as target cdf.
 			uint LightIndex = ItLightIndex;
 			for(int i = 0; i < LIGHT_GRID_MAX_NUM_GRID_LIGHTS; i++) {
-				GridLightU[i] *= Multiplier;
 				if(GridLightU[i] < LightU) {
+					GridLightU[i] /= LightU;
 					Swap(GridLightU[i], LightU);
 					Swap(GridLightIndices[i], LightIndex);
+				} else {
+					GridLightU[i] *= (1.f - LightU);
 				}
 			}
 		}
@@ -390,29 +443,15 @@ void InjectLights (uint DispatchID : SV_DispatchThreadID) {
 	}
 }
 
-
-
-LightData FetchLightDetails (int LightIndex, Light L) {
-	LightData Details = (LightData) 0;
-	int Offset = LightIndex * 4;
-	Details.Type = L.Type;
-	Details.V1 = g_LightDataBuffer[Offset + 0];
-	Details.V2 = g_LightDataBuffer[Offset + 1];
-	Details.V3 = g_LightDataBuffer[Offset + 2];
-	Details.Radiance = g_LightDataBuffer[Offset + 3];
-	return Details;
-}
-
 struct LightSample {
 	int LightType;
 	// If the sampled light is infinitely far, position is replaced by direction.
 	float3 Position;
 	float  Pdf;
 	float3 Radiance;
-	bool   bValid;
 
 	bool IsValid () {
-		return bValid;
+		return Pdf > 0;
 	}
 };
 
@@ -427,27 +466,27 @@ Material FetchMaterial (CameraDescription C, uint2 TexelCoords) {
 	return Result;
 }
 
-LightSample SampleLight (float3 Position, Material M, LightData LD, float2 u2) {
+LightSample SampleLightWithCosineWeight (float3 Position, Material M, uint LightType, LightData LD, float2 u2) {
 	LightSample Result = (LightSample) 0;
-	Result.LightType = LD.Type;
-	if(LD.Type == LIGHT_TYPE_DIRECTIONAL) {
+	Result.LightType = LightType;
+	if(LightType == LIGHT_TYPE_DIRECTIONAL) {
 		Result.Position = LD.V1;
 		float CosineFactor = saturate(dot(LD.V1, M.Normal));
 		Result.Radiance = LD.Radiance * CosineFactor;
 		Result.Pdf = 1.f;
-	} else if(LD.Type == LIGHT_TYPE_SKY) {
+	} else if(LightType == LIGHT_TYPE_SKY) {
 		Result.Position = SampleSkyLight(M.Normal, u2, Result.Pdf);
 		float CosineFactor = saturate(dot(Result.Position, M.Normal));
 		Result.Radiance = EvaluateSkyRadiance(Result.Position) * CosineFactor;
-	} else if(LD.Type == LIGHT_TYPE_AREA) {
+	} else if(LightType == LIGHT_TYPE_AREA) {
 		Result.Position = SampleAreaLightArea(LD.V1, LD.V2, LD.V3, u2, Result.Pdf);
 		// Convert area pdf to solid angle pdf
-		float Distance = length(Result.Position - Position);
-		float Cosine = dot(Result.Position - Position, M.Normal);
+		float  Distance = length(Result.Position - Position);
+		float3 Direction = normalize(Result.Position - Position);
+		float Cosine = dot(Direction, M.Normal);
 		Result.Pdf *= Distance * Distance / abs(Cosine);
 		Result.Radiance = LD.Radiance * saturate(Cosine);
 	}
-	Result.bValid = Result.Pdf > 0;
 	return Result;
 }
 
@@ -505,22 +544,26 @@ void SampleLightRays (uint2 DispatchID : SV_DispatchThreadID) {
 				int LightIndex = g_LightGrid_GridLightListBuffer[LightGridListOffset + i];
 				Light L = FetchLightHeader(LightIndex);
 				// We have to produce a full sample of the light to accurately estimate the light contribution
-				LightData   Details = FetchLightDetails(LightIndex, L);
-				LightSample Sample  = SampleLight(Origin, M, Details, u2);
-
-				float LightGridWeight = EstimateLightGridContribution(L, Origin, 0);
-				float LightCurrWeight = Luminance(Sample.Radiance); 
-				// RIS
-				float ResampleWeight  = LightCurrWeight / LightGridWeight;
-				if(ResampleWeight > UB.LightGrid_MinResampleWeightForDirectIllumiation) {
-					float NewSumResampleWeights = SumResampleWeights + ResampleWeight;
-					float CurrentLightU = ResampleWeight / NewSumResampleWeights;
-					U *= 1.f - CurrentLightU;
-					if(CurrentLightU > U) {
-						ReservedSample = Sample;
-						SampledLightResampleWeight = ResampleWeight;
+				LightData   Details = FetchLightDetails(LightIndex);
+				// Note: the returned sample is already cosine weighted
+				LightSample Sample  = SampleLightWithCosineWeight(Origin, M, L.Type, Details, u2);
+				if(Sample.IsValid()) {
+					float LightGridWeight = EstimateLightGridContribution(L, Origin, 0);
+					float LightCurrWeight = Luminance(Sample.Radiance / Sample.Pdf); 
+					// RIS
+					float ResampleWeight  = LightCurrWeight / LightGridWeight;
+					if(ResampleWeight > UB.LightGrid_MinResampleWeightForDirectIllumiation) {
+						float NewSumResampleWeights = SumResampleWeights + ResampleWeight;
+						float CurrentLightU = ResampleWeight / NewSumResampleWeights;
+						if(CurrentLightU > U) {
+							U /= CurrentLightU;
+							ReservedSample = Sample;
+							SampledLightResampleWeight = ResampleWeight;
+						} else {
+							U *= 1.f - CurrentLightU;
+						}
+						SumResampleWeights = NewSumResampleWeights;
 					}
-					SumResampleWeights = NewSumResampleWeights;
 				}
 			}
 			bSampled = true;
@@ -655,13 +698,13 @@ void TraceRaysInScreenSpace (uint DispatchID : SV_DispatchThreadID) {
 		// No vignetting for screen traces for now.
 		if (bHit)
 		{
-			float3 HistoryUVW = ReprojectToHistoryUVWFromUVW(C, HitUVW);
-			if(all(HistoryUVW.xy >= 0) && all(HistoryUVW.xy < 1)) {
+			float3 PreviousUVW = ReprojectToPreviousUVWFromUVW(C, HitUVW);
+			if(all(PreviousUVW.xy >= 0) && all(PreviousUVW.xy < 1)) {
 				// Calculate the expected depth of the pixel last frame
-				float PrevZDepth  = HistoryUVW.z;
+				float PrevZDepth  = PreviousUVW.z;
 
 				// Lookup the actual depth at the same screen position last frame
-				float HistoryZDepth = GetPreviousZDepthTexture(C).SampleLevel(g_PointClampSampler, HistoryUVW.xy, 0).x;
+				float HistoryZDepth = GetHistoryZDepthTexture(C).SampleLevel(g_PointClampSampler, PreviousUVW.xy, 0).x;
 
 				bHit = abs(HistoryZDepth - PrevZDepth) < RelativeTexelThickness * 0.5f * lerp(.5f, 2.0f, Noise);
 			}
@@ -669,9 +712,9 @@ void TraceRaysInScreenSpace (uint DispatchID : SV_DispatchThreadID) {
 
 		if (bHit)
 		{
-			float3 HistoryUVW = ReprojectToHistoryUVWFromUVW(C, HitUVW);
-			if(all(HistoryUVW.xy >= 0) && all(HistoryUVW.xy < 1)) {
-				float3 Radiance = GetPreviousRadianceTexture(C).SampleLevel(g_PointClampSampler, HistoryUVW.xy, 0).xyz;
+			float3 PreviousUVW = ReprojectToPreviousUVWFromUVW(C, HitUVW);
+			if(all(PreviousUVW.xy >= 0) && all(PreviousUVW.xy < 1)) {
+				float3 Radiance = GetHistoryRadianceTexture(C).SampleLevel(g_PointClampSampler, PreviousUVW.xy, 0).xyz;
 				g_RWRayToTraceResultBuffer[RayIndex] = PackFp16x4Safe(float4(Radiance, 0));
 			}
 		}
@@ -741,8 +784,163 @@ void ResolveDirectLighting (uint DispatchID : SV_DispatchThreadID) {
 	float3 Radiance = UnpackRadianceA16(g_RWDirectIlluminationRayContributionBuffer[RayIndex]).xyz;
 	Radiance *= (Threshold < Ray.RayTMin) ? 1 : 0;
 
-	GetRWDirectIlluminationTexture(C)[PixelCoords] = float4(Radiance, M.Alpha);
+	GetRWDirectIlluminationTexture(C)[PixelCoords] = float4(Radiance, 1);
+	// Pixels with no valid samples will have a sample count of 0.
 }
+
+// Similar to Lumen
+float GetFilterPositionWeight(float NeighborLinearDepth, float LinearDepth)
+{
+	float DepthDifference = abs(NeighborLinearDepth - LinearDepth);
+	float RelativeDepthDifference = DepthDifference / LinearDepth;
+	return exp2(-1000.f * (RelativeDepthDifference * RelativeDepthDifference));
+}
+
+// Used to specify the filter pass
+// Hard coded 2 pass a-trous filter for now.
+#ifndef FILTER_PASS
+#define FILTER_PASS 0
+#endif
+
+#ifndef FILTER_RADIUS
+#define FILTER_RADIUS 2
+#endif
+
+float NormalWeight (float3 NormalA, float3 NormalB) {
+	return pow(saturate(dot(NormalA, NormalB)), 4);
+
+}
+
+[numthreads(TILE_SIZE, TILE_SIZE, 1)]
+void SpatialFilterDirectIllumination (uint2 DispatchID : SV_DispatchThreadID) {
+	CameraDescription C = GetCameraDescription();
+	if(IsOutOfFilm(C, DispatchID)) return;
+	int2 PixelCoords = int2(DispatchID);
+	Material M = FetchMaterial(C, PixelCoords);
+	if(M.Alpha < UB.OpaqueThreshold) {
+		return;
+	}
+	float  PixelLinearDepth = GetFilteredDepthTexture(C).Load(int3(PixelCoords, 0)).r;
+	float3 PixelNormal = normalize(GetNormalTexture(C).Load(int3(PixelCoords, 0)).xyz - 0.5f);
+	float3 SumRadiance = 0;
+	float SumWeight = 0;
+
+#if FILTER_PASS == 0
+	Texture2D<float4> Input = GetDirectIlluminationTexture(C);
+#else
+	Texture2D<float4> Input = GetFilteredDirectIlluminationTexture(C);
+#endif
+
+	int StepSize = 1 << FILTER_PASS;
+
+	// int Count = 2 * UB.DI_FilterRadius * (UB.DI_FilterRadius + 1) + 1;
+	for(int dy = -FILTER_RADIUS; dy <= FILTER_RADIUS; dy++) {
+		int L = FILTER_RADIUS - abs(dy);
+		for(int dx = -L; dx <= L; dx ++) {
+			int2 Offset = int2(dx, dy) * StepSize;
+			int2 TexelCoords = PixelCoords + Offset;
+			if(IsOutOfFilm(C, TexelCoords)) continue;
+			float  NeighborLinearDepth = GetFilteredDepthTexture(C).Load(int3(TexelCoords, 0)).r;
+			float3 NeighborNormal = normalize(GetNormalTexture(C).Load(int3(TexelCoords, 0)).xyz - 0.5f);
+			bool   bIsNeightborTransparent = NeighborLinearDepth == 0;
+			float3 NeighborRadiance = Input.Load(int3(TexelCoords, 0)).rgb;
+			float Weight = GetFilterPositionWeight(NeighborLinearDepth, PixelLinearDepth);
+			float GaussianKernelWeight = exp(-dot(Offset, Offset) * UB.DI_InvFilterGaussianRadius2);
+			Weight *= GaussianKernelWeight;
+			Weight *= NormalWeight(PixelNormal, NeighborNormal);
+			Weight *= bIsNeightborTransparent ? 0 : 1;
+
+			SumRadiance += NeighborRadiance * Weight;
+			SumWeight += Weight;
+		}
+	}
+#if FILTER_PASS == 0
+	RWTexture2D<float4> Output = GetRWFilteredDirectIlluminationTexture(C);
+#else
+	RWTexture2D<float4> Output = GetRWDirectIlluminationTexture(C);
+#endif
+	Output[PixelCoords] = float4(SumRadiance / SumWeight, SumWeight);
+}
+
+[numthreads(TILE_SIZE, TILE_SIZE, 1)]
+void TemporalFilterDirectIllumination (uint2 DispatchID : SV_DispatchThreadID) {
+	CameraDescription C = GetCameraDescription();
+	if(IsOutOfFilm(C, DispatchID)) return;
+	int2 PixelCoords = int2(DispatchID);
+	Material M = FetchMaterial(C, PixelCoords);
+	if(M.Alpha < UB.OpaqueThreshold) {
+		return;
+	}
+	float PixelZDepth = GetZDepthTexture(C).Load(int3(PixelCoords, 0)).x;
+	float2 ScreenPosition = PixelCoords + 0.5f.xx;
+	float3 NDC = float3(ScreenToNDC2(ScreenPosition), PixelZDepth);
+	float3 PreviousNDC  = ReprojectToPreviousNDCFromNDC(C, NDC);
+	float3 ViewDirection = NDC2ToCameraDirection(C, NDC.xy);
+	float4 NewLightingC  = GetDirectIlluminationTexture(C).Load(int3(PixelCoords, 0));
+	// TODO the normal should be a low frequency one.
+	// here the normal is not denoised. Maybe we should use the denoised normal.
+	float3 GeometryNormal = normalize(GetNormalTexture(C).Load(int3(PixelCoords, 0)).xyz - 0.5);
+	float4 Denoised = NewLightingC;
+	if(all(PreviousNDC.xy >= -1) && all(PreviousNDC.xy <= 1)) {
+		float2 PreviousScreenPosition = NDC2ToScreen(PreviousNDC.xy);
+		// Make sure the billinear weights are consistent with gathered texels
+		float2 HistoryBillinearPos = PreviousScreenPosition - 0.5f;
+		float2 HistoryBillinearSubPixel = frac(HistoryBillinearPos);
+		float2 HistoryBillinearPixel = floor(HistoryBillinearPos);
+		float2 HistoryGatherUV = (HistoryBillinearPixel + 1.f) * C.InvFilmDimensions;
+		float4 HistoryZDepths = GetHistoryZDepthTexture(C).GatherRed(g_PointClampSampler, HistoryGatherUV).wzxy;
+		float  PrevLinearDepth = ZDepthToLinear(C, PreviousNDC.z);
+		float4 HistoryLinearDepths = float4(
+			ZDepthToLinear(C, HistoryZDepths.x),
+			ZDepthToLinear(C, HistoryZDepths.y),
+			ZDepthToLinear(C, HistoryZDepths.z),
+			ZDepthToLinear(C, HistoryZDepths.w)
+		);
+		float4 DepthDistances = abs(HistoryLinearDepths - PrevLinearDepth);
+		float  Noise = InterleavedGradientNoise(NDC2ToUV(NDC.xy), UB.FrameIndex);
+		float4 DepthThresholds = UB.DI_Denoiser_DepthThreshold * lerp(0.5, 1.5, Noise);
+		// UE's resolution for disocclusion misses on geometry edges
+		DepthThresholds /= clamp(saturate(dot(ViewDirection, GeometryNormal)), .1f, 1.0f); 
+		float4 OcclusionWeights   = select(DepthDistances < PrevLinearDepth * DepthThresholds, 1, 0);
+		float4 BillinearWeights = float4(
+			(1.f - HistoryBillinearSubPixel.x) * (1.f - HistoryBillinearSubPixel.y),
+			HistoryBillinearSubPixel.x * (1.f - HistoryBillinearSubPixel.y),
+			(1.f - HistoryBillinearSubPixel.x) * HistoryBillinearSubPixel.y,
+			HistoryBillinearSubPixel.x * HistoryBillinearSubPixel.y
+		);
+		float4 Weights = OcclusionWeights * BillinearWeights;
+		Weights = Weights / max(dot(Weights, 1), 1e-6f);
+
+		float3 OldLighting = 0.f;
+		Texture2D<float4> HistoryDI = GetHistoryDirectIlluminationTexture(C);
+		{
+			float2 BaseUV = ScreenToUV(HistoryBillinearPixel + 0.5f);
+			float3 R00 = HistoryDI.SampleLevel(g_PointClampSampler, BaseUV, 0).rgb;
+			float3 R10 = HistoryDI.SampleLevel(g_PointClampSampler, BaseUV + float2(C.FilmTexelSize.x, 0), 0).rgb;
+			float3 R01 = HistoryDI.SampleLevel(g_PointClampSampler, BaseUV + float2(0, C.FilmTexelSize.y), 0).rgb;
+			float3 R11 = HistoryDI.SampleLevel(g_PointClampSampler, BaseUV + C.FilmTexelSize, 0).rgb;
+			OldLighting = R00 * Weights.x + R10 * Weights.y + R01 * Weights.z + R11 * Weights.w;
+		}
+
+		float4 HistorySampleCounts = HistoryDI.GatherAlpha(g_PointClampSampler, HistoryGatherUV).wzxy;
+		float NewSampleCount = NewLightingC.a;
+		float OldSampleCount = dot(HistorySampleCounts * Weights, 1.f.xxxx);
+		if(UB.DI_NoTemporalDenoising) {
+			OldSampleCount = 0;
+		}
+		float ClampedOldSampleCount = min(OldSampleCount, max(UB.DI_Denoiser_TargetNumSamples - NewSampleCount, 0));
+		float SampleCount = ClampedOldSampleCount + NewSampleCount;
+		float BlendingFactor = ClampedOldSampleCount / SampleCount;
+		Denoised = float4(
+			lerp(NewLightingC.rgb, OldLighting, BlendingFactor),
+			SampleCount
+		);
+	}
+	// Store the results back to the direct illumination buffer
+	GetRWFilteredDirectIlluminationTexture(C)[PixelCoords] = Denoised;
+}
+
+// Filtered DI is copied back to the DI buffer
 
 #ifndef NDEBUG
 [numthreads(1, 1, 1)]
@@ -770,18 +968,6 @@ void Debug_PrepareVisualizeDIRay () {
 }
 #endif
 
-// [numthreads(TILE_SIZE, TILE_SIZE, 1)]
-// void FilterDirectIllumination (uint2 DispatchID : SV_DispatchThreadID) {
-// }
-
-// [numthreads(TILE_SIZE, TILE_SIZE, 1)]
-// void TemporalDenoise (uint2 DispatchID : SV_DispatchThreadID) {
-// 	if(DispatchID.x >= UB.ScreenDimensions.x || DispatchID.y >= UB.ScreenDimensions.y) return;
-// 	float2 Momentum = g_RW_GMomentumTexture[DispatchID].xy;
-// 	CameraDescription C = GetCameraDescription();
-// 	float3 WorldPosition = 
-// }
-
 [numthreads(TILE_SIZE, TILE_SIZE, 1)]
 void FinalComposition (uint2 DispatchID : SV_DispatchThreadID) {
 	CameraDescription C = GetCameraDescription();
@@ -791,7 +977,8 @@ void FinalComposition (uint2 DispatchID : SV_DispatchThreadID) {
 	// for now.
 	float3 DirectIllumination = GetDirectIlluminationTexture(C).Load(int3(DispatchID, 0)).rgb;
 	float4 RadianceW = 0;
-	RadianceW.rgb += DirectIllumination;//float3(g_Radiance.Load(int3(DispatchID, 0)).rgb);
+	Material M = FetchMaterial(C, DispatchID);
+	RadianceW.rgb += DirectIllumination * M.Albedo;
 	// Slightly increases the alpha value to prevent skylight leaking from the background
 	RadianceW.w = saturate(g_GColorTexture.Load(int3(DispatchID, 0)).a + 0.03f);
 	if(UB.DebugMode == 1) {

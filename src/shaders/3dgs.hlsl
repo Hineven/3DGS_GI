@@ -34,6 +34,10 @@ float2 ScreenToNDC2(float2 Screen) {
     return float2(T.x, -T.y);
 }
 
+float2 ScreenToUV (float2 Screen) {
+    return Screen / UB.ScreenDimensions;
+}
+
 float2 FilmToNDC2(CameraDescription C, float2 Film) {
     float2 T = 2.f * Film / float2(C.FilmDimensions) - 1.f;
     return float2(T.x, -T.y);
@@ -514,8 +518,8 @@ RWTexture2D<float> GetRWZDepthTexture (CameraDescription C) {
     return g_RW_GZDepthTexture;
 }
 
-Texture2D<float> GetPreviousZDepthTexture (CameraDescription C) {
-    return g_PreviousZDepthTexture;
+Texture2D<float> GetHistoryZDepthTexture (CameraDescription C) {
+    return g_HistoryZDepthTexture;
 }
 
 Texture2D<float> GetNearHZBTexture (CameraDescription C) {
@@ -532,8 +536,8 @@ RWTexture2D<float4> GetRWRadianceTexture (CameraDescription C) {
     return g_RW_Radiance;
 }
 
-Texture2D<float4> GetPreviousRadianceTexture (CameraDescription C) {
-    return g_PreviousRadiance;
+Texture2D<float4> GetHistoryRadianceTexture (CameraDescription C) {
+    return g_HistoryRadiance;
 }
 
 Texture2D<float4> GetDirectIlluminationTexture (CameraDescription C) {
@@ -545,6 +549,22 @@ RWTexture2D<float4> GetRWDirectIlluminationTexture (CameraDescription C) {
     // TODO meshcards
     return g_RW_DirectIllumination;
 }
+
+Texture2D<float4> GetHistoryDirectIlluminationTexture (CameraDescription C) {
+    // TODO meshcards
+    return g_HistoryDirectIllumination;
+}
+
+Texture2D<float4> GetFilteredDirectIlluminationTexture (CameraDescription C) {
+    // TODO meshcards
+    return g_FilteredDirectIllumination;
+}
+
+RWTexture2D<float4> GetRWFilteredDirectIlluminationTexture (CameraDescription C) {
+    // TODO meshcards
+    return g_RW_FilteredDirectIllumination;
+}
+
 
 float3 RecoverWorldSpacePositionNDC2 (CameraDescription C, float2 NDC2, float LinearDepth) {
     float3 Direction = NDC2ToCameraDirectionUnnormalized(C, NDC2);
@@ -569,8 +589,20 @@ float ZDepthToLinear (CameraDescription C, float ZDepth) {
     return 2.f * C.NearPlane * C.FarPlane / (C.FarPlane + C.NearPlane - ZDepthN * (C.FarPlane - C.NearPlane));
 }
 
-float3 EvaluateSkyRadiance (float3 Direction) {
-    return g_EnvironmentMap.SampleLevel(g_LinearWrapSampler, Direction, 0.0f).xyz;
+float3 GetSkyBoxDirection (int i) {
+    float3 Directions[6] = {
+        float3(1, 0, 0),
+        float3(-1, 0, 0),
+        float3(0, 1, 0),
+        float3(0, -1, 0),
+        float3(0, 0, 1),
+        float3(0, 0, -1)
+    };
+    return Directions[i];
+}
+
+float3 EvaluateSkyRadiance (float3 Direction, float LOD = 0) {
+    return g_EnvironmentMap.SampleLevel(g_LinearWrapSampler, Direction, LOD).xyz;
 }
 
 // Copy-pasted from UE5. A simple and fast way to get an interleaved gradient noise.
@@ -590,8 +622,14 @@ float InterleavedGradientNoise( float2 uv, float FrameId )
     return frac(magic.z * frac(dot(uv, magic.xy)));
 }
 
-float3 ReprojectToHistoryUVWFromUVW (CameraDescription C, float3 UVW) {
-    return TransformPointWithPerspectiveDivide(C.Reprojection, UVW);
+float3 ReprojectToPreviousUVWFromUVW (CameraDescription C, float3 UVW) {
+    float3 NDC = float3(UVToNDC2(UVW.xy), UVW.z);
+    float3 ReprojectedNDC = TransformPointWithPerspectiveDivide(C.Reprojection, NDC);
+    return float3(NDC2ToUV(ReprojectedNDC.xy), ReprojectedNDC.z);
+}
+
+float3 ReprojectToPreviousNDCFromNDC (CameraDescription C, float3 NDC) {
+    return TransformPointWithPerspectiveDivide(C.Reprojection, NDC);
 }
 
 bool IsMaterialValid (Material M) {

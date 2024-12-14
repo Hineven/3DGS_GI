@@ -71,11 +71,22 @@ GBufferOutput DrawActiveGaussians (DrawActiveGaussians_FSInput Input) {
     return Result;
 }
 
+float3 ACESToneMapping(float3 color, float Exposure)
+{
+	float A = 2.51f;
+	float B = 0.03f;
+	float C = 2.43f;
+	float D = 0.59f;
+	float E = 0.14f;
+	color *= Exposure;
+	return (color * (A * color + B)) / (color * (C * color + D) + E);
+}
+
 float4 TonemapAndDraw (float4 InPosition : SV_Position) : SV_Target {
     float2 UV = InPosition.xy / UB.ScreenDimensions;
     float4 Color = g_Radiance.Sample(g_LinearClampSampler, UV);
-    // Just simply do a gamma correction
-    Color.rgb = RadianceToColor(Color.rgb);
+    // Color.rgb = ACESToneMapping(Color.rgb, UB.TonemapExposure);
+    Color.rgb = RadianceToColor(Color.rgb * UB.TonemapExposure);
     return Color;
 }
 

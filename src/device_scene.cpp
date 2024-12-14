@@ -101,7 +101,7 @@ void DeviceScene::Upload (const Scene & scene) {
 
 void DeviceScene::UpdateLights(const Scene &scene) {
     auto gfx = AppInternal::GetInstance().GetGfx();
-    int num_lights = scene.lights_.size();
+    int num_lights = scene.GetNumLights();
     if (!light_count_) {
         light_count_ = gfxCreateBuffer<uint>(gfx, 1, &num_lights);
         light_count_.setName("LightCountBuffer");
@@ -114,40 +114,13 @@ void DeviceScene::UpdateLights(const Scene &scene) {
         light_data_ = gfxCreateBuffer<float3>(gfx, num_lights * 4, scene.light_data_.data());
         light_data_.setName("LightDataBuffer");
     }
-    std::vector<uint2> packed_lights;
-    packed_lights.resize(num_lights);
-    auto saturateDown = [](auto x) { return glm::min(glm::max(0.f, x), 1 - FLT_EPSILON); };
-    auto getOct01 = [] (glm::vec3 v) {
-        glm::vec2 xy = glm::vec2(v) / glm::dot( glm::vec3(1), glm::abs(v) );
-        if( v.z <= 0 )
-        {
-            xy = ( glm::vec2{1.f} - abs(glm::vec2{xy.y, xy.x}) )
-                * glm::vec2{xy.x >= 0 ? 1 : -1, xy.y >= 0 ? 1 : -1};
-        }
-        return (xy + 1.f) * 0.5f;
-    };
-    for (int i = 0; const auto & l : scene.lights_) {
-        uint2 packed;
-        packed.x = (l.GridIndex.x & 0x3f) | ((l.GridIndex.y & 0x3f) << 6)
-            | ((l.GridIndex.z & 0x3f) << 12) | ((l.Type & 0x3) << 18);
-        packed.x |= (uint(saturateDown(l.LocalPosition.x) * 16) << 20)
-            | (uint(saturateDown(l.LocalPosition.y) * 16) << 24)
-            | (uint(saturateDown(l.LocalPosition.z) * 16) << 28);
-        packed.y = l.Type & 0x3;
-        glm::vec2 oct01 = getOct01(l.Normal);
-        oct01.x = saturateDown(oct01.x);
-        oct01.y = saturateDown(oct01.y);
-        packed.y |= (uint(oct01.x * 128) << 2) | (uint(oct01.y * 128) << 9);
-        uint16_t intensity = glm::detail::float2half(std::bit_cast<uint>(l.Intensity));
-        packed.y |= ((uint)intensity) << 16;
-        packed_lights[i++] = packed;
+    if (light_data_staging_.getSize() != num_lights * 4 * sizeof(float3)) {
+        light_data_staging_ = gfxCreateBuffer<float3>(gfx, num_lights * 4, nullptr, kGfxCpuAccess_Write);
+        light_data_staging_.setName("LightDataStagingBuffer");
     }
-    GfxBuffer staging_buffer = gfxCreateBuffer(gfx, packed_lights.size() * sizeof(uint2), packed_lights.data(), kGfxCpuAccess_Write);
-    gfxCommandCopyBuffer(gfx, light_, staging_buffer);
-    gfxDestroyBuffer(gfx, staging_buffer);
-    staging_buffer = gfxCreateBuffer(gfx, scene.light_data_.size() * sizeof(float3), scene.light_data_.data(), kGfxCpuAccess_Write);
-    gfxCommandCopyBuffer(gfx, light_data_, staging_buffer);
-    gfxDestroyBuffer(gfx, staging_buffer);
+    gfxCommandClearBuffer(gfx, light_count_, num_lights);
+    memcpy(gfxBufferGetData(gfx, light_data_staging_), scene.light_data_.data(), num_lights * 4 * sizeof(float3));
+    gfxCommandCopyBuffer(gfx, light_data_, light_data_staging_);
 }
 
 

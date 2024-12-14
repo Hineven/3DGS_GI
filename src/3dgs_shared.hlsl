@@ -93,21 +93,32 @@ struct UniformBlock {
 
     float  LightGrid_GridSize;
     uint   LightGrid_GridResolution;
-    uint2  Padding_0_1;
-
     uint   LightGrid_GridResolution2;
     uint   LightGrid_GridResolution3;
+
     uint   LightGrid_NumGridCascades;
     float  LightGrid_MinLightContributionForInjection;
-
     float  LightGrid_MinResampleWeightForDirectIllumiation;
     uint   LightGrid_MaxNumEntries; // Max number of entries in the light grids
+    
     float  DI_OcclusionThresholdMinFactor;
     float  DI_OcclusionThresholdMaxFactor;
+    float  DI_FilterGaussianRadius;
+    float  DI_InvFilterGaussianRadius2;
+
+    float  DI_Denoiser_DepthThreshold;
+    uint   DI_NoTemporalDenoising;
+    uint   DI_NoSpatialDenoising;
+    float  DI_Denoiser_TargetNumSamples;
+
+    int    DepthFilterRadius;
+    uint   Padding0_xx;
+    uint   Padding1_xx;
+    uint   Padding2_xx;
 
     int2   Debug_CursorPixelCoords;
     uint   Debug_VisualizeLightGridCascade;
-    int    Padding0_2;
+    float  TonemapExposure;
 
     DeviceVirtualAddressRange RT_RayGenerationShaderRecord;
     
@@ -175,14 +186,13 @@ struct Light {
     float  Intensity;
     // Grid index
     int4   GridIndex;
-    // Grid local position (low precision)
+    // Grid local position, [0, 1)^3 (low precision)
     float3 LocalPosition;
     // Light normal / direction (low precision)
     float3 Normal;
 };
 
 struct LightData {
-	int Type;
 	float3 V1; // Light direction if this is a directional light
 	float3 V2;
 	float3 V3;
