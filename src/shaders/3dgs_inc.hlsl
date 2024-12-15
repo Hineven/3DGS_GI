@@ -17,10 +17,6 @@
 // Consistent with the 3DGS ray tracing paper.
 #define HIT_BUFFER_SIZE 16
 
-// Output the colored gaussians in the output channel.
-// For visualization purposes only.
-#define OUTPUT_COLORED_GAUSSIANS
-
 // Use better normal reconstruction algorithm (5 samples required vs 4 samples)
 // #define HIGH_QUALITY_NORMAL_RECONSTRUCTION
 
@@ -28,7 +24,7 @@
 // #define BITPACK_VERTEX_ATTRIBUTES
 
 // Output full G-Buffers for PBR rendering
-// Controlled by the renderer.
+// Controlled by the renderer. Otherwise, output colored gaussians to the albedo channel.
 // #define OUTPUT_PBR_G_BUFFER
 
 // Use depth to reconstruct the normals, instead of rendering them directly

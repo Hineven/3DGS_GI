@@ -116,7 +116,7 @@ void ProjectActiveGaussians (uint DispatchID : SV_DispatchThreadID) {
 
     float  Det           = Cov2D.x * Cov2D.z - Cov2D.y * Cov2D.y;
 
-#ifdef OUTPUT_COLORED_GAUSSIANS
+#ifndef OUTPUT_PBR_G_BUFFER
 	SHCoefficents3 SH3 = FetchGaussianSHCoefficients(GaussianIndex, 3);
 	float3 ViewDirection = normalize(C.Position - G.Position);
 	float3 Color = SH3Evaluate(ViewDirection, SH3, 3);
@@ -477,7 +477,7 @@ LightSample SampleLightWithCosineWeight (float3 Position, Material M, uint Light
 	} else if(LightType == LIGHT_TYPE_SKY) {
 		Result.Position = SampleSkyLight(M.Normal, u2, Result.Pdf);
 		float CosineFactor = saturate(dot(Result.Position, M.Normal));
-		Result.Radiance = EvaluateSkyRadiance(Result.Position) * CosineFactor;
+		Result.Radiance = EvaluateSkyRadiance(-Result.Position) * CosineFactor;
 	} else if(LightType == LIGHT_TYPE_AREA) {
 		Result.Position = SampleAreaLightArea(LD.V1, LD.V2, LD.V3, u2, Result.Pdf);
 		// Convert area pdf to solid angle pdf
@@ -982,7 +982,7 @@ void FinalComposition (uint2 DispatchID : SV_DispatchThreadID) {
 	// Slightly increases the alpha value to prevent skylight leaking from the background
 	RadianceW.w = saturate(g_GColorTexture.Load(int3(DispatchID, 0)).a + 0.03f);
 	if(UB.DebugMode == 1) {
-		RadianceW.rgb = g_GColorTexture.Load(int3(DispatchID, 0)).rgb;
+		RadianceW.rgb = ColorToRadiance(g_GColorTexture.Load(int3(DispatchID, 0)).rgb);
     } else if(UB.DebugMode == 2) {
         RadianceW.rgb = g_GMaterialTexture.Load(int3(DispatchID, 0)).rrr;
     } else if(UB.DebugMode == 3) {

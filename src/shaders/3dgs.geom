@@ -80,10 +80,16 @@ void DrawActiveGaussians(point DrawActiveGaussians_GSInput Input[1], inout Trian
     GaussianPBR G_PBR = FetchGaussianPBR(GaussianIndex);
     
     float4 AlbedoAlpha = float4(G_PBR.Albedo, G.Alpha);
-#ifdef OUTPUT_COLORED_GAUSSIANS
+#ifndef OUTPUT_PBR_G_BUFFER
+    // Replace the albedo with evaluated gaussian color
     AlbedoAlpha.rgb = saturateDown(g_RWActiveGaussianColorBuffer[ActiveListIndex]);
 #endif
     
+    // Is the quantilization affecting render qwuality?
+    // int Seed = UB.FrameIndex + InstanceIndex * 77183;
+    float3 Q_Noise = 0;//0.01 * frac(sin(Seed) * 43758.5453);
+    AlbedoAlpha.rgb += Q_Noise;
+
     float3 Albedo = AlbedoAlpha.xyz;
     float  Alpha = AlbedoAlpha.w;
     float  Roughness = G_PBR.Roughness;
