@@ -104,7 +104,7 @@ void ProjectActiveGaussians (uint DispatchID : SV_DispatchThreadID) {
         0, 0, 0
     );
 #if !(RASTERIZATION_IS_ORTHO_CAMERA)
-    J = EWAJacobian(G.Position, C.FieldOfView, C.View);
+    J = EWAJacobian2(G.Position, C.FieldOfView, C.View);
 #endif
     float4 HomogeneousW = mul(C.ProjectionView, float4(G.Position, 1.f));
     float3 Homogeneous = HomogeneousW.xyz / HomogeneousW.w;

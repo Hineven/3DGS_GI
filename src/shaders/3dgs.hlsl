@@ -275,9 +275,9 @@ float3 ProjectCovarianceMatrixToScreen(float3 mean, float2 focal, float2 tan_fov
     return float3(C_2D[0][0], C_2D[0][1], C_2D[1][1]);
 }
 
-// Project the covariance matrix to 2D
-// @return The screen space 2D covariance matrix (m00, m01, m11)
-float3x3 EWAJacobian (float3 Mean, float2 TanFoV, float4x4 View) {
+// TanFoV: 2 * tan(fov / 2)
+// @return The first two rows of Jacobian Matrix.
+float3x3 EWAJacobian2 (float3 Mean, float2 TanFoV, float4x4 View) {
     float3 P = mul(View, float4(Mean, 1.0)).xyz;
     const float limx = 0.65f * TanFoV.x;
     const float limy = 0.65f * TanFoV.y;
@@ -300,8 +300,11 @@ float3 ProjectCovarianceMatrixToNDC(float3x3 J, SymmetricMatrix Covariance3D, fl
         View[0][0], View[0][1], View[0][2],
         View[1][0], View[1][1], View[1][2],
         View[2][0], View[2][1], View[2][2]);
+    // W = transpose(W);
 
     float3x3 Mk = mul(J, W);
+    // Mk = mul(W, J);
+    // Mk = transpose(Mk);
     
     float3x3 C = ExpandSymmetricMatrix(Covariance3D);
     float3x3 C_2D = mul(mul(Mk, C), transpose(Mk));
