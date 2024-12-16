@@ -69,7 +69,7 @@ void FilterActiveGaussians (uint DispatchID : SV_DispatchThreadID) {
     Gaussian G = FetchGaussian(GaussianIndex);
 
 	float3 ViewSpacePosition = 0;
-	if(IsPointInFrustrum(UB.MainCamera, G.Position, ViewSpacePosition, false, GetCameraDescription().NearPlane, 0.2f)) {
+	if(IsPointInFrustrum(UB.MainCamera, G.Position, ViewSpacePosition, false, GetCameraDescription().NearPlane, 0.1f)) {
 		int GaussianCount = WaveActiveCountBits(1);
 		int GaussianRank  = WavePrefixCountBits(1);
 		int GaussianBaseIndex = 0;
@@ -82,7 +82,7 @@ void FilterActiveGaussians (uint DispatchID : SV_DispatchThreadID) {
 
 		g_RWActiveGaussianListSrcBuffer[ActiveListIndex] = GaussianIndex;
 		// The view space align the view direction with the negative z axis
-		float LinearDepth = -ViewSpacePosition.z;
+		float LinearDepth = - ViewSpacePosition.z;
 		g_RWActiveGaussianLinearDepthSrcBuffer[ActiveListIndex] = LinearDepth;
 	}
 }
@@ -91,6 +91,9 @@ void FilterActiveGaussians (uint DispatchID : SV_DispatchThreadID) {
 
 [numthreads(WAVE_SIZE, 1, 1)]
 void ProjectActiveGaussians (uint DispatchID : SV_DispatchThreadID) {
+
+// TODO multi gs instance
+
 	if(DispatchID >= g_RWActiveGaussianCountBuffer[0]) return;
 	int GaussianIndex = g_RWActiveGaussianListBuffer[DispatchID];
     
@@ -117,9 +120,9 @@ void ProjectActiveGaussians (uint DispatchID : SV_DispatchThreadID) {
     float  Det           = Cov2D.x * Cov2D.z - Cov2D.y * Cov2D.y;
 
 #ifndef OUTPUT_PBR_G_BUFFER
-	SHCoefficents3 SH3 = FetchGaussianSHCoefficients(GaussianIndex, 3);
+	SHCoefficents3 SH3 = FetchGaussianSHCoefficients(GaussianIndex, 2);
 	float3 ViewDirection = normalize(C.Position - G.Position);
-	float3 Color = SH3Evaluate(ViewDirection, SH3, 3);
+	float3 Color = SH3Evaluate(ViewDirection, SH3, 2);
 	g_RWActiveGaussianColorBuffer[DispatchID] = Color;
 #endif
 
@@ -143,19 +146,13 @@ void ProjectActiveGaussians (uint DispatchID : SV_DispatchThreadID) {
 	// OPTIMIZE: scale the vectors according to opacity of the gaussian
 	float2 ClampedPosition = saturateDown(Homogeneous.xy * 0.25 + 0.5f);
 	g_RWActiveGaussianNDCPositionBuffer[DispatchID] = PackUnorm16x2(ClampedPosition);
+	float LinearDepth = g_RWActiveGaussianLinearDepthBuffer[DispatchID];
+	Lambda1 = max(abs(Lambda1), 5e-6f / LinearDepth);
+	Lambda2 = max(abs(Lambda2), 5e-6f / LinearDepth);
     float2 ClampedVector1 = Eigenvector1 * sqrt(abs(Lambda1));
 	g_RWActiveGaussianQuadNDCVector0Buffer[DispatchID] = PackUnorm16x2(saturateDown(ClampedVector1 * 0.5 + 0.5));
 	float2 ClampedVector2 = Eigenvector2 * sqrt(abs(Lambda2));
 	g_RWActiveGaussianQuadNDCVector1Buffer[DispatchID] = PackUnorm16x2(saturateDown(ClampedVector2 * 0.5 + 0.5));
-
-
-	// g_RWActiveGaussianQuadLinearDepthsBuffer[DispatchID] = float2(
-	// 	MaxResponseDepth1, MaxResponseDepth2
-	// );
-	// FIXME the original value should be correct.
-	// g_RWActiveGaussianLinearDepthBuffer[DispatchID] = MaxResponseDepth0;
-	// g_RWActiveGaussianQuadLinearDepthsBuffer[DispatchID] = 
-	// 	g_RWActiveGaussianLinearDepthBuffer[DispatchID].xx;
 }
 
 [numthreads(TILE_SIZE, TILE_SIZE, 1)]

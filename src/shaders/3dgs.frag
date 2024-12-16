@@ -19,6 +19,11 @@ float Evaluate2DUnnormalizedGaussian (float2 P) {
     return exp(-dot(P, P) / 2);
 }
 
+float Evaluate2DGaussian (float2 P) {
+    float NormalizationFactor = 1 / (2 * M_PI);
+    return NormalizationFactor * exp(-dot(P, P) / 2);
+}
+
 struct GBufferOutput {
     float4 AlbedoAlpha    : SV_Target0;
 #ifdef OUTPUT_PBR_G_BUFFER

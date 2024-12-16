@@ -214,7 +214,7 @@ bool IsPointInFrustrum (CameraDescription C, float3 Position, out float3 ViewSpa
         // FIXME
         return false;
     } else {
-        if(Homogeneous.w) {
+        if(Homogeneous.w > 0) {
             float3 Projected = Homogeneous.xyz / Homogeneous.w;
             return all(abs(Projected.xy) < 1.0f + Expand) && Projected.z >= 0.15 && Projected.z <= 1.0f;
         } else {

@@ -1,4 +1,5 @@
 #include "3dgs.hlsl"
+#include "radiometry.hlsl"
 
 struct DrawActiveGaussians_GSInput
 {
@@ -56,7 +57,7 @@ void DrawActiveGaussians(point DrawActiveGaussians_GSInput Input[1], inout Trian
     float2 Right1 = Center + Expand * ( Vec2 -Vec1H);
     float2 Right2 = Center + Expand * ( Vec2 +Vec1H);
     
-    float  Depth   = g_RWActiveGaussianLinearDepthBuffer[ActiveListIndex];
+    float  Depth   =  g_RWActiveGaussianLinearDepthBuffer[ActiveListIndex];
     
     // float2 Depth01 = g_RWActiveGaussianQuadLinearDepthsBuffer[ActiveListIndex];
     // Magnify according to the expand parameter
@@ -85,10 +86,10 @@ void DrawActiveGaussians(point DrawActiveGaussians_GSInput Input[1], inout Trian
     AlbedoAlpha.rgb = saturateDown(g_RWActiveGaussianColorBuffer[ActiveListIndex]);
 #endif
     
-    // Is the quantilization affecting render qwuality?
-    // int Seed = UB.FrameIndex + InstanceIndex * 77183;
-    float3 Q_Noise = 0;//0.01 * frac(sin(Seed) * 43758.5453);
-    AlbedoAlpha.rgb += Q_Noise;
+    // Is the quantilization affecting render quality?
+    int Seed = UB.FrameIndex + InstanceIndex * 77183;
+    float Q_Noise = 0.01 * (frac(sin(Seed) * 43758.5453) - 0.5f);
+    AlbedoAlpha.a = saturate(AlbedoAlpha.a + Q_Noise);
 
     float3 Albedo = AlbedoAlpha.xyz;
     float  Alpha = AlbedoAlpha.w;
