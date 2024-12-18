@@ -91,6 +91,11 @@ public:
 
     inline int GetNumLights () const { return light_data_.size(); }
 
+    inline void SetNumLights (int num_lights) {
+        assert(num_lights >= 2);
+        light_data_.resize(num_lights);
+    }
+
     ~Scene();
 
     friend class DeviceScene;

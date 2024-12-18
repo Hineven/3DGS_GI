@@ -18,7 +18,12 @@
 #define HIT_BUFFER_SIZE 16
 
 // Use better normal reconstruction algorithm (5 samples required vs 4 samples)
-// #define HIGH_QUALITY_NORMAL_RECONSTRUCTION
+// 24.12.17: Found this method mitigates the "rimlights" around lit round edges of objects.
+#define HIGH_QUALITY_NORMAL_RECONSTRUCTION
+
+// Use constant gaussian depths instead of the "max response plane" when reconstructing depths
+// This helps mitigates some artifacts raised by precision issues.
+#define CONSTANT_GAUSSIAN_DEPTH
 
 // Bitpack the vertex attributes when transfering them to the fragment shader
 // #define BITPACK_VERTEX_ATTRIBUTES
@@ -149,8 +154,10 @@ RWStructuredBuffer<float> g_RWDirectIlluminationRayOcclusionThresholdBuffer;
 RWStructuredBuffer<uint2>  g_RWDirectIlluminationRayContributionBuffer;
 
 // G-Buffers
-RWTexture2D<float4>      g_RW_GColorTexture;
+RWTexture2D<float4>      g_RW_GColorTexture; // stores color / albedo; alpha (gaussians / combined)
 Texture2D<float4>        g_GColorTexture;
+Texture2D<float4>        g_GEmissionAlphaTexture; // stores emission; alpha (regular meshes)
+RWTexture2D<float4>      g_RW_GEmissionAlphaTexture;
 RWTexture2D<float2>       g_RW_GDepthTexture;
 // Linear depth, not Z buffer depth
 Texture2D<float2>         g_GDepthTexture;
@@ -183,6 +190,8 @@ RWTexture2D<float4>      g_RW_Radiance;
 Texture2D<float4>        g_Radiance;
 Texture2D<float4>        g_HistoryRadiance;
 
+// ZDepth for regular meshes
+Texture2D<float>         g_RasterizationDepthTexture;
 
 // All non-resource uniforms
 ConstantBuffer<UniformBlock> UB;

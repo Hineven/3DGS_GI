@@ -74,6 +74,9 @@ void DrawActiveGaussians(point DrawActiveGaussians_GSInput Input[1], inout Trian
         EvaluateGaussianResponseRayT(InstanceLocalOrigin, InstanceLocalDirection0, G, InvCov),
         EvaluateGaussianResponseRayT(InstanceLocalOrigin, InstanceLocalDirection1, G, InvCov)
     );
+#ifdef CONSTANT_GAUSSIAN_DEPTH
+    Depth01.xy = Depth.xx;
+#endif
     float  D_TL    =  Depth01.x +Depth01.y - Depth;
     float  D_TR    =  Depth01.x -Depth01.y + Depth;
     float  D_BL    =  Depth01.y -Depth01.x + Depth;
@@ -109,27 +112,27 @@ void DrawActiveGaussians(point DrawActiveGaussians_GSInput Input[1], inout Trian
     // L1, L2, T, B, R1, R2
 
     Output.UV = Expand * float2(-1, -0.5);
-    Output.Position = float4(Left1, InvFarPlane * InterpolateBarycentrics(D_TL, D_TR, D_BL, float2(0, 0.25)), 1);
+    Output.Position = float4(Left1, LinearToZDepth(C, InterpolateBarycentrics(D_TL, D_TR, D_BL, float2(0, 0.25))), 1);
     TriStream.Append(Output);
 
     Output.UV = Expand * float2(-1,  0.5);
-    Output.Position = float4(Left2, InvFarPlane * InterpolateBarycentrics(D_TL, D_TR, D_BL, float2(0, 0.75)), 1);
+    Output.Position = float4(Left2, LinearToZDepth(C, InterpolateBarycentrics(D_TL, D_TR, D_BL, float2(0, 0.75))), 1);
     TriStream.Append(Output);
 
     Output.UV = Expand * float2(0, -1);
-    Output.Position = float4(Top, InvFarPlane * InterpolateBarycentrics(D_TL, D_TR, D_BL, float2(0.5, 0)), 1);
+    Output.Position = float4(Top, LinearToZDepth(C, InterpolateBarycentrics(D_TL, D_TR, D_BL, float2(0.5, 0))), 1);
     TriStream.Append(Output);
 
     Output.UV = Expand * float2(0, 1);
-    Output.Position = float4(Bottom, InvFarPlane * InterpolateBarycentrics(D_TL, D_TR, D_BL, float2(0.5, 1)), 1);
+    Output.Position = float4(Bottom, LinearToZDepth(C, InterpolateBarycentrics(D_TL, D_TR, D_BL, float2(0.5, 1))), 1);
     TriStream.Append(Output);
 
     Output.UV = Expand * float2(1,  -0.5);
-    Output.Position = float4(Right1, InvFarPlane * InterpolateBarycentrics(D_TL, D_TR, D_BL, float2(1, 0.25)), 1);
+    Output.Position = float4(Right1, LinearToZDepth(C, InterpolateBarycentrics(D_TL, D_TR, D_BL, float2(1, 0.25))), 1);
     TriStream.Append(Output);
 
     Output.UV = Expand * float2(1,  0.5);
-    Output.Position = float4(Right2, InvFarPlane * InterpolateBarycentrics(D_TL, D_TR, D_BL, float2(1, 0.75)), 1);
+    Output.Position = float4(Right2, LinearToZDepth(C, InterpolateBarycentrics(D_TL, D_TR, D_BL, float2(1, 0.75))), 1);
     TriStream.Append(Output);
 
 #else
@@ -138,27 +141,27 @@ void DrawActiveGaussians(point DrawActiveGaussians_GSInput Input[1], inout Trian
     Output.NN = NormalU.yz;
 
     Output.UVWR.xy = Expand * float2(-1, -0.5);
-    Output.Position = float4(Left1, InvFarPlane * InterpolateBarycentrics(D_TL, D_TR, D_BL, float2(0, 0.25)), 1);
+    Output.Position = float4(Left1, LinearToZDepth(C, InterpolateBarycentrics(D_TL, D_TR, D_BL, float2(0, 0.25))), 1);
     TriStream.Append(Output);
 
     Output.UVWR.xy = Expand * float2(-1,  0.5);
-    Output.Position = float4(Left2, InvFarPlane * InterpolateBarycentrics(D_TL, D_TR, D_BL, float2(0, 0.75)), 1);
+    Output.Position = float4(Left2, LinearToZDepth(C, InterpolateBarycentrics(D_TL, D_TR, D_BL, float2(0, 0.75))), 1);
     TriStream.Append(Output);
 
     Output.UVWR.xy = Expand * float2(0, -1);
-    Output.Position = float4(Top, InvFarPlane * InterpolateBarycentrics(D_TL, D_TR, D_BL, float2(0.5, 0)), 1);
+    Output.Position = float4(Top, LinearToZDepth(C, InterpolateBarycentrics(D_TL, D_TR, D_BL, float2(0.5, 0))), 1);
     TriStream.Append(Output);
 
     Output.UVWR.xy = Expand * float2(0, 1);
-    Output.Position = float4(Bottom, InvFarPlane * InterpolateBarycentrics(D_TL, D_TR, D_BL, float2(0.5, 1)), 1);
+    Output.Position = float4(Bottom, LinearToZDepth(C, InterpolateBarycentrics(D_TL, D_TR, D_BL, float2(0.5, 1))), 1);
     TriStream.Append(Output);
 
     Output.UVWR.xy = Expand * float2(1, -0.5);
-    Output.Position = float4(Right1, InvFarPlane * InterpolateBarycentrics(D_TL, D_TR, D_BL, float2(1, 0.25)), 1);
+    Output.Position = float4(Right1, LinearToZDepth(C, InterpolateBarycentrics(D_TL, D_TR, D_BL, float2(1, 0.25))), 1);
     TriStream.Append(Output);
 
     Output.UVWR.xy = Expand * float2(1,  0.5);
-    Output.Position = float4(Right2, InvFarPlane * InterpolateBarycentrics(D_TL, D_TR, D_BL, float2(1, 0.75)), 1);
+    Output.Position = float4(Right2, LinearToZDepth(C, InterpolateBarycentrics(D_TL, D_TR, D_BL, float2(1, 0.75))), 1);
     TriStream.Append(Output);
 #endif
 

@@ -106,6 +106,62 @@ void Renderer::RenderUI () {
         ImGui::Checkbox("SSRT Enable", &options_.SSRT_enable);
         ImGui::Checkbox("HWRT Enable", &options_.HWRT_enable);
 
+        if (ImGui::CollapsingHeader("Area Lights", ImGuiTreeNodeFlags_DefaultOpen)) {
+            ImGui::Text("Count: %d", CB.area_light_count);
+            int index_to_remove = -1;
+            for (int i = 0; i < CB.area_light_count; i++) {
+                ImGui::PushID(18274827 ^ i);
+                ImGui::Text("Area Light %d", i);
+                ImGui::SliderFloat3("Position", &CB.area_light_positions[i].x, -2, 2);
+                ImGui::SliderFloat3("Facing", &CB.area_lights_facing[i].x, -1, 1);
+                CB.area_lights_facing[i] = glm::normalize(CB.area_lights_facing[i]);
+                ImGui::InputFloat3("Color", &CB.area_light_colors[i].x);
+                ImGui::SliderFloat("Size", &CB.area_light_sizes[i], 0.05, 5);
+                if (ImGui::Button("-")) {
+                    index_to_remove = i;
+                }
+                ImGui::PopID();
+            }
+            if (index_to_remove != -1) {
+                for (int i = index_to_remove; i < CB.area_light_count - 1; i++) {
+                    CB.area_light_positions[i] = CB.area_light_positions[i + 1];
+                    CB.area_lights_facing[i] = CB.area_lights_facing[i + 1];
+                    CB.area_light_colors[i] = CB.area_light_colors[i + 1];
+                    CB.area_light_sizes[i] = CB.area_light_sizes[i + 1];
+                }
+                CB.area_light_count--;
+            }
+            if (ImGui::Button("+") && CB.area_light_count < 10) {
+                int idx = CB.area_light_count;
+                CB.area_light_positions[idx] = {(idx / 10) * 2 - 1, 0, 0};
+                CB.area_lights_facing[idx] = {0, 0, 1};
+                CB.area_light_colors[idx] = {1, 1, 1};
+                CB.area_light_sizes[idx] = 1;
+                // Random initialize the triangle points on the XY plane
+                glm::vec3 A, B, C;
+                while (true) {
+                    A = {nextFloat() * 0.1, nextFloat() * 0.1, 0};
+                    B = {nextFloat() * 0.1, nextFloat() * 0.1, 0};
+                    C = {nextFloat() * 0.1, nextFloat() * 0.1, 0};
+                    float area = glm::length(glm::cross(B - A, C - A));
+                    if (area >= 0.002) {
+                        break;
+                    }
+                }
+                if (glm::dot(glm::cross(B - A, C - A), glm::vec3(0, 0, 1)) < 0) {
+                    std::swap(B, C);
+                }
+                float3 center = (A + B + C) / 3.f;
+                A = A - center;
+                B = B - center;
+                C = C - center;
+                CB.area_light_local_vertices[idx * 3 + 0] = A;
+                CB.area_light_local_vertices[idx * 3 + 1] = B;
+                CB.area_light_local_vertices[idx * 3 + 2] = C;
+                CB.area_light_count ++;
+            }
+        }
+
         for (auto &val: cvar_ | std::views::values) {
             bool tmp_bv = false;
             auto & ref = val;
@@ -116,9 +172,9 @@ void Renderer::RenderUI () {
                     ref.v.i = tmp_bv;
                     break;
                 case CVar::FLOAT:
-                    if (ref.mn == ref.mx)
-                        ImGui::InputFloat(ref.name.c_str(), (float*)&ref.v);
-                    else ImGui::SliderFloat(ref.name.c_str(), (float*)&ref.v, ref.mn, ref.mx);
+                    if (ref.mn == ref.mx) {
+                        ImGui::InputFloat(ref.name.c_str(), (float*)&ref.v, 0, 0, "%.6f");
+                    } else ImGui::SliderFloat(ref.name.c_str(), (float*)&ref.v, ref.mn, ref.mx);
                     break;
                 case CVar::INT:
                     if (ref.mn == ref.mx) ImGui::InputInt(ref.name.c_str(), (int*)&ref.v);
@@ -303,6 +359,8 @@ void Renderer::Render() {
         REGISTER_CVAR(UB.DI_Denoiser_TargetNumSamples, "The target number of samples to achieve for direct illumination denoising.", 48, 1, 100);
 
         REGISTER_CVAR(UB.DepthFilterRadius, "Filter radius for depth reconstruction.", 1, 0, 3);
+        REGISTER_CVAR(UB.GaussianClampingScale, "Magic number for clamping the gaussian 2D eigen value to a minimum value.",
+            5e-6f);
 
         auto im_mouse_pos = ImGui::GetMousePos();
         glm::vec2 mouse_pos = {im_mouse_pos.x, im_mouse_pos.y};
@@ -340,6 +398,35 @@ void Renderer::Render() {
         LightData ei = scene.GetSkyLight();
         // No need to do anything.
         scene.SetSkyLight(ei);
+    }
+
+    // Area lights
+    {
+        if (scene.GetNumLights() != CB.area_light_count + 2) {
+            scene.SetNumLights(CB.area_light_count + 2);
+        }
+        auto toworld = [&](glm::vec3 x, glm::vec3 y, glm::vec3 z, glm::vec3 u) {
+            return x * u.x + y * u.y + z * u.z;
+        };
+        for (int i = 0; i < CB.area_light_count; i++) {
+            glm::vec3 tangent, bitangent;
+            auto normal = CB.area_lights_facing[i];
+            if (glm::abs(normal.x) > 0.5f) {
+                tangent = glm::vec3(0, 1, 0);
+            } else {
+                tangent = glm::vec3(1, 0, 0);
+            }
+            bitangent = normalize(glm::cross(normal, tangent));
+            tangent = normalize(glm::cross(bitangent, normal));
+            float scale = CB.area_light_sizes[i];
+            LightData L {
+                CB.area_light_positions[i] + toworld(tangent, bitangent, normal, scale * CB.area_light_local_vertices[i * 3 + 0]),
+                CB.area_light_positions[i] + toworld(tangent, bitangent, normal, scale * CB.area_light_local_vertices[i * 3 + 1]),
+                CB.area_light_positions[i] + toworld(tangent, bitangent, normal, scale * CB.area_light_local_vertices[i * 3 + 2]),
+                CB.area_light_colors[i]
+            };
+            scene.SetAreaLight(i, L);
+        }
     }
 
     // Update lights
@@ -388,6 +475,8 @@ void Renderer::Render() {
 
     gfxProgramSetParameter(gfx, program_, "g_RW_GColorTexture", tex_.G_albedo_alpha);
     gfxProgramSetParameter(gfx, program_, "g_GColorTexture", tex_.G_albedo_alpha);
+    gfxProgramSetParameter(gfx, program_, "g_GEmissionAlphaTexture", tex_.G_emission_alpha);
+    gfxProgramSetParameter(gfx, program_, "g_RW_GEmissionAlphaTexture", tex_.G_emission_alpha);
     gfxProgramSetParameter(gfx, program_, "g_RW_GDepthTexture", tex_.G_depth);
     gfxProgramSetParameter(gfx, program_, "g_GDepthTexture", tex_.G_depth);
     gfxProgramSetParameter(gfx, program_, "g_RW_GMaterialTexture", tex_.G_material);
@@ -414,6 +503,8 @@ void Renderer::Render() {
     gfxProgramSetParameter(gfx, program_, "g_RW_Radiance", tex_.radiance[frame_index_ & 1]);
     gfxProgramSetParameter(gfx, program_, "g_Radiance", tex_.radiance[frame_index_ & 1]);
     gfxProgramSetParameter(gfx, program_, "g_HistoryRadiance", tex_.radiance[(frame_index_ + 1) & 1]);
+
+    gfxProgramSetParameter(gfx, program_, "g_RasterizationDepthTexture", tex_.rasterization_depth);
 
     auto & samplers = AppInternal::GetInstance().GetSamplers();
     gfxProgramSetParameter(gfx, program_, "g_LinearClampSampler", samplers.linear_clamp);
@@ -543,6 +634,27 @@ void Renderer::Render() {
         }
     } else {
         // Ordinary rendering stuff including the reconstruction of G-Buffers
+
+        // Draw ordinary geometries first. The depth infomation can be further used to cull gaussians
+        {
+            auto section = TimedSection(*this, "DrawAreaLights");
+            gfxCommandClearTexture(gfx, tex_.G_albedo_alpha);
+            gfxCommandClearTexture(gfx, tex_.G_emission_alpha);
+            gfxCommandClearTexture(gfx, tex_.G_material);
+            gfxCommandClearTexture(gfx, tex_.G_normal);
+            gfxCommandClearTexture(gfx, tex_.rasterization_depth);
+            gfxCommandBindKernel(gfx, kernel_.DrawAreaLights);
+            // Alpha channel is not used in this draw
+            gfxCommandBindColorTarget(gfx, 0, tex_.G_albedo_alpha);
+            // Alpha is drawn to this texture (0 or 1)
+            gfxCommandBindColorTarget(gfx, 1, tex_.G_emission_alpha);
+            gfxCommandBindColorTarget(gfx, 2, tex_.G_material);
+            gfxCommandBindColorTarget(gfx, 3, tex_.G_normal);
+            gfxCommandBindDepthStencilTarget(gfx, tex_.rasterization_depth);
+            gfxCommandBindKernel(gfx, kernel_.DrawAreaLights);
+            gfxCommandDraw(gfx, 3, CB.area_light_count);
+        }
+
         {
             // Filter active gaussians, crop gaussians outside the view frustrum
             auto section = TimedSection(*this, "FilterActiveGaussians");
@@ -575,15 +687,13 @@ void Renderer::Render() {
             // Rasterize the G-Buffers
             auto section = TimedSection(*this, "DrawActiveGaussians");
             // Cleared to (0, 0, 0, 0)
-            gfxCommandClearTexture(gfx, tex_.G_albedo_alpha);
-            gfxCommandClearTexture(gfx, tex_.G_material);
             gfxCommandClearTexture(gfx, tex_.G_depth);
-            gfxCommandClearTexture(gfx, tex_.G_normal);
             GenerateDrawIndirect(buf_.active_gaussian_count);
             gfxCommandBindKernel(gfx, kernel_.DrawActiveGaussians);
             gfxCommandBindColorTarget(gfx, 0, tex_.G_albedo_alpha);
             gfxCommandBindColorTarget(gfx, 1, tex_.G_material);
             gfxCommandBindColorTarget(gfx, 2, tex_.G_depth);
+            gfxCommandBindDepthStencilTarget(gfx, tex_.rasterization_depth);
             if (!options_.reconstruct_normals) {
                 gfxCommandBindColorTarget(gfx, 3, tex_.G_normal);
             }
@@ -593,6 +703,7 @@ void Renderer::Render() {
         }
 
         {
+            // Resolve GBuffers rendered with gaussians. Doing some normalizations for weighted sums.
             auto section = TimedSection(*this, "ResolveGBuffers");
             gfxCommandBindKernel(gfx, kernel_.ResolveGBuffers);
             auto num_threads = gfxKernelGetNumThreads(gfx, kernel_.ResolveGBuffers);
@@ -603,8 +714,17 @@ void Renderer::Render() {
         }
 
         {
+            // Filter the depth values rendered with gaussians.
+            // Trick for reconstructing a better depth buffer for gaussians from low precision FBs and inaccurate data.
             auto section = TimedSection(*this, "FilterDepth");
             gfxCommandBindKernel(gfx, kernel_.FilterDepth);
+            gfxCommandDispatch(gfx, UB.TileDimensions.x, UB.TileDimensions.y, 1);
+        }
+
+        {
+            // Now, combine the G-Buffers rendered with gaussians and the ordinary G-Buffers
+            auto section = TimedSection(*this, "CombineGBuffers");
+            gfxCommandBindKernel(gfx, kernel_.CombineGBuffers);
             gfxCommandDispatch(gfx, UB.TileDimensions.x, UB.TileDimensions.y, 1);
         }
 

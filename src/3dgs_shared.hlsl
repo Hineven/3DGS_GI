@@ -112,7 +112,7 @@ struct UniformBlock {
     float  DI_Denoiser_TargetNumSamples;
 
     int    DepthFilterRadius;
-    uint   Padding0_xx;
+    float  GaussianClampingScale;
     uint   Padding1_xx;
     uint   Padding2_xx;
 

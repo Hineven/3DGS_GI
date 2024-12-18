@@ -118,6 +118,8 @@ bool Renderer::CreateResources () {
     tex_.G_material.setName("G_material");
     tex_.G_normal = gfxCreateTexture2D(gfx, width, height, DXGI_FORMAT_R8G8B8A8_UNORM, 1, zero_clear_value);
     tex_.G_normal.setName("G_normal");
+    tex_.G_emission_alpha = gfxCreateTexture2D(gfx, width, height, DXGI_FORMAT_R16G16B16A16_FLOAT, 1, zero_clear_value);
+    tex_.G_emission_alpha.setName("G_emission_alpha");
     tex_.G_zdepth[0] = gfxCreateTexture2D(gfx, width, height, DXGI_FORMAT_R32_FLOAT, 1, zero_clear_value);
     tex_.G_zdepth[0].setName("G_zdepth0");
     tex_.G_zdepth[1] = gfxCreateTexture2D(gfx, width, height, DXGI_FORMAT_R32_FLOAT, 1, zero_clear_value);
@@ -144,6 +146,10 @@ bool Renderer::CreateResources () {
     tex_.radiance[0].setName("Radiance0");
     tex_.radiance[1] = gfxCreateTexture2D(gfx, width, height, DXGI_FORMAT_R16G16B16A16_FLOAT, 1, zero_clear_value);
     tex_.radiance[1].setName("Radiance1");
+
+    float one_clear_value[4] = {1, 1, 1, 1};
+    tex_.rasterization_depth = gfxCreateTexture2D(gfx, width, height, DXGI_FORMAT_D32_FLOAT, 1, one_clear_value);
+    tex_.rasterization_depth.setName("RasterizationDepth");
 
     return true;
 }
@@ -212,6 +218,8 @@ void Renderer::DestroyResources() {
     gfxDestroyTexture(gfx, tex_.filtered_direct_illumination);
     gfxDestroyTexture(gfx, tex_.radiance[0]);
     gfxDestroyTexture(gfx, tex_.radiance[1]);
+
+    gfxDestroyTexture(gfx, tex_.rasterization_depth);
 }
 
 bool Renderer::CreateKernels () {
@@ -275,7 +283,8 @@ bool Renderer::CreateKernels () {
         kernel_.ProjectActiveGaussians = gfxCreateComputeKernel(gfx, program_, "ProjectActiveGaussians",
                                                                 defines_c.data(), defines_c.size());
         kernel_.ResolveGBuffers = gfxCreateComputeKernel(gfx, program_, "ResolveGBuffers", defines_c.data(), defines_c.size());
-        kernel_.FilterDepth  = gfxCreateComputeKernel(gfx, program_, "FilterDepth", defines_c.data(), defines_c.size());
+        kernel_.FilterDepth     = gfxCreateComputeKernel(gfx, program_, "FilterDepth", defines_c.data(), defines_c.size());
+        kernel_.CombineGBuffers = gfxCreateComputeKernel(gfx, program_, "CombineGBuffers", defines_c.data(), defines_c.size());
         kernel_.GenerateNearHZB = gfxCreateComputeKernel(gfx, program_, "GenerateNearHZB", defines_c.data(), defines_c.size());
         kernel_.ReconstructNormals = gfxCreateComputeKernel(gfx, program_, "ReconstructNormals", defines_c.data(), defines_c.size());
         kernel_.InitializeCounters = gfxCreateComputeKernel(gfx, program_, "InitializeCounters", defines_c.data(), defines_c.size());
@@ -360,7 +369,10 @@ bool Renderer::CreateKernels () {
 
     {
         GfxDrawState draw_state = {};
-        gfxDrawStateSetDepthStencilTarget(draw_state, DXGI_FORMAT_UNKNOWN);
+        // Cull gaussianpixels blocked by regular meshes
+        gfxDrawStateSetDepthStencilTarget(draw_state, DXGI_FORMAT_D32_FLOAT);
+        gfxDrawStateSetDepthFunction(draw_state, D3D12_COMPARISON_FUNC_LESS);
+        gfxDrawStateSetDepthWriteMask(draw_state, D3D12_DEPTH_WRITE_MASK_ZERO);
         // This function will reset the blend mode...D
         // gfxDrawStateEnableAlphaBlending(draw_state);
         gfxDrawStateSetBlendMode(draw_state,
@@ -378,6 +390,22 @@ bool Renderer::CreateKernels () {
         gfxDrawStateSetCullMode(draw_state, D3D12_CULL_MODE_NONE);
         kernel_.DrawActiveGaussians = gfxCreateGraphicsKernel(
                 gfx, program_, draw_state, "DrawActiveGaussians", defines_c.data(), defines_c.size()
+        );
+    }
+    {
+        GfxDrawState draw_state = {};
+        gfxDrawStateDisableGeometryShader(draw_state);
+        // TODO should be culling backfaces...
+        gfxDrawStateSetCullMode(draw_state, D3D12_CULL_MODE_NONE);
+        gfxDrawStateSetDepthStencilTarget(draw_state, DXGI_FORMAT_D32_FLOAT);
+        gfxDrawStateSetDepthFunction(draw_state, D3D12_COMPARISON_FUNC_LESS);
+        gfxDrawStateSetDepthWriteMask(draw_state, D3D12_DEPTH_WRITE_MASK_ALL);
+        gfxDrawStateSetColorTarget(draw_state, 0, tex_.G_albedo_alpha.getFormat());
+        gfxDrawStateSetColorTarget(draw_state, 1, tex_.G_emission_alpha.getFormat());
+        gfxDrawStateSetColorTarget(draw_state, 2, tex_.G_material.getFormat());
+        gfxDrawStateSetColorTarget(draw_state, 3, tex_.G_normal.getFormat());
+        kernel_.DrawAreaLights = gfxCreateGraphicsKernel(
+                gfx, program_, draw_state, "DrawAreaLights", defines_c.data(), defines_c.size()
         );
     }
     {
@@ -403,6 +431,7 @@ void Renderer::DestroyKernels () {
     gfxDestroyKernel(gfx, kernel_.ProjectActiveGaussians);
     gfxDestroyKernel(gfx, kernel_.ResolveGBuffers);
     gfxDestroyKernel(gfx, kernel_.FilterDepth);
+    gfxDestroyKernel(gfx, kernel_.CombineGBuffers);
     gfxDestroyKernel(gfx, kernel_.GenerateNearHZB);
     gfxDestroyKernel(gfx, kernel_.ReconstructNormals);
     gfxDestroyKernel(gfx, kernel_.InitializeCounters);
@@ -422,6 +451,7 @@ void Renderer::DestroyKernels () {
     gfxDestroyKernel(gfx, kernel_.SpawnCameraRays);
     gfxDestroyKernel(gfx, kernel_.DisplayCameraRays);
 
+    gfxDestroyKernel(gfx, kernel_.DrawAreaLights);
     gfxDestroyKernel(gfx, kernel_.DrawActiveGaussians);
     gfxDestroyKernel(gfx, kernel_.TonemapAndDraw);
 

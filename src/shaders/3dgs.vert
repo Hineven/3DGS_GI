@@ -1,4 +1,5 @@
 #include "3dgs.hlsl"
+#include "lightgrid.hlsl"
 struct DrawActiveGaussians_GSInput
 {
     uint PrimitiveIndex : TEXCOORD0;
@@ -14,6 +15,30 @@ DrawActiveGaussians_GSInput DrawActiveGaussians (
     Input.PrimitiveIndex = g_RWActiveGaussianCountBuffer[0] - VertexIndex - 1;
     Input.InstanceIndex  = InstanceIndex;
     return Input;
+}
+
+struct DrawAreaLights_PSInput {
+    float4 Position : SV_POSITION;
+    float3 Normal   : NORMAL;
+    float3 Color    : COLOR;
+};
+
+DrawAreaLights_PSInput DrawAreaLights (
+    uint VertexIndex : SV_VertexID,
+    uint InstanceIndex : SV_InstanceID
+) {
+    DrawAreaLights_PSInput Output = (DrawAreaLights_PSInput)0;
+    LightData LD = FetchLightDetails(2 + InstanceIndex);
+    switch(VertexIndex) {
+        case 0: Output.Position = float4(LD.V1, 1); break;
+        case 1: Output.Position = float4(LD.V2, 1); break;
+        case 2: Output.Position = float4(LD.V3, 1); break;
+    }
+    Output.Position = mul(UB.MainCamera.ProjectionView, Output.Position);
+    float3 Normal = normalize(cross(LD.V2 - LD.V1, LD.V3 - LD.V1));
+    Output.Normal = Normal;
+    Output.Color  = LD.Radiance;
+    return Output;
 }
 
 float4 TonemapAndDraw (uint VertexIndex : SV_VertexID) : SV_Position {

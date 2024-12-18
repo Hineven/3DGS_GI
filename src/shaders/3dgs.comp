@@ -62,6 +62,9 @@ void ClearCounters () {
 [numthreads(WAVE_SIZE, 1, 1)]
 void FilterActiveGaussians (uint DispatchID : SV_DispatchThreadID) {
 
+	// TODO also filter out the gaussians that failed the visibility test
+	// for RasterizationDepth and history depth buffer.
+
 	uint GaussianIndex = DispatchID;
 	
 	if(GaussianIndex >= UB.NumGaussians) return ;
@@ -117,6 +120,23 @@ void ProjectActiveGaussians (uint DispatchID : SV_DispatchThreadID) {
         J, Cov3D, C.View
     );
 
+	{
+		// 24.12.16: Expand the 2d projection of the gaussian.
+		// The data we rendered is trained by a forwarding process with such biasing.
+		// So we must expand the gaussian in the same way, otherwise there're
+		// empty holes in the output.
+		const float H_Var = 0.3f; // The magic number from the original implementation
+		// Convert to NDC space for our method
+		float VarScaleX = 2.f / C.FilmDimensions.x;
+		float VarScaleY = 2.f / C.FilmDimensions.y;
+		VarScaleX = VarScaleX * VarScaleX;
+		VarScaleY = VarScaleY * VarScaleY;
+		float H_VarX = H_Var * VarScaleX;
+		float H_VarY = H_Var * VarScaleY;
+		Cov2D.x += H_VarX;
+		Cov2D.z += H_VarY;
+	}
+
     float  Det           = Cov2D.x * Cov2D.z - Cov2D.y * Cov2D.y;
 
 #ifndef OUTPUT_PBR_G_BUFFER
@@ -147,8 +167,10 @@ void ProjectActiveGaussians (uint DispatchID : SV_DispatchThreadID) {
 	float2 ClampedPosition = saturateDown(Homogeneous.xy * 0.25 + 0.5f);
 	g_RWActiveGaussianNDCPositionBuffer[DispatchID] = PackUnorm16x2(ClampedPosition);
 	float LinearDepth = g_RWActiveGaussianLinearDepthBuffer[DispatchID];
-	Lambda1 = max(abs(Lambda1), 5e-6f / LinearDepth);
-	Lambda2 = max(abs(Lambda2), 5e-6f / LinearDepth);
+	// Clamp the radius for gaussians (to fix holes for the dataset)
+	// TODO: this is totally a data-specific trick. But I found it useful.
+	Lambda1 = max(abs(Lambda1), UB.GaussianClampingScale / LinearDepth);
+	Lambda2 = max(abs(Lambda2), UB.GaussianClampingScale / LinearDepth);
     float2 ClampedVector1 = Eigenvector1 * sqrt(abs(Lambda1));
 	g_RWActiveGaussianQuadNDCVector0Buffer[DispatchID] = PackUnorm16x2(saturateDown(ClampedVector1 * 0.5 + 0.5));
 	float2 ClampedVector2 = Eigenvector2 * sqrt(abs(Lambda2));
@@ -171,7 +193,7 @@ void ResolveGBuffers (uint2 DispatchID : SV_DispatchThreadID) {
 	GetRWDepthTexture(C)[DispatchID].x = Depth;
 	// If the normals are reconstructed from the depth, they are not rendered to the GBuffer
 #ifndef RECONSTRUCT_NORMALS_FROM_DEPTH
-	// Normal
+	// Normalize rendered normals
 	float3 Normal = GetRWNormalTexture(C)[DispatchID].xyz / max(Weight, 1e-6f);
 	Normal = Normal * 2 - 1;
 	if(any(Normal != -1)) {
@@ -215,8 +237,42 @@ void FilterDepth (uint2 DispatchID : SV_DispatchThreadID) {
 	if(SumWeight <= UB.OpaqueThreshold || bTransparent) SumDepth = 0;
 	float FilteredDepth = SumDepth / max(SumWeight, 1e-6f);
 	GetRWFilteredDepthTexture(C)[DispatchID] = FilteredDepth;
-	float ZDepth = FilteredDepth == 0 ? ZDEPTH_INF : LinearToZDepth(C, FilteredDepth);
+	// float ZDepth = FilteredDepth == 0 ? ZDEPTH_INF : LinearToZDepth(C, FilteredDepth);
+	// GetRWZDepthTexture(C)[DispatchID] = ZDepth;
+}
+
+// Combine the GBuffers rendered via gaussians and regular mesh.
+[numthreads(TILE_SIZE, TILE_SIZE, 1)]
+void CombineGBuffers (uint2 DispatchID : SV_DispatchThreadID) {
+	CameraDescription C = GetCameraDescription();
+	if(IsOutOfFilm(C, DispatchID)) return;
+	float4 EmissionA = GetRWEmissionAlphaTexture(C)[DispatchID];
+	float RegularOpacity  = EmissionA.w;
+	float GaussianOpacity = GetRWColorTexture(C)[DispatchID].w;
+	// Filtered depth
+	float GaussianFilteredDepth = GetRWFilteredDepthTexture(C)[DispatchID].r;
+	float RegularZDepth = GetRasterizationDepthTexture(C).Load(int3(DispatchID, 0)).r;
+	float RegularLinearDepth = 0;
+	if(RegularZDepth < 1) RegularLinearDepth = ZDepthToLinear(C, RegularZDepth);
+	float LerpingFactor = 0;
+#if false
+	LerpingFactor = RegularOpacity == 0 ? 0 : (1 - GaussianOpacity);
+#else
+	// The geometry produced should be discrete rather than "smooth"
+	// Otherwise SSRT and shading will be greatly affected.
+	LerpingFactor = (GaussianOpacity < UB.OpaqueThreshold) ? 0 : 1;
+#endif
+	float NewFilteredDepth = lerp(RegularLinearDepth, GaussianFilteredDepth, LerpingFactor);
+	GetRWFilteredDepthTexture(C)[DispatchID] = NewFilteredDepth;
+	// ZDepth, will be 1 + eps when the pixel is transparent
+	float ZDepth = NewFilteredDepth == 0 ? ZDEPTH_INF : LinearToZDepth(C, NewFilteredDepth);
 	GetRWZDepthTexture(C)[DispatchID] = ZDepth;
+	// Gaussians are not emissive.
+	float3 GaussianEmission = 0.f;
+	GetRWEmissionAlphaTexture(C)[DispatchID].rgb = lerp(EmissionA.rgb, GaussianEmission, LerpingFactor);
+	// Normal is naturally blended (or being reconstructed from depth later)
+	// Accumulate opacities
+	GetRWColorTexture(C)[DispatchID].w = RegularOpacity + GaussianOpacity;
 }
 
 Texture2D<float> g_InNearHZBTexture;
@@ -331,16 +387,6 @@ void InitializeCounters () {
 	g_LightGrid_GridLightListAllocator[0] = 0;
 }
 
-LightData FetchLightDetails (int LightIndex) {
-	LightData Details = (LightData) 0;
-	int Offset = LightIndex * 4;
-	Details.V1 = g_LightDataBuffer[Offset + 0];
-	Details.V2 = g_LightDataBuffer[Offset + 1];
-	Details.V3 = g_LightDataBuffer[Offset + 2];
-	Details.Radiance = g_LightDataBuffer[Offset + 3];
-	return Details;
-}
-
 // Update light headers (mainly grid local positions) for each light 
 // Because the grid bounds may be modified by the camera movement and jittering
 // also the lights may be moved.
@@ -374,7 +420,7 @@ void UpdateLightHeaders (uint DispatchID : SV_DispatchThreadID) {
 		float  GridSize;
 		float3 GridMin = LightGrid_GetGridBounds(GridIndex, GridSize);
 		float3 LocalCenter = saturateDown((WorldCenter - GridMin) / GridSize);
-		float Area = length(cross(LD.V2 - LD.V1, LD.V3 - LD.V1));
+		float Area = length(cross(LD.V2 - LD.V1, LD.V3 - LD.V1)) * 0.5f;
 		L.Intensity = Luminance(LD.Radiance) * Area;
 		L.GridIndex = GridIndex;
 		L.LocalPosition = LocalCenter;
@@ -391,34 +437,54 @@ void InjectLights (uint DispatchID : SV_DispatchThreadID) {
 	float3 GridMin; 
 	float GridSize;
 	GridMin = LightGrid_GetGridBounds(GridIndex, GridSize);
-	float GridLightU[LIGHT_GRID_MAX_NUM_GRID_LIGHTS];
+	float GridLightWeight[LIGHT_GRID_MAX_NUM_GRID_LIGHTS];
 	uint  GridLightIndices[LIGHT_GRID_MAX_NUM_GRID_LIGHTS];
 	// Bias the initial weight to avoid precision issues
 	float GridLightWeightSum = 1e-7f;
+	float SampledReservoirsWeightSum = 0.f;
 	// Scatter random numbers for RIS.
 	Random rng = MakeRandom(9918293 + DispatchID, UB.FrameIndex);
-	for(int i = 0; i < LIGHT_GRID_MAX_NUM_GRID_LIGHTS; i++) {
-		GridLightU[i] = (rng.rand() + i) * (1.f / LIGHT_GRID_MAX_NUM_GRID_LIGHTS);
+	int LastLight, AcceptedLightCount = 0;
+	for(LastLight = 0; LastLight < NumLights && AcceptedLightCount < LIGHT_GRID_MAX_NUM_GRID_LIGHTS; LastLight++) {
+		Light L = FetchLightHeader(LastLight);
+		float LightWeight = EstimateLightGridContribution(L, GridMin, GridSize);
+		if(LightWeight >= UB.LightGrid_MinLightContributionForInjection) {
+			GridLightWeight[AcceptedLightCount] = LightWeight;
+			GridLightIndices[AcceptedLightCount] = LastLight;
+			GridLightWeightSum += LightWeight;
+			AcceptedLightCount ++;
+		}
+	}
+	[unroll(LIGHT_GRID_MAX_NUM_GRID_LIGHTS)]
+	for(int i = AcceptedLightCount; i < LIGHT_GRID_MAX_NUM_GRID_LIGHTS; i++) {
+		GridLightWeight[i] = 0;
 		GridLightIndices[i] = 0xffffffffu;
 	}
-	// Brute force algorithm. Assume that there're not many lights
-	for(uint ItLightIndex = 0; ItLightIndex < NumLights; ItLightIndex ++) {
+	SampledReservoirsWeightSum = GridLightWeightSum;
+	// O(MxN) Brute force algorithm. Assume that there're not many lights
+	for(uint ItLightIndex = LastLight; ItLightIndex < NumLights; ItLightIndex ++) {
 		Light L = FetchLightHeader(ItLightIndex);
 		float LightWeight = EstimateLightGridContribution(L, GridMin, GridSize);
 		if(LightWeight >= UB.LightGrid_MinLightContributionForInjection) {
 			float NewGridLightWeightSum = GridLightWeightSum + LightWeight;
-			float LightU = LightWeight / NewGridLightWeightSum;
-			// Multi-reservoir sampling using LightWeight / TotalWeight as target cdf.
-			uint LightIndex = ItLightIndex;
-			for(int i = 0; i < LIGHT_GRID_MAX_NUM_GRID_LIGHTS; i++) {
-				if(GridLightU[i] < LightU) {
-					GridLightU[i] /= LightU;
-					Swap(GridLightU[i], LightU);
-					Swap(GridLightIndices[i], LightIndex);
-				} else {
-					GridLightU[i] *= (1.f - LightU);
+			float LightAcceptProbability = LightWeight / NewGridLightWeightSum;
+			float U = rng.rand();
+			if(LightAcceptProbability > U) {
+				U = (U - LightAcceptProbability) / (1 - LightAcceptProbability);
+				float P = U * SampledReservoirsWeightSum;
+				// Multi-reservoir sampling using LightWeight / TotalWeight as target cdf.
+				uint LightIndex = ItLightIndex;
+				for(int i = 0; i < LIGHT_GRID_MAX_NUM_GRID_LIGHTS; i++) {
+					P -= GridLightWeight[i];
+					if(P <= 0) {
+						SampledReservoirsWeightSum += LightWeight - GridLightWeight[i];
+						GridLightWeight[i] = LightWeight;
+						GridLightIndices[i] = LightIndex;
+						break;
+					}
 				}
 			}
+			GridLightWeightSum = NewGridLightWeightSum;
 		}
 	}
 	// Write back
@@ -479,10 +545,12 @@ LightSample SampleLightWithCosineWeight (float3 Position, Material M, uint Light
 		Result.Position = SampleAreaLightArea(LD.V1, LD.V2, LD.V3, u2, Result.Pdf);
 		// Convert area pdf to solid angle pdf
 		float  Distance = length(Result.Position - Position);
-		float3 Direction = normalize(Result.Position - Position);
-		float Cosine = dot(Direction, M.Normal);
+		float3 Direction   = normalize(Result.Position - Position);
+		float3 LightNormal = normalize(cross(LD.V2 - LD.V1, LD.V3 - LD.V1));
+		float Cosine = dot(LightNormal, -Direction);
+		float ReceiverCosine = dot(Direction, M.Normal);
 		Result.Pdf *= Distance * Distance / abs(Cosine);
-		Result.Radiance = LD.Radiance * saturate(Cosine);
+		Result.Radiance = LD.Radiance * saturate(Cosine) * saturate(ReceiverCosine);
 	}
 	return Result;
 }
@@ -502,6 +570,8 @@ void SampleLightRays (uint2 DispatchID : SV_DispatchThreadID) {
 
 	// Sample lights using light grid
 	uint4 GridIndex      = LightGrid_GetGridIndex(Origin);
+	float GridSize;
+	float3 GridMin = LightGrid_GetGridBounds(GridIndex, GridSize);
 	uint  WaveGridIndex1 = LightGrid_GetGridIndex1(GridIndex);
 
 	if(UB.Debug_VisualizeLightGridCascade && !IsInvalid(GridIndex.w)) {
@@ -518,7 +588,6 @@ void SampleLightRays (uint2 DispatchID : SV_DispatchThreadID) {
 	LightSample ReservedSample = (LightSample) 0;
 	uint  Seed = DispatchID.x + (DispatchID.y * C.FilmDimensions.x);
 	Random rng = MakeRandom(Seed ^ 0x51f49a7cu, UB.FrameIndex);
-	float2 u2 = rng.rand2();
 
 	// Filter out invalid pixels falling outside of the light grid
 	bool bSampled = IsInvalid(GridIndex.w);
@@ -543,12 +612,13 @@ void SampleLightRays (uint2 DispatchID : SV_DispatchThreadID) {
 				// We have to produce a full sample of the light to accurately estimate the light contribution
 				LightData   Details = FetchLightDetails(LightIndex);
 				// Note: the returned sample is already cosine weighted
+				float2 u2 = rng.rand2();
 				LightSample Sample  = SampleLightWithCosineWeight(Origin, M, L.Type, Details, u2);
 				if(Sample.IsValid()) {
-					float LightGridWeight = EstimateLightGridContribution(L, Origin, 0);
+					float LightGridWeight = EstimateLightGridContribution(L, GridMin, GridSize);
 					float LightCurrWeight = Luminance(Sample.Radiance / Sample.Pdf); 
 					// RIS
-					float ResampleWeight  = LightCurrWeight / LightGridWeight;
+					float ResampleWeight  = LightCurrWeight / max(LightGridWeight, 1e-7f);
 					if(ResampleWeight > UB.LightGrid_MinResampleWeightForDirectIllumiation) {
 						float NewSumResampleWeights = SumResampleWeights + ResampleWeight;
 						float CurrentLightU = ResampleWeight / NewSumResampleWeights;
@@ -576,11 +646,13 @@ void SampleLightRays (uint2 DispatchID : SV_DispatchThreadID) {
 	
 	if(ReservedSample.IsValid()) {
 
-		// Calculate actual pdf, taking RIS into account.
-		// We omitted the '1 / NumGridLights' term cause it cancels out in later multiplications.
-		float Pdf = ReservedSample.Pdf * (SampledLightResampleWeight / SumResampleWeights);
-		// Modify the sample contribution
-		ReservedSample.Radiance /= max(Pdf, 1e-6f);
+		// Calculate the real sample contribution. (Picking 1 single light from a bunch of lights)
+		// float LightCdf = 1.f / SumResampleWeights;//SampledLightResampleWeight / SumResampleWeights;
+		// float LightCdf = 1.f / GetNumLights();
+		// float NormalizationFactor = Luminance(ReservedSample.Radiance / ReservedSample.Pdf);
+		ReservedSample.Radiance *= SumResampleWeights / (ReservedSample.Pdf * SampledLightResampleWeight);//NormalizationFactor;// * (1.f / LightCdf) / ReservedSample.Pdf;
+
+		// ReservedSample.Radiance = normalize(ReservedSample.Radiance);
 
 		// Spawn shadow ray
 		float3 Direction = 0;
@@ -969,15 +1041,25 @@ void Debug_PrepareVisualizeDIRay () {
 void FinalComposition (uint2 DispatchID : SV_DispatchThreadID) {
 	CameraDescription C = GetCameraDescription();
 	if(IsOutOfFilm(C, DispatchID)) return;
-	// TODO
-	// I simply copy the color buffer to the final buffer
-	// for now.
 	float3 DirectIllumination = GetDirectIlluminationTexture(C).Load(int3(DispatchID, 0)).rgb;
 	float4 RadianceW = 0;
-	Material M = FetchMaterial(C, DispatchID);
-	RadianceW.rgb += DirectIllumination * M.Albedo;
+
+	// Alpha
 	// Slightly increases the alpha value to prevent skylight leaking from the background
 	RadianceW.w = saturate(g_GColorTexture.Load(int3(DispatchID, 0)).a + 0.03f);
+
+	// 0. Emission
+	float3 Emission = GetEmissionAlphaTexture(C).Load(int3(DispatchID, 0)).rgb;
+	RadianceW.rgb += Emission;
+
+	// 1. Direct illumination
+	Material M = FetchMaterial(C, DispatchID);
+	RadianceW.rgb += DirectIllumination * M.Albedo;
+
+	// 2. Indirect illumination (todo)
+	// ...
+
+	// Debugging
 	if(UB.DebugMode == 1) {
 		RadianceW.rgb = ColorToRadiance(g_GColorTexture.Load(int3(DispatchID, 0)).rgb);
     } else if(UB.DebugMode == 2) {

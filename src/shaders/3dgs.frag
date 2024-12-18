@@ -56,7 +56,7 @@ GBufferOutput DrawActiveGaussians (DrawActiveGaussians_FSInput Input) {
     
     float3 Albedo = saturate(RGBA.xyz);
     CameraDescription C = GetCameraDescription();
-    float  LinearDepth  = Input.Position.z * C.FarPlane;
+    float  LinearDepth  = ZDepthToLinear(C, Input.Position.z);
     GBufferOutput Result = (GBufferOutput)0;
     Result.AlbedoAlpha    = float4(Albedo, Alpha);
 #ifdef OUTPUT_PBR_G_BUFFER
@@ -73,6 +73,32 @@ GBufferOutput DrawActiveGaussians (DrawActiveGaussians_FSInput Input) {
     Result.Normal         = float4(NormalU, Alpha);
 #endif
 #endif
+    return Result;
+}
+
+
+struct DrawAreaLights_PSInput {
+    float4 Position : SV_POSITION;
+    float3 Normal   : NORMAL;
+    float3 Color    : COLOR;
+};
+
+struct GBufferOutput_RegularMesh {
+    float4 AlbedoAlpha    : SV_Target0;
+    float4 EmissionAlpha  : SV_Target1;
+    float4 Roughness      : SV_Target2;
+    float4 Normal         : SV_Target3;
+};
+
+GBufferOutput_RegularMesh DrawAreaLights (DrawAreaLights_PSInput Input) {
+    CameraDescription C = GetCameraDescription();
+    GBufferOutput_RegularMesh Result = (GBufferOutput_RegularMesh)0;
+    // We do not write to the alpha channel of the albedo texture.
+    // The alpha value of gaussians is kept by this texture.
+    Result.AlbedoAlpha    = 0.xxxx;
+    Result.EmissionAlpha  = float4(Input.Color, 1);
+    Result.Normal         = float4(Input.Normal, 1.f);
+    Result.Roughness      = 1.f.xxxx;
     return Result;
 }
 

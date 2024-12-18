@@ -56,6 +56,17 @@ Light UnpackLightHeader (uint2 Packed) {
 Light FetchLightHeader (int LightIndex) {
     return UnpackLightHeader(g_LightBuffer[LightIndex]);
 }
+
+LightData FetchLightDetails (int LightIndex) {
+	LightData Details = (LightData) 0;
+	int Offset = LightIndex * 4;
+	Details.V1 = g_LightDataBuffer[Offset + 0];
+	Details.V2 = g_LightDataBuffer[Offset + 1];
+	Details.V3 = g_LightDataBuffer[Offset + 2];
+	Details.Radiance = g_LightDataBuffer[Offset + 3];
+	return Details;
+}
+
 // Allocator for light grid list
 RWStructuredBuffer<uint> g_LightGrid_GridLightListAllocator;
 // Number of lights in each grid
@@ -94,8 +105,8 @@ uint2 PackLightHeader (Light L) {
     Packed.x |= (L.GridIndex.w & 0x3)  << 18;
     // Grid local position: 3 x 4 bits
     Packed.x |= uint(saturateDown(L.LocalPosition.x) * 16.f) << 20;
-    Packed.y |= uint(saturateDown(L.LocalPosition.y) * 16.f) << 24;
-    Packed.y |= uint(saturateDown(L.LocalPosition.z) * 16.f) << 28;
+    Packed.x |= uint(saturateDown(L.LocalPosition.y) * 16.f) << 24;
+    Packed.x |= uint(saturateDown(L.LocalPosition.z) * 16.f) << 28;
     // Light type: 2 bits
     Packed.y |= L.Type & 0x3;
     // Light normal: 2 x 7 bits
@@ -159,7 +170,7 @@ float3 SampleAreaLightArea (float3 V0, float3 V1, float3 V2, float2 u, out float
         u = 1.f - u;
     }
     float3 Position = InterpolateBarycentrics(V0, V1, V2, u);
-    AreaPdf = 1.f / length(cross(V1 - V0, V2 - V0));
+    AreaPdf = 2.f / length(cross(V1 - V0, V2 - V0));
     return Position;
 }
 
@@ -183,14 +194,17 @@ float EstimateLightGridContribution (Light L, float3 GridMin, float GridSize) {
         float3 LightPosition = GetLightWorldPosition(L);
         float3 GridCenter    = GridMin + GridSize * 0.5f;
         // Offset the light position according to the light normal for conservative estimation
-        LightPosition -= L.Normal * GridSize * sqrt(0.75f);
-        float3 Direction     = normalize(GridCenter - LightPosition);
+        float3 OffsetedLightPosition = LightPosition - L.Normal * GridSize * sqrt(3.f);
+        float  VolumeFactor = saturate((dot(GridCenter - LightPosition, L.Normal) + sqrt(0.75f)) / sqrt(3.f));
+        float3 Direction     = normalize(GridCenter - OffsetedLightPosition);
         float  Distance      = length(GridCenter - LightPosition);
 
         // Assume that the light is small enough compared to the grid, estimate the solid angle.
         float CosineFactor   = saturate(dot(L.Normal, Direction));
-        float SolidAngle     = CosineFactor / (Distance * Distance);
-        return L.Intensity * SolidAngle;
+        float SolidAngle     = CosineFactor / max(Distance * Distance, 1e-6f);
+
+        // TODO there're seemingly artifacts rendering small lights far away from camera 
+        return L.Intensity * SolidAngle * VolumeFactor;
     }
     // This should never happen
     return 0.f;

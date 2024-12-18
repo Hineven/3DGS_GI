@@ -103,6 +103,8 @@ void DestroyKernels ();
         GfxTexture G_material;
         // unorm8x4
         GfxTexture G_normal;
+        // fp16x4
+        GfxTexture G_emission_alpha;
         // Full precision R32 depth (filtered from R16 linear depth)
         // 0 for infinitely far
         GfxTexture G_filtered_depth;
@@ -119,6 +121,10 @@ void DestroyKernels ();
         GfxTexture filtered_direct_illumination;
         // fp16x4
         GfxTexture radiance[2];
+
+        // The depth buffer used for rasterization
+        // Cull gaussian fragments falling behind regular geometries.
+        GfxTexture rasterization_depth;
     } tex_ {};
 
     struct {
@@ -130,10 +136,13 @@ void DestroyKernels ();
         GfxKernel GenerateDrawIndirect;
 
         GfxKernel ClearCounters;
+        GfxKernel DrawAreaLights;
         GfxKernel FilterActiveGaussians;
         GfxKernel ProjectActiveGaussians;
+        GfxKernel DrawActiveGaussians;
         GfxKernel ResolveGBuffers;
         GfxKernel FilterDepth;
+        GfxKernel CombineGBuffers;
         GfxKernel GenerateNearHZB;
         GfxKernel ReconstructNormals;
         GfxKernel InitializeCounters;
@@ -155,7 +164,6 @@ void DestroyKernels ();
         GfxKernel SpawnCameraRays;
         GfxKernel DisplayCameraRays;
 
-        GfxKernel DrawActiveGaussians;
         GfxKernel TonemapAndDraw;
     } kernel_ {};
 
@@ -209,6 +217,12 @@ void DestroyKernels ();
     struct {
         glm::vec3 directional_light_dir;
         glm::vec3 directional_light_color;
+        int area_light_count {0};
+        float area_light_sizes [10];
+        glm::vec3 area_lights_facing [10];
+        glm::vec3 area_light_positions[10];
+        glm::vec3 area_light_local_vertices[30];
+        glm::vec3 area_light_colors [10];
     } CB {};
 
     UniformBlock UB {};

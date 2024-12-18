@@ -373,6 +373,8 @@ float FetchRayTraceHitT (int RayIndex) {
 // @param G The gaussian to evaluate
 // @return The ray t to evaluate the maximum response of the gaussian along the ray
 float EvaluateGaussianResponseRayT (float3 Origin, float3 Direction, Gaussian G, inout float3x3 InvCov) {
+    // Clamp the scale to avoid numerical issues
+    G.Scale = max(G.Scale, 2e-4f);
     float3x3 InvScaleM = float3x3(
         1.0f / G.Scale.x, 0, 0,
         0, 1.0f / G.Scale.y, 0,
@@ -477,6 +479,7 @@ RWTexture2D<float2> GetRWDepthTexture (CameraDescription C) {
     return g_RW_GDepthTexture;
 }
 
+// Sometimes it stores albedo and alpha. Sometimes it stores color and alpha.
 Texture2D<float4> GetColorTexture (CameraDescription C) {
     // TODO meshcards
     return g_GColorTexture;
@@ -567,6 +570,19 @@ RWTexture2D<float4> GetRWFilteredDirectIlluminationTexture (CameraDescription C)
     // TODO meshcards
     return g_RW_FilteredDirectIllumination;
 }
+
+Texture2D<float> GetRasterizationDepthTexture (CameraDescription C) {
+    return g_RasterizationDepthTexture;
+}
+
+Texture2D<float4> GetEmissionAlphaTexture (CameraDescription C) {
+    return g_GEmissionAlphaTexture;
+}
+
+RWTexture2D<float4> GetRWEmissionAlphaTexture (CameraDescription C) {
+    return g_RW_GEmissionAlphaTexture;
+}
+
 
 
 float3 RecoverWorldSpacePositionNDC2 (CameraDescription C, float2 NDC2, float LinearDepth) {
