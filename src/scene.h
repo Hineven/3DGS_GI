@@ -22,6 +22,11 @@ enum class LightType {
     eArea = LIGHT_TYPE_AREA
 };
 
+struct AABB {
+    glm::vec3 mn;
+    glm::vec3 mx;
+};
+
 
 class Camera {
 public:
@@ -94,6 +99,20 @@ public:
     inline void SetNumLights (int num_lights) {
         assert(num_lights >= 2);
         light_data_.resize(num_lights);
+    }
+
+    inline AABB GetInstanceAABB (int id) {
+        return {gsi_bounds_min[id], gsi_bounds_max[id]};
+    }
+
+    // Local to world transform
+    inline glm::mat4x3 GetInstanceTransform (int id) {
+        return gsi_transforms_[id];
+    }
+
+    // Local to world transform
+    inline glm::mat3x3 GetInstanceTransformNormal (int id) {
+        return gsi_normal_transforms_[id];
     }
 
     ~Scene();

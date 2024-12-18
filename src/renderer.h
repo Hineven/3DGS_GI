@@ -228,6 +228,19 @@ void DestroyKernels ();
     UniformBlock UB {};
     UniformBlock history_UB_ {};
 
+    struct {
+        std::vector<int> base_mesh_card_requests {};
+        // Ugly, Just brute-force it!
+        int atlas_occupancy [NUM_CARD_ATLAS][CARD_ATLAS_RESOLUTION / MIN_CARD_RESOLUTION][CARD_ATLAS_RESOLUTION / MIN_CARD_RESOLUTION];
+        std::vector<CardSet> card_sets {};
+        std::vector<Card> cards {};
+        std::vector<int> active_card_set_indices {};
+        std::vector<int> active_card_indices {};
+        std::vector<int> free_card_set_indices {};
+        std::vector<int> free_card_indices {};
+
+    } MC {};
+
     struct CVar {
         std::string name;
         std::string desc;

@@ -368,6 +368,8 @@ void Renderer::Render() {
 
         REGISTER_CVAR(UB.TonemapExposure, "Exposure", 1.0f, 0.1f, 10.0f);
 
+        UB.Card_PreferredTexelWorldSize = 0.01;
+
         gfxSbtGetGpuVirtualAddressRangeAndStride(gfx, sbt_,
             (D3D12_GPU_VIRTUAL_ADDRESS_RANGE *)&UB.RT_RayGenerationShaderRecord,
             (D3D12_GPU_VIRTUAL_ADDRESS_RANGE_AND_STRIDE *)&UB.RT_MissShaderTable,
@@ -584,6 +586,86 @@ void Renderer::Render() {
     // Bind the acceleration structure if present
     if(device_scene.acceleration_structure_) {
         gfxProgramSetParameter(gfx, program_, "g_HWRT_AccelerationStructure", device_scene.acceleration_structure_);
+    }
+
+    // Update mesh cards
+    {
+        auto roundUpPow2 = [] (int x) {
+            int result = 1;
+            while(result < x) {
+                result *= 2;
+            }
+            return result;
+        };
+        auto check = [&] (int i, int x, int y, glm::vec2 spans) {
+            for (int dx = 0; dx < spans.x; dx++) {
+                for (int dy = 0; dy < spans.y; dy++) {
+                    if (MC.atlas_occupancy[i][x + dx][y + dy]) {
+                        return false;
+                    }
+                }
+            }
+            return true;
+        };
+        auto find = [&] (int i, glm::ivec2 spans) {
+            for (int i = 0; i < NUM_CARD_ATLAS; i++) {
+                for (int x = 0; x < CARD_ATLAS_RESOLUTION - spans.x; x++) {
+                    for (int y = 0; y < CARD_ATLAS_RESOLUTION - spans.y; y++) {
+                        if (check(i, x, y, spans)) {
+                            return glm::ivec3(i, x, y);
+                        }
+                    }
+                }
+            }
+            return glm::ivec3(-1, -1, -1);
+        };
+        auto fill = [&] (int i, int x, int y, glm::vec2 spans) {
+            for (int dx = 0; dx < spans.x; dx++) {
+                for (int dy = 0; dy < spans.y; dy++) {
+                    MC.atlas_occupancy[i][x + dx][y + dy] = 1;
+                }
+            }
+        };
+        auto allocate_cards = [&] (int i, int num_cards, glm::ivec2 spans) {
+            for (int j = 0; j < num_cards; j++) {
+                auto pos = find(i, spans);
+                if (pos.x == -1) {
+                    return false;
+                }
+                fill(pos.x, pos.y, pos.z, spans);
+                int card_header = asdasdas
+            }
+            return true;
+        };
+
+        // Render mesh cards if any queued (G-Buffers without lighting)
+        while (MC.base_mesh_card_requests.size() > 0) {
+            auto & instance_id = MC.base_mesh_card_requests.back();
+            MC.base_mesh_card_requests.pop_back();
+            auto aabb = scene.GetInstanceAABB(instance_id);
+            auto transform = scene.GetInstanceTransform(instance_id);
+            glm::vec3 scaling = {transform[0][0], transform[1][1], transform[2][2]};
+            glm::vec3 world_extents = (aabb.mx - aabb.mn) * scaling;
+            glm::ivec3 preferred_num_texels = glm::ivec3(world_extents / UB.Card_PreferredTexelWorldSize);
+            // Find the actual mip size
+            int max_num_texels = max(max(preferred_num_texels.x, preferred_num_texels.y), preferred_num_texels.z);
+            static_assert((1<<MIN_CARD_RESOLUTION_L2) == MIN_CARD_RESOLUTION);
+            int base_level = MIN_CARD_RESOLUTION_L2;
+            while (1 << base_level < max_num_texels) {
+                base_level++;
+            }
+            int max_resolution = min(1 << base_level, MAX_CARD_RESOLUTION);
+            float factor = (float)max_resolution / max_num_texels;
+            glm::ivec3 texel_counts = glm::ivec3(glm::ceil(world_extents * factor));
+            for (int i = 0; i < 3; i++) {
+                texel_counts[i] = roundUpPow2(glm::clamp(texel_counts[i], MIN_CARD_RESOLUTION, MAX_CARD_RESOLUTION));
+            }
+            // TODO allocate multiple cards for each axis adaptively
+            glm::ivec3 num_cards = {1, 1, 1};
+            // Find and allocate texture atlas for the mesh cards (brute force)
+            glm::ivec3 spans = texel_counts / MIN_CARD_RESOLUTION;
+            // yz plane
+        }
     }
 
     {

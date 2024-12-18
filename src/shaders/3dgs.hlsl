@@ -398,8 +398,11 @@ float EvaluateGaussianResponse (float3 Origin, float3 Direction, Gaussian G, out
 }
 
 // Map (film space) NDC to a direction in world space
-float3 NDC2ToCameraDirectionUnnormalized (CameraDescription Camera, float2 NDC2) {
-    float3 UnnormalizedDirection = Camera.Right * NDC2.x + Camera.Up * NDC2.y + Camera.Direction;
+float3 NDC2ToCameraDirectionUnnormalized (CameraDescription C, float2 NDC2) {
+    if(GetCameraType(C) == CAMERA_TYPE_ORTHOGRAPHIC) {
+        return C.Direction;
+    }
+    float3 UnnormalizedDirection = C.Right * NDC2.x + C.Up * NDC2.y + C.Direction;
     return UnnormalizedDirection;
 }
 
@@ -407,15 +410,22 @@ float3 NDC2ToCameraDirection (CameraDescription Camera, float2 NDC2) {
     return normalize(NDC2ToCameraDirectionUnnormalized(Camera, NDC2));
 }
 
+float3 NDC2ToCameraOrigin (CameraDescription C, float2 NDC2) {
+    if(GetCameraType(C) == CAMERA_TYPE_ORTHOGRAPHIC) {
+        return C.Position + C.Right * NDC2.x + C.Up * NDC2.y;
+    }
+    return C.Position;
+}
+
 // Spawn a camera ray from the screen position
-RayToTrace SpawnCameraRay (CameraDescription Camera, float2 ScreenPosition) {
+RayToTrace SpawnCameraRay (CameraDescription C, float2 ScreenPosition) {
     RayToTrace Ray = InitRayToTrace(UB.RT_MaxTraceDistance);
-    Ray.Origin = Camera.Position;
-    float2 NDC2 = ScreenToNDC2(ScreenPosition);
-    float3 DirectionUnnormalized = NDC2ToCameraDirectionUnnormalized(Camera, NDC2);
+    float2 NDC2 = FilmToNDC2(C, ScreenPosition);
+    Ray.Origin = NDC2ToCameraOrigin(C, NDC2);
+    float3 DirectionUnnormalized = NDC2ToCameraDirectionUnnormalized(C, NDC2);
     float  Length = length(DirectionUnnormalized);
-    Ray.RayTMin = Length * Camera.NearPlane;
-    Ray.RayTMax = Length * Camera.FarPlane;
+    Ray.RayTMin = Length * C.NearPlane;
+    Ray.RayTMax = Length * C.FarPlane;
     Ray.Direction = normalize(DirectionUnnormalized);
     return Ray;
 }
@@ -583,11 +593,9 @@ RWTexture2D<float4> GetRWEmissionAlphaTexture (CameraDescription C) {
     return g_RW_GEmissionAlphaTexture;
 }
 
-
-
 float3 RecoverWorldSpacePositionNDC2 (CameraDescription C, float2 NDC2, float LinearDepth) {
     float3 Direction = NDC2ToCameraDirectionUnnormalized(C, NDC2);
-    float3 Origin = C.Position;
+    float3 Origin = C.Position + NDC2ToCameraOrigin(C, NDC2);
     float3 WorldSpacePosition = Origin + LinearDepth * Direction;
     return WorldSpacePosition;
 }
@@ -598,12 +606,18 @@ float3 RecoverWorldSpacePosition (CameraDescription C, float2 FilmPosition, floa
 }
 
 float LinearToZDepth (CameraDescription C, float LinearDepth) {
+    if(GetCameraType(C) == CAMERA_TYPE_ORTHOGRAPHIC) {
+        return (LinearDepth - C.NearPlane) / (C.FarPlane - C.NearPlane);
+    }
     float A = C.Projection[2][2];
     float B = C.Projection[2][3];
     return (-A * LinearDepth + B) / LinearDepth;
 }
 
 float ZDepthToLinear (CameraDescription C, float ZDepth) {
+    if(GetCameraType(C) == CAMERA_TYPE_ORTHOGRAPHIC) {
+        return ZDepth * (C.FarPlane - C.NearPlane) + C.NearPlane;
+    }
     float ZDepthN = 2.0 * ZDepth - 1.0;
     return 2.f * C.NearPlane * C.FarPlane / (C.FarPlane + C.NearPlane - ZDepthN * (C.FarPlane - C.NearPlane));
 }

@@ -7,6 +7,9 @@
 
 #define SMALL_TILE_SIZE 8
 
+#define CAMERA_TYPE_PERSPECTIVE 0
+#define CAMERA_TYPE_ORTHOGRAPHIC 1
+
 struct CameraDescription {
     // View space: rhs, camera direction aligned to -z
     float4x4 View;
@@ -36,13 +39,17 @@ struct CameraDescription {
     uint   Flags;
 
     float3 Up;
-    uint Padding0;
+    uint   Padding;
 
     float2 FilmTexelSize;
     // Size of each pixel on HZB buffer at mip 0
     float2 HZBBaseTexelSize;
 };
 
+int GetCameraType (CameraDescription C) {
+    // Lowest 4 bits specifies the camera type
+    return C.Flags & 0xf;
+}
 
 // Keep aligned with C++ side
 // Each empty line indicates the end of evey 16 bytes packed in the struct.
@@ -119,6 +126,13 @@ struct UniformBlock {
     int2   Debug_CursorPixelCoords;
     uint   Debug_VisualizeLightGridCascade;
     float  TonemapExposure;
+
+    // Mesh cards will be allocated according to this value (world space size). 
+    // (no reallocation if the instance transform changes)
+    float  Card_PreferredTexelWorldSize;
+    uint   Padding0;
+    uint   Padding1;
+    uint   Padding2;
 
     DeviceVirtualAddressRange RT_RayGenerationShaderRecord;
     
@@ -197,6 +211,29 @@ struct LightData {
 	float3 V2;
 	float3 V3;
 	float3 Radiance;
+};
+
+// Instance space card set
+struct CardSet {
+    float3 MinBounds;
+    float3 MaxBounds;
+    int  CardIndexBase;
+    int3 NumCards; // x, y, z, a multiple of 2
+    int3 CardResolutions; // yz, xz, xy for 3 axises
+};
+
+#define MIN_CARD_RESOLUTION_L2 4
+#define MIN_CARD_RESOLUTION 16
+#define MAX_CARD_RESOLUTION 128
+#define CARD_ATLAS_RESOLUTION 4096
+#define NUM_CARD_ATLAS 8
+// 4 bits for each axis
+#define MAX_NUM_CARDS_PER_AXIS 16
+
+
+struct Card {
+    // z = 0xff means invalid card
+    int3 AtlasBaseCoords;
 };
 
 #define LIGHT_GRID_MAX_NUM_CASCADES 4
