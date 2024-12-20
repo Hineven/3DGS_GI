@@ -211,8 +211,7 @@ bool IsPointInFrustrum (CameraDescription C, float3 Position, out float3 ViewSpa
     if(ViewSpacePosition.z >= -NearClip) return false;
     float4 Homogeneous = mul(C.Projection, float4(ViewSpacePosition, 1.0f));
     if(Ortho) {
-        // FIXME
-        return false;
+        return all(abs(Homogeneous.xy) < 1.0f + Expand) && Homogeneous.z >= 0 && Homogeneous.z <= (1.0f + Expand);
     } else {
         if(Homogeneous.w > 0) {
             float3 Projected = Homogeneous.xyz / Homogeneous.w;
@@ -300,11 +299,8 @@ float3 ProjectCovarianceMatrixToNDC(float3x3 J, SymmetricMatrix Covariance3D, fl
         View[0][0], View[0][1], View[0][2],
         View[1][0], View[1][1], View[1][2],
         View[2][0], View[2][1], View[2][2]);
-    // W = transpose(W);
 
     float3x3 Mk = mul(J, W);
-    // Mk = mul(W, J);
-    // Mk = transpose(Mk);
     
     float3x3 C = ExpandSymmetricMatrix(Covariance3D);
     float3x3 C_2D = mul(mul(Mk, C), transpose(Mk));
@@ -475,8 +471,11 @@ float3 DebugColorHeatMap (float h) {
 
 // Get the current active camera description
 CameraDescription GetCameraDescription () {
-    // TODO meshcards
+#ifndef CARD_SHADERS
     return UB.MainCamera;
+#else
+    return MCUB.Camera;
+#endif
 }
 
 Texture2D<float2> GetDepthTexture (CameraDescription C) {

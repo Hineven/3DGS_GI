@@ -6,6 +6,8 @@
 
 #include "lightgrid.hlsl"
 
+#include "card.hlsl"
+
 #include "random.hlsl"
 #include "radiometry.hlsl"
 
@@ -58,21 +60,48 @@ void ClearCounters () {
 	g_RWActiveGaussianCountBuffer[0] = 0;
 }
 
+uint PackActiveGaussianIndex (int InstanceIndex, int GaussianIndex) {
+	return (uint(InstanceIndex) << 24) | (GaussianIndex & (0x3FFFFFFu));
+}
+
+void UnpackActiveGaussianIndex (uint PackedIndex, out int InstanceIndex, out int GaussianIndex) {
+	InstanceIndex = int(PackedIndex >> 24);
+	GaussianIndex = int(PackedIndex & 0x3FFFFFFu);
+}
+
 // Filter the active gaussians that are visible in the view frustrum
 [numthreads(WAVE_SIZE, 1, 1)]
 void FilterActiveGaussians (uint DispatchID : SV_DispatchThreadID) {
 
 	// TODO also filter out the gaussians that failed the visibility test
 	// for RasterizationDepth and history depth buffer.
-
-	uint GaussianIndex = DispatchID;
-	
-	if(GaussianIndex >= UB.NumGaussians) return ;
+#ifdef CARD_SHADERS
+	uint InstanceIndex = MCUB.CardSetIndex;
+	uint InstanceBaseGaussianIndex = g_InstanceGaussianIndexOffsetBuffer[InstanceIndex];
+	uint InstanceNumGaussians = g_InstanceGaussianCountBuffer[InstanceIndex];
+	if(DispatchID >= InstanceNumGaussians) return;
+	uint GaussianIndex = InstanceBaseGaussianIndex + DispatchID;
+	float3x4 Transform = g_InstanceTransformBuffer[InstanceIndex];
+#else
+	// TODO support multi gs instance
+	uint InstanceIndex = 0;
+	uint InstanceBaseGaussianIndex = g_InstanceGaussianIndexOffsetBuffer[InstanceIndex];
+	uint InstanceNumGaussians = g_InstanceGaussianCountBuffer[InstanceIndex];
+	if(DispatchID >= InstanceNumGaussians) return ;
+	uint GaussianIndex = InstanceBaseGaussianIndex + DispatchID;
+	float3x4 Transform = g_InstanceTransformBuffer[InstanceIndex];
+#endif
 
     Gaussian G = FetchGaussian(GaussianIndex);
+	float3 TransformedPosition = TransformPoint(Transform, G.Position);
+
 
 	float3 ViewSpacePosition = 0;
-	if(IsPointInFrustrum(UB.MainCamera, G.Position, ViewSpacePosition, false, GetCameraDescription().NearPlane, 0.1f)) {
+	// We only clip gaussians by their positions in this pass.
+	if(IsPointInFrustrum(
+		UB.MainCamera, TransformedPosition, ViewSpacePosition,
+		 false, GetCameraDescription().NearPlane, 0.1f
+	)) {
 		int GaussianCount = WaveActiveCountBits(1);
 		int GaussianRank  = WavePrefixCountBits(1);
 		int GaussianBaseIndex = 0;
@@ -83,34 +112,37 @@ void FilterActiveGaussians (uint DispatchID : SV_DispatchThreadID) {
 		// Store the indices of active gaussians into a list.
 		int ActiveListIndex = GaussianBaseIndex + GaussianRank;
 
-		g_RWActiveGaussianListSrcBuffer[ActiveListIndex] = GaussianIndex;
+		g_RWActiveGaussianListBuffer[ActiveListIndex] = PackActiveGaussianIndex(InstanceIndex, GaussianIndex);
+		g_RWActiveGaussianIndirectBuffer[ActiveListIndex] = ActiveListIndex;
 		// The view space align the view direction with the negative z axis
 		float LinearDepth = - ViewSpacePosition.z;
 		g_RWActiveGaussianLinearDepthSrcBuffer[ActiveListIndex] = LinearDepth;
 	}
 }
 
-// The active indices are sorted according to their linear depth
-
 [numthreads(WAVE_SIZE, 1, 1)]
 void ProjectActiveGaussians (uint DispatchID : SV_DispatchThreadID) {
-
-// TODO multi gs instance
-
 	if(DispatchID >= g_RWActiveGaussianCountBuffer[0]) return;
-	int GaussianIndex = g_RWActiveGaussianListBuffer[DispatchID];
+	int ActiveIndex = DispatchID; // Not sorted for now, so we can use the dispatch id directly
+	int GaussianIndex, InstanceIndex;
+	UnpackActiveGaussianIndex(g_RWActiveGaussianListBuffer[ActiveIndex], InstanceIndex, GaussianIndex);
     
     CameraDescription C = GetCameraDescription();
     Gaussian G = FetchGaussian(GaussianIndex);
     SymmetricMatrix Cov3D = ComputeCovarianceMatrix(G.Scale, G.Rotation);
     // Project to 2D covariance
-    float3x3 J = float3x3(
-        1, 0, 0,
-        0, 1, 0,
+#ifndef CARD_SHADERS
+	// Employ EWA jacobian if the camera is perspective.
+    float3x3 J = EWAJacobian2(G.Position, C.FieldOfView, C.View);
+#else
+	// Orthographic projection jacobian
+	// It's the inverse of the scales of the object (in object space)
+	float2 InvScales = float2(Projection[0][0], Projection[1][1]); 
+	float3x3 J = float3x3(
+        InvScales.x, 0, 0,
+        0, InvScales.y, 0,
         0, 0, 0
     );
-#if !(RASTERIZATION_IS_ORTHO_CAMERA)
-    J = EWAJacobian2(G.Position, C.FieldOfView, C.View);
 #endif
     float4 HomogeneousW = mul(C.ProjectionView, float4(G.Position, 1.f));
     float3 Homogeneous = HomogeneousW.xyz / HomogeneousW.w;
@@ -143,7 +175,7 @@ void ProjectActiveGaussians (uint DispatchID : SV_DispatchThreadID) {
 	SHCoefficents3 SH3 = FetchGaussianSHCoefficients(GaussianIndex, 2);
 	float3 ViewDirection = normalize(C.Position - G.Position);
 	float3 Color = SH3Evaluate(ViewDirection, SH3, 2);
-	g_RWActiveGaussianColorBuffer[DispatchID] = Color;
+	g_RWActiveGaussianColorBuffer[ActiveIndex] = Color;
 #endif
 
     // Compute extent in screen space (by finding eigenvalues of
@@ -165,17 +197,30 @@ void ProjectActiveGaussians (uint DispatchID : SV_DispatchThreadID) {
 	// Output the projected quad vectors
 	// OPTIMIZE: scale the vectors according to opacity of the gaussian
 	float2 ClampedPosition = saturateDown(Homogeneous.xy * 0.25 + 0.5f);
-	g_RWActiveGaussianNDCPositionBuffer[DispatchID] = PackUnorm16x2(ClampedPosition);
-	float LinearDepth = g_RWActiveGaussianLinearDepthBuffer[DispatchID];
+	g_RWActiveGaussianNDCPositionBuffer[ActiveIndex] = PackUnorm16x2(ClampedPosition);
+	float LinearDepth = g_RWActiveGaussianLinearDepthBuffer[ActiveIndex];
 	// Clamp the radius for gaussians (to fix holes for the dataset)
 	// TODO: this is totally a data-specific trick. But I found it useful.
-	Lambda1 = max(abs(Lambda1), UB.GaussianClampingScale / LinearDepth);
-	Lambda2 = max(abs(Lambda2), UB.GaussianClampingScale / LinearDepth);
-    float2 ClampedVector1 = Eigenvector1 * sqrt(abs(Lambda1));
-	g_RWActiveGaussianQuadNDCVector0Buffer[DispatchID] = PackUnorm16x2(saturateDown(ClampedVector1 * 0.5 + 0.5));
-	float2 ClampedVector2 = Eigenvector2 * sqrt(abs(Lambda2));
-	g_RWActiveGaussianQuadNDCVector1Buffer[DispatchID] = PackUnorm16x2(saturateDown(ClampedVector2 * 0.5 + 0.5));
+#ifdef CARD_SHADERS
+ 	// Larger objects have larger clamping scale
+	float SqrLambda1 = max(sqrt(abs(Lambda1)), UB.Cards_GaussianClampingScale / InvScale.x);
+	float SqrLambda2 = max(sqrt(abs(Lambda2)), UB.Cards_GaussianClampingScale / InvScale.y);
+#else
+	// Further objects have larger clamping scale
+	float SqrLambda1 = max(sqrt(abs(Lambda1)), UB.GaussianClampingScale / LinearDepth);
+	float SqrLambda2 = max(sqrt(abs(Lambda2)), UB.GaussianClampingScale / LinearDepth);
+#endif
+    float2 ClampedVector1 = Eigenvector1 * SqrLambda1;
+	g_RWActiveGaussianQuadNDCVector0Buffer[ActiveIndex] = PackUnorm16x2(saturateDown(ClampedVector1 * 0.5 + 0.5));
+	float2 ClampedVector2 = Eigenvector2 * SqrLambda2;
+	g_RWActiveGaussianQuadNDCVector1Buffer[ActiveIndex] = PackUnorm16x2(saturateDown(ClampedVector2 * 0.5 + 0.5));
 }
+
+// TODO fine-grain culling (using history HZB)
+
+
+// The active list indirection buffer is sorted according to their linear depth
+// And sent to rasterization.
 
 [numthreads(TILE_SIZE, TILE_SIZE, 1)]
 void ResolveGBuffers (uint2 DispatchID : SV_DispatchThreadID) {
@@ -1011,32 +1056,6 @@ void TemporalFilterDirectIllumination (uint2 DispatchID : SV_DispatchThreadID) {
 
 // Filtered DI is copied back to the DI buffer
 
-#ifndef NDEBUG
-[numthreads(1, 1, 1)]
-void Debug_PrepareVisualizeDIRay () {
-	int2 PixelCoords = UB.Debug_CursorPixelCoords;
-	Material M = FetchMaterial(GetCameraDescription(), PixelCoords);
-	if(!IsMaterialValid(M)) {
-		// No rays to visualize
-		g_Debug_VisualizeRayCountBuffer[0] = 0;
-		return ;
-	}
-	int RayIndex = g_Debug_DirectIlluminationPixelRayIndexBuffer[PixelCoords.x + PixelCoords.y * UB.ScreenDimensions.x];
-	if(RayIndex == 0xffffffffu) {
-		// No rays to visualize
-		g_Debug_VisualizeRayCountBuffer[0] = 0;
-		return ;
-	}
-	g_Debug_VisualizeRayCountBuffer[0] = 1;
-	RayToTrace Ray = FetchRayToTrace(RayIndex, UB.RT_MaxTraceDistance, false);
-	float LinearDepth = GetFilteredDepthTexture(GetCameraDescription()).Load(int3(PixelCoords, 0)).r;
-	float3 Origin = RecoverWorldSpacePosition(GetCameraDescription(), PixelCoords, LinearDepth);
-	g_Debug_VisualizeRayVertexBuffer[0] = Origin;
-	g_Debug_VisualizeRayVertexBuffer[1] = Origin + Ray.Direction * Ray.RayTMin;
-	g_Debug_VisualizeRayRayIndexBuffer[0]  = RayIndex;
-}
-#endif
-
 [numthreads(TILE_SIZE, TILE_SIZE, 1)]
 void FinalComposition (uint2 DispatchID : SV_DispatchThreadID) {
 	CameraDescription C = GetCameraDescription();
@@ -1084,6 +1103,60 @@ void FinalComposition (uint2 DispatchID : SV_DispatchThreadID) {
 	);
 }
 
+// Card kernels
+[numthreads(TILE_SIZE, TILE_SIZE, 1)]
+void ClearCard (uint2 DispatchID : SV_DispatchThreadID) {
+	CameraDescription C = GetCameraDescription();
+	if(IsOutOfFilm(C, DispatchID)) return;
+	int2 TexelCoords = MCUB.CardAtlasBaseCoords.xy + int2(DispatchID);
+	int3 AtlasCoords = int3(TexelCoords, MCUB.CardAtlasBaseCoords.z);
+	g_RWCardAtlas_ColorTexture[AtlasCoords] = 0;
+	g_RWCardAtlas_AlphaTexture[AtlasCoords] = 0;
+	g_RWCardAtlas_NormalTexture[AtlasCoords] = 0;
+	g_RWCardAtlas_LinearDepthTexture[AtlasCoords] = 0;
+	g_RWCardAtlas_DirectIlluminationTexture[AtlasCoords] = 0;
+	g_RWCardAtlas_IndirectIlluminationTexture[AtlasCoords] = 0;
+	g_RWCardAtlas_LightingTexture[AtlasCoords] = 0;
+}
+
+[numthreads(TILE_SIZE, TILE_SIZE, 1)]
+void CopyCardToAtlas(uint2 DispatchID : SV_DispatchThreadID) {
+	CameraDescription C = GetCameraDescription();
+	if(IsOutOfFilm(C, DispatchID)) return;
+	int2 TexelCoords = MCUB.CardAtlasBaseCoords.xy + int2(DispatchID);
+	int3 AtlasCoords = int3(TexelCoords, MCUB.CardAtlasBaseCoords.z);
+	int2 ScreenCoords = int2(DispatchID);
+	g_RWCardAtlas_ColorTexture[AtlasCoords].rgb = GetRWColorTexture(C)[ScreenCoords].rgb;
+	g_RWCardAtlas_AlphaTexture[AtlasCoords].r = GetRWColorTexture(C)[ScreenCoords].a;
+	g_RWCardAtlas_NormalTexture[AtlasCoords].rgb = GetRWNormalTexture(C)[ScreenCoords].rgb;
+	g_RWCardAtlas_LinearDepthTexture[AtlasCoords].r = GetRWDepthTexture(C)[ScreenCoords].r;
+}
+
+#ifndef NDEBUG
+[numthreads(1, 1, 1)]
+void Debug_PrepareVisualizeDIRay () {
+	int2 PixelCoords = UB.Debug_CursorPixelCoords;
+	Material M = FetchMaterial(GetCameraDescription(), PixelCoords);
+	if(!IsMaterialValid(M)) {
+		// No rays to visualize
+		g_Debug_VisualizeRayCountBuffer[0] = 0;
+		return ;
+	}
+	int RayIndex = g_Debug_DirectIlluminationPixelRayIndexBuffer[PixelCoords.x + PixelCoords.y * UB.ScreenDimensions.x];
+	if(RayIndex == 0xffffffffu) {
+		// No rays to visualize
+		g_Debug_VisualizeRayCountBuffer[0] = 0;
+		return ;
+	}
+	g_Debug_VisualizeRayCountBuffer[0] = 1;
+	RayToTrace Ray = FetchRayToTrace(RayIndex, UB.RT_MaxTraceDistance, false);
+	float LinearDepth = GetFilteredDepthTexture(GetCameraDescription()).Load(int3(PixelCoords, 0)).r;
+	float3 Origin = RecoverWorldSpacePosition(GetCameraDescription(), PixelCoords, LinearDepth);
+	g_Debug_VisualizeRayVertexBuffer[0] = Origin;
+	g_Debug_VisualizeRayVertexBuffer[1] = Origin + Ray.Direction * Ray.RayTMin;
+	g_Debug_VisualizeRayRayIndexBuffer[0]  = RayIndex;
+}
+#endif
 
 // Spawn rays starting from the camera
 // For 3DGS HWRT testing purposes only.

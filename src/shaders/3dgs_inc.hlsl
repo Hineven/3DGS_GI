@@ -97,12 +97,12 @@ StructuredBuffer<uint> g_VertexToDrawCountBuffer;
 
 // Number of active gaussians. Updated every frame.
 RWStructuredBuffer<uint>  g_RWActiveGaussianCountBuffer;
-// List of active gaussian indices (unsorted)
-RWStructuredBuffer<uint>  g_RWActiveGaussianListSrcBuffer;
 // Depths of the active gaussians (used for sorting keys)
 RWStructuredBuffer<float> g_RWActiveGaussianLinearDepthSrcBuffer;
 // RWStructuredBuffer<float> g_RWActiveGaussianLinearDepthSortedBuffer;
-// Sorted active gaussian list (sorted by depth)
+// Sorted active gaussian indirection list (sorted by depth)
+RWStructuredBuffer<uint>  g_RWActiveGaussianIndirectBuffer;
+// List of active gaussian instances and gaussian indices (packed into 1 uint)
 RWStructuredBuffer<uint>  g_RWActiveGaussianListBuffer;
 RWStructuredBuffer<float> g_RWActiveGaussianLinearDepthBuffer;
 
@@ -195,6 +195,7 @@ Texture2D<float>         g_RasterizationDepthTexture;
 
 // All non-resource uniforms
 ConstantBuffer<UniformBlock> UB;
+ConstantBuffer<DrawMeshCardUniformBlock> MCUB;
 
 SamplerState g_LinearClampSampler;
 SamplerState g_LinearWrapSampler;

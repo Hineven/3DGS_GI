@@ -31,11 +31,13 @@ protected:
     bool CreateResources ();
     bool CreateKernels ();
     void DestroyResources ();
-void DestroyKernels ();
+    void DestroyKernels ();
 
     void GenerateDispatchIndirect (const GfxBuffer & thread_count_buffer);
     void GenerateDispatchRaysIndirect (const GfxBuffer & thread_count_buffer);
     void GenerateDrawIndirect (const GfxBuffer & vertex_count_buffer);
+
+    void UploadBufferStaged (GfxBuffer buf, const void * data, size_t size);
 
     BlueNoiseSampler blue_noise_sampler_;
 
@@ -79,8 +81,12 @@ void DestroyKernels ();
         GfxBuffer direct_illumination_ray_occlusion_threshold;
         GfxBuffer direct_illumination_ray_contribution;
 
+        // Mesh cards
+        GfxBuffer card_sets;
+        GfxBuffer cards;
+
         // Uniform block
-        GfxBuffer UB;
+        GfxBuffer UB_pool;
 
 #ifndef NDEBUG
         GfxBuffer Debug_direct_illumination_pixel_ray_index;
@@ -122,6 +128,31 @@ void DestroyKernels ();
         // fp16x4
         GfxTexture radiance[2];
 
+        // RGBA8
+        GfxTexture card_workspace_color_alpha;
+        // RGBA8
+        GfxTexture card_workspace_normal;
+        // RG32F
+        GfxTexture card_workspace_linear_depth;
+
+
+        GfxTexture card_atlas_color[NUM_CARD_ATLAS];
+        GfxTexture card_atlas_alpha[NUM_CARD_ATLAS];
+        GfxTexture card_atlas_normal[NUM_CARD_ATLAS];
+        GfxTexture card_atlas_linear_depth[NUM_CARD_ATLAS];
+        // RGBA16F
+        GfxTexture card_atlas_direct_illumination[NUM_CARD_ATLAS];
+        // RGBA16F
+        GfxTexture card_atlas_indirect_illumination[NUM_CARD_ATLAS];
+        GfxTexture card_atlas_lighting[NUM_CARD_ATLAS];
+        // Used for filtering...etc.
+        // I don't want to code more... so the update is only limited to 1 page of the
+        // atlas at a time. (anyway 32x32 large tiles in 1 page should be enough for small scenes)
+        GfxTexture card_workspace_direct_illumination;
+        GfxTexture card_workspace_indirect_illumination;
+        GfxTexture card_workspace_lighting;
+
+
         // The depth buffer used for rasterization
         // Cull gaussian fragments falling behind regular geometries.
         GfxTexture rasterization_depth;
@@ -155,6 +186,13 @@ void DestroyKernels ();
         GfxKernel SpatialFilterDirectIllumination[2];
         GfxKernel TemporalFilterDirectIllumination;
         GfxKernel FinalComposition;
+
+        GfxKernel ClearCard;
+        GfxKernel FilterActiveGaussiansForCard;
+        GfxKernel ProjectActiveGaussiansForCard;
+        GfxKernel DrawActiveGaussiansForCard;
+        GfxKernel ResolveGBuffersForCard;
+        GfxKernel CopyCardToAtlas;
 
         // Trace shading rays
         GfxKernel Trace3DGSRays;
@@ -200,6 +238,14 @@ void DestroyKernels ();
         uint debug_mode {0};
     } options_;
 
+    GfxBuffer AllocateUBForCurrentFrame (size_t size) ;
+    template<typename T>
+    inline GfxBuffer AllocateUBForCurrentFrame (int count = 1) {
+        GfxBuffer buf = AllocateUBForCurrentFrame(roundUp(sizeof(T), 256u) * count);
+        buf.setStride(sizeof(T));
+        return buf;
+    }
+
     struct {
         int wave_lane_count {};
     } cfg_;
@@ -229,17 +275,14 @@ void DestroyKernels ();
     UniformBlock history_UB_ {};
 
     struct {
-        std::vector<int> base_mesh_card_requests {};
+        std::vector<int> card_set_remove_requests {}; // instance id
+        std::vector<int> card_set_add_requests {}; // instance id
+        std::vector<int> card_set_redraw_requests {}; // instance id
         // Ugly, Just brute-force it!
         int atlas_occupancy [NUM_CARD_ATLAS][CARD_ATLAS_RESOLUTION / MIN_CARD_RESOLUTION][CARD_ATLAS_RESOLUTION / MIN_CARD_RESOLUTION];
         std::vector<CardSet> card_sets {};
         std::vector<Card> cards {};
-        std::vector<int> active_card_set_indices {};
-        std::vector<int> active_card_indices {};
-        std::vector<int> free_card_set_indices {};
-        std::vector<int> free_card_indices {};
-
-    } MC {};
+    } MC {}; // Meshcards related host data
 
     struct CVar {
         std::string name;

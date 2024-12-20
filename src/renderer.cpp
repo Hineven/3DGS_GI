@@ -377,9 +377,7 @@ void Renderer::Render() {
             (D3D12_GPU_VIRTUAL_ADDRESS_RANGE_AND_STRIDE *)&UB.RT_CallableShaderTable);
 
     }
-    uint32_t UB_stride = roundUp((uint32_t)sizeof(UniformBlock), 256u);
-    GfxBuffer UB_range = gfxCreateBufferRange(gfx, buf_.UB, UB_stride * gfxGetBackBufferIndex(gfx), sizeof(UniformBlock));
-    UB_range.setStride(UB_stride);
+    GfxBuffer UB_range = AllocateUBForCurrentFrame<UniformBlock>();
     gfxBufferGetData<UniformBlock>(gfx, UB_range)[0] = UB;
 
     history_UB_ = UB;
@@ -607,10 +605,10 @@ void Renderer::Render() {
             }
             return true;
         };
-        auto find = [&] (int i, glm::ivec2 spans) {
-            for (int i = 0; i < NUM_CARD_ATLAS; i++) {
-                for (int x = 0; x < CARD_ATLAS_RESOLUTION - spans.x; x++) {
-                    for (int y = 0; y < CARD_ATLAS_RESOLUTION - spans.y; y++) {
+        auto find = [&] (glm::ivec2 spans, int start_i = 0, int start_x = 0, int start_y = 0) {
+            for (int i = start_i; i < NUM_CARD_ATLAS; i++) {
+                for (int x = start_x; x < CARD_ATLAS_RESOLUTION - spans.x; x++) {
+                    for (int y = start_y; y < CARD_ATLAS_RESOLUTION - spans.y; y++) {
                         if (check(i, x, y, spans)) {
                             return glm::ivec3(i, x, y);
                         }
@@ -619,42 +617,89 @@ void Renderer::Render() {
             }
             return glm::ivec3(-1, -1, -1);
         };
-        auto fill = [&] (int i, int x, int y, glm::vec2 spans) {
+        auto fill = [&] (int i, int x, int y, glm::vec2 spans, int fill_value = 1) {
             for (int dx = 0; dx < spans.x; dx++) {
                 for (int dy = 0; dy < spans.y; dy++) {
-                    MC.atlas_occupancy[i][x + dx][y + dy] = 1;
+                    MC.atlas_occupancy[i][x + dx][y + dy] = fill_value;
                 }
             }
         };
-        auto allocate_cards = [&] (int i, int num_cards, glm::ivec2 spans) {
-            for (int j = 0; j < num_cards; j++) {
-                auto pos = find(i, spans);
-                if (pos.x == -1) {
-                    return false;
+        auto find_consecutive_card_headers = [&] (int num_cards) {
+            int found_card_start_index = -1;
+            for (int i = 0; i < (int)MC.cards.size(); i++) {
+                int j = i;
+                bool flag = true;
+                for (; j < std::min((int)MC.cards.size(), i + num_cards); j++) {
+                    if (MC.cards[j].AtlasBaseCoords.x != -1) {
+                        flag = false; break;
+                    }
                 }
-                fill(pos.x, pos.y, pos.z, spans);
-                int card_header = asdasdas
+                if (flag) {
+                    found_card_start_index = i;
+                    break;
+                }
+            }
+            return found_card_start_index;
+        };
+        auto allocate_cards = [&] (int card_header_start_index, int num_cards, glm::ivec2 spans) {
+            int atlas_index = 0, i = 0;
+            while (i < num_cards && atlas_index < NUM_CARD_ATLAS) {
+                auto pos = find(spans, atlas_index);
+                if (pos.x == -1) {
+                    return -1;
+                } else {
+                    fill(pos.x, pos.y, pos.z, spans);
+                    MC.cards[card_header_start_index + i].AtlasBaseCoords = glm::ivec3(pos.y, pos.z, pos.x);
+                    i ++;
+                    atlas_index = pos.x;
+                }
             }
             return true;
         };
 
-        // Render mesh cards if any queued (G-Buffers without lighting)
-        while (MC.base_mesh_card_requests.size() > 0) {
-            auto & instance_id = MC.base_mesh_card_requests.back();
-            MC.base_mesh_card_requests.pop_back();
+        // Remove card sets
+        std::sort(MC.card_set_remove_requests.begin(), MC.card_set_remove_requests.end());
+        MC.card_set_remove_requests.erase(std::unique(MC.card_set_remove_requests.begin(), MC.card_set_remove_requests.end()), MC.card_set_remove_requests.end());
+        while (MC.card_set_remove_requests.size() > 0) {
+            auto & instance_id = MC.card_set_remove_requests.back();
+            MC.card_set_remove_requests.pop_back();
+            if (MC.card_sets.size() <= instance_id) {
+                app_warning("Unidentified card set to remove.");
+                continue;
+            }
+            auto & card_set = MC.card_sets[instance_id];
+            int card_index_base = card_set.CardIndexBase;
+            auto resolutions = card_set.CardResolutions;
+            // remove cards
+            for (int i = 0; i < card_set.NumCards[0]; i ++) {
+                auto & card = MC.cards[card_index_base + i];
+                if (card.AtlasBaseCoords.x != -1) {
+                    fill(card.AtlasBaseCoords.z, card.AtlasBaseCoords.x, card.AtlasBaseCoords.y, {resolutions.y, resolutions.z}, 0);
+                }
+                card = {{-1, -1, -1}};
+            }
+            // remove header
+            card_set = {};
+        }
+        // Allocate card sets
+        std::sort(MC.card_set_add_requests.begin(), MC.card_set_add_requests.end());
+        MC.card_set_add_requests.erase(std::unique(MC.card_set_add_requests.begin(), MC.card_set_add_requests.end()), MC.card_set_add_requests.end());
+        while (MC.card_set_add_requests.size() > 0) {
+            auto & instance_id = MC.card_set_add_requests.back();
+            MC.card_set_add_requests.pop_back();
             auto aabb = scene.GetInstanceAABB(instance_id);
             auto transform = scene.GetInstanceTransform(instance_id);
             glm::vec3 scaling = {transform[0][0], transform[1][1], transform[2][2]};
             glm::vec3 world_extents = (aabb.mx - aabb.mn) * scaling;
             glm::ivec3 preferred_num_texels = glm::ivec3(world_extents / UB.Card_PreferredTexelWorldSize);
             // Find the actual mip size
-            int max_num_texels = max(max(preferred_num_texels.x, preferred_num_texels.y), preferred_num_texels.z);
+            int max_num_texels = glm::max(glm::max(preferred_num_texels.x, preferred_num_texels.y), preferred_num_texels.z);
             static_assert((1<<MIN_CARD_RESOLUTION_L2) == MIN_CARD_RESOLUTION);
             int base_level = MIN_CARD_RESOLUTION_L2;
             while (1 << base_level < max_num_texels) {
                 base_level++;
             }
-            int max_resolution = min(1 << base_level, MAX_CARD_RESOLUTION);
+            int max_resolution = glm::min(1 << base_level, MAX_CARD_RESOLUTION);
             float factor = (float)max_resolution / max_num_texels;
             glm::ivec3 texel_counts = glm::ivec3(glm::ceil(world_extents * factor));
             for (int i = 0; i < 3; i++) {
@@ -664,7 +709,186 @@ void Renderer::Render() {
             glm::ivec3 num_cards = {1, 1, 1};
             // Find and allocate texture atlas for the mesh cards (brute force)
             glm::ivec3 spans = texel_counts / MIN_CARD_RESOLUTION;
+            int num_cards_to_allocate = 2 * (num_cards.x + num_cards.y + num_cards.z);
+            int card_header_offset = find_consecutive_card_headers(num_cards_to_allocate);
+            if (card_header_offset == -1) {
+                for (int i = 0; i < num_cards_to_allocate; i++) {
+                    MC.cards.push_back({{-1, -1, -1}});
+                }
+                card_header_offset = MC.cards.size() - num_cards_to_allocate;
+            }
+            // Write card set information and Card headers
+            CardSet card_set = {};
+            card_set.CardIndexBase = card_header_offset;
             // yz plane
+            assert(allocate_cards(card_header_offset, num_cards.x * 2, glm::ivec2(spans.y, spans.z)));
+            card_header_offset += num_cards.x * 2;
+            // xz plane
+            assert(allocate_cards(card_header_offset , num_cards.y * 2, glm::ivec2(spans.x, spans.z)));
+            card_header_offset += num_cards.y * 2;
+            // xy plane
+            assert(allocate_cards(card_header_offset, num_cards.z, glm::ivec2(spans.x, spans.y)));
+
+            card_set.CardResolutions = texel_counts;
+            card_set.NumCards = num_cards * 2;
+            card_set.MinBounds = aabb.mn;
+            card_set.MaxBounds = aabb.mx;
+
+            if (MC.card_sets.size() <= instance_id) {
+                MC.card_sets.resize(instance_id + 1);
+            }
+            MC.card_sets[instance_id] = card_set;
+            // Append to redraw list
+            MC.card_set_redraw_requests.push_back(instance_id);
+        }
+        // Upload card headers and cardset headers to GPU
+        {
+            std::vector<float4> card_sets_packed;
+            card_sets_packed.resize(MC.card_sets.size() * 2);
+            for (int i = 0; i < (int)MC.card_sets.size(); i++) {
+                const auto & card_set = MC.card_sets[i];
+                card_sets_packed[i * 2 + 0] = {card_set.MinBounds, card_set.MaxBounds.x};
+                uint Z = card_set.CardIndexBase & 0xffffu;
+                Z |= (card_set.NumCards.x & 0xfu) << 16;
+                Z |= (card_set.NumCards.y & 0xfu) << 20;
+                Z |= (card_set.NumCards.z & 0xfu) << 24;
+                uint W = glm::log2(card_set.CardResolutions.x / MIN_CARD_RESOLUTION) & 0xfu;
+                W |= (glm::log2(card_set.CardResolutions.y / MIN_CARD_RESOLUTION) & 0xfu) << 4;
+                W |= (glm::log2(card_set.CardResolutions.z / MIN_CARD_RESOLUTION) & 0xfu) << 8;
+                card_sets_packed[i * 2 + 1] = {card_set.MaxBounds.y, card_set.MaxBounds.z,
+                    std::bit_cast<float>(Z), std::bit_cast<float>(W)};
+            }
+            UploadBufferStaged(buf_.card_sets, card_sets_packed.data(), card_sets_packed.size() * sizeof(float4));
+            std::vector<uint> cards_packed;
+            cards_packed.resize(MC.cards.size());
+            for (int i = 0; i < (int)MC.cards.size(); i++) {
+                auto & card = MC.cards[i];
+                uint X = card.AtlasBaseCoords.x & 0xffu;
+                X |= (card.AtlasBaseCoords.y & 0xffu) << 8;
+                X |= (card.AtlasBaseCoords.z & 0xffu) << 16;
+                cards_packed[i] = X;
+            }
+            UploadBufferStaged(buf_.cards, cards_packed.data(), cards_packed.size() * sizeof(uint));
+        }
+        // Redraw card sets
+        std::sort(MC.card_set_redraw_requests.begin(), MC.card_set_redraw_requests.end());
+        MC.card_set_redraw_requests.erase(std::unique(MC.card_set_redraw_requests.begin(), MC.card_set_redraw_requests.end()), MC.card_set_redraw_requests.end());
+        while (MC.card_set_redraw_requests.size() > 0) {
+            auto & instance_id = MC.card_set_redraw_requests.back();
+            MC.card_set_redraw_requests.pop_back();
+            if (MC.card_sets.size() <= instance_id) {
+                app_warning("Unidentified card set to redraw.");
+                continue;
+            }
+            // no batching, draw 1 card at a time (as the cards are not really updated frequently)
+            auto render_card = [&] (int card_index, int card_set_index, glm::ivec3 card_atlas_coords, glm::ivec2 resolution, Camera card_camera) {
+                DrawMeshCardUniformBlock MCUB {};
+                MCUB.Camera = card_camera.PackDescription(resolution.x, resolution.y, {});
+
+                MCUB.CardAtlasBaseCoords = card_atlas_coords;
+                MCUB.InstanceIndex = instance_id;
+
+                MCUB.CardIndex = card_index;
+                MCUB.CardSetIndex = card_set_index;
+                GfxBuffer MCUB_range = AllocateUBForCurrentFrame<DrawMeshCardUniformBlock>();
+                gfxBufferGetData<DrawMeshCardUniformBlock>(gfx, MCUB_range)[0] = MCUB;
+                gfxProgramSetParameter(gfx, program_, "MCUB", MCUB_range);
+                // Clear card atlas data
+                glm::ivec2 card_groups = {divideAndRoundUp(resolution.x, UB.TileDimensions.x), divideAndRoundUp(resolution.y, UB.TileDimensions.y)};
+                {
+                    auto section = TimedSection(*this, "ClearCard");
+                    gfxCommandBindKernel(gfx, kernel_.ClearCard);
+                    auto threads = gfxKernelGetNumThreads(gfx, kernel_.ClearCard);
+                    gfxCommandDispatch(gfx, card_groups.x, card_groups.y, 1);
+                }
+                // Rasterization
+                {
+                    auto section = TimedSection(*this, "ClearCounters");
+                    gfxCommandBindKernel(gfx, kernel_.ClearCounters);
+                    gfxCommandDispatch(gfx, 1, 1, 1);
+                }
+                {
+                    auto section = TimedSection(*this, "FilterActiveGaussiansForCard");
+                    gfxCommandBindKernel(gfx, kernel_.FilterActiveGaussiansForCard);
+                    auto threads = gfxKernelGetNumThreads(gfx, kernel_.FilterActiveGaussiansForCard);
+                    gfxCommandDispatch(gfx, divideAndRoundUp(, (int)threads[0]));
+                }
+                {
+                    auto section = TimedSection(*this, "ProjectActiveGaussiansForCard");
+                    GenerateDispatchIndirect(buf_.active_gaussian_count);
+                    gfxCommandBindKernel(gfx, kernel_.ProjectActiveGaussiansForCard);
+                    gfxCommandDispatchIndirect(gfx, buf_.dispatch_indirect_command);
+                }
+                {
+                    auto section = TimedSection(*this, "SortActiveGaussians");
+                    gfxCommandSortRadix(gfx, buf_.active_gaussian_linear_depth, buf_.active_gaussian_linear_depth_src,
+                                        &buf_.active_gaussian_list, &buf_.active_gaussian_list_src, &buf_.active_gaussian_count);
+                }
+                {
+                    // Rasterize the G-Buffers
+                    auto section = TimedSection(*this, "DrawActiveGaussiansForCard");
+                    // Cleared to (0, 0, 0, 0)
+                    gfxCommandClearTexture(gfx, tex_.G_depth);
+                    GenerateDrawIndirect(buf_.active_gaussian_count);
+                    gfxCommandBindKernel(gfx, kernel_.DrawActiveGaussiansForCard);
+                    gfxCommandBindColorTarget(gfx, 0, tex_.card_workspace_color_alpha);
+                    gfxCommandBindColorTarget(gfx, 1, tex_.card_workspace_linear_depth);
+                    gfxCommandBindColorTarget(gfx, 2, tex_.card_workspace_normal);
+
+        #ifndef NO_INDIRECT_DISPATCH
+                    gfxCommandMultiDrawIndirect(gfx, buf_.draw_indirect_command, 1);
+        #endif
+                }
+
+                {
+                    // Resolve GBuffers rendered with gaussians. Doing some normalizations for weighted sums.
+                    auto section = TimedSection(*this, "ResolveGBuffersForCard");
+                    gfxCommandBindKernel(gfx, kernel_.ResolveGBuffersForCard);
+                    auto num_threads = gfxKernelGetNumThreads(gfx, kernel_.ResolveGBuffersForCard);
+                    assert(UB.ScreenDimensions.x % num_threads[0] == 0 && UB.ScreenDimensions.y % num_threads[1] == 0);
+                    uint num_groups_x = divideAndRoundUp((uint)UB.ScreenDimensions.x, num_threads[0]);
+                    uint num_groups_y = divideAndRoundUp((uint)UB.ScreenDimensions.y, num_threads[1]);
+                    gfxCommandDispatch(gfx, num_groups_x, num_groups_y, 1);
+                }
+                {
+                    // Now, combine the G-Buffers rendered with gaussians and the ordinary G-Buffers
+                    auto section = TimedSection(*this, "CopyCardToAtlas");
+                    gfxCommandBindKernel(gfx, kernel_.CopyCardToAtlas);
+                    gfxCommandDispatch(gfx, card_groups.x, card_groups.y, 1);
+                }
+            };
+            auto render_cards = [&] (int card_set_index) {
+                CardSet & card_set = MC.card_sets[card_set_index];
+                auto num_cards = card_set.NumCards;
+                auto aabb = scene.GetInstanceAABB(instance_id);
+                float offset = 0.01f;
+                for (int axis = 0; axis < 3; axis ++) {
+                    int s_axis = (axis + 1) % 3;
+                    int t_axis = (axis + 2) % 3;
+                    int card_rank = 0;
+                    glm::ivec2 card_resolution = {card_set.CardResolutions[s_axis], card_set.CardResolutions[t_axis]};
+                    for (int direction_sgn = 0; direction_sgn < 2; direction_sgn ++) {
+                        for (int i = 0; i < num_cards[axis]; i++) {
+                            Camera card_camera {};
+                            card_camera.direction = {};
+                            card_camera.direction[axis] = direction_sgn ? -1 : 1;
+                            card_camera.up = {};
+                            card_camera.up[t_axis] = 1;
+                            card_camera.near = glm::mix(aabb.mn[axis], aabb.mx[axis], i / num_cards[axis]);
+                            card_camera.far = glm::mix(aabb.mn[axis], aabb.mx[axis], glm::saturate((i + 1) / num_cards[axis] + offset));
+                            card_camera.min_clip = {aabb.mn[s_axis], aabb.mn[t_axis]};
+                            card_camera.max_clip = {aabb.mx[s_axis], aabb.mx[t_axis]};
+                            card_camera.position = {};
+                            card_camera.position[axis] = direction_sgn ? aabb.mx[axis] : aabb.mn[axis];
+                            int card_index = card_set.CardIndexBase + card_set.CardIndexBase + card_rank;
+                            Card & card = MC.cards[card_index];
+                            render_card(card_index, card_set_index, card.AtlasBaseCoords, card_resolution, card_camera);
+                            card_rank ++;
+                        }
+                    }
+                }
+            };
+            render_cards(instance_id);
         }
     }
 
@@ -745,15 +969,6 @@ void Renderer::Render() {
             uint num_groups = divideAndRoundUp((uint)scene.GetNumGaussians(), num_threads[0]);
             gfxCommandDispatch(gfx, num_groups, 1, 1);
         }
-
-        {
-            // Sort active gaussians according to their depth values.
-            // So we can later draw them in order.
-            auto section = TimedSection(*this, "SortActiveGaussians");
-            gfxCommandSortRadix(gfx, buf_.active_gaussian_linear_depth, buf_.active_gaussian_linear_depth_src,
-                                &buf_.active_gaussian_list, &buf_.active_gaussian_list_src, &buf_.active_gaussian_count);
-        }
-
         {
             // Project active gaussians, compute the 2-dimensional gaussian distribution
             // Save the eigen vectors for later rasterization.
@@ -763,6 +978,13 @@ void Renderer::Render() {
 #ifndef NO_INDIRECT_DISPATCH
             gfxCommandDispatchIndirect(gfx, buf_.dispatch_indirect_command);
 #endif
+        }
+        {
+            // Sort active gaussians according to their depth values.
+            // So we can later draw them in order.
+            auto section = TimedSection(*this, "SortActiveGaussians");
+            gfxCommandSortRadix(gfx, buf_.active_gaussian_linear_depth, buf_.active_gaussian_linear_depth_src,
+                                &buf_.active_gaussian_list, &buf_.active_gaussian_list_src, &buf_.active_gaussian_count);
         }
 
         {

@@ -6,8 +6,7 @@
 #include "math.hlsl"
 
 // Uploaded from host
-RWStructuredBuffer<uint> g_CardSetCount;
-RWStructuredBuffer<float4> g_CardSets;
+StructuredBuffer<float4> g_CardSets;
 
 CardSet FetchCardSet (int CardSetIndex) {
     float4 V1 = g_CardSets[CardSetIndex * 2];
@@ -34,8 +33,7 @@ CardSet FetchCardSet (int CardSetIndex) {
 }
 
 // Uploade from host
-RWStructuredBuffer<uint> g_CardCount; 
-RWStructuredBuffer<uint> g_Cards;
+StructuredBuffer<uint> g_Cards;
 
 Card FetchCard (int CardIndex) {
     uint V = g_Cards[CardIndex];
@@ -48,18 +46,30 @@ Card FetchCard (int CardIndex) {
     return Result;
 }
 
-Texture2D<float3> g_CardAtlas_ColorTexture;
-Texture2D<float>  g_CardAtlas_AlphaTexture;
-Texture2D<float3> g_CardAtlas_NormalTexture;
+RWTexture2DArray<float3> g_RWCardAtlas_ColorTexture;
+Texture2DArray<float3> g_CardAtlas_ColorTexture;
+RWTexture2DArray<float> g_RWCardAtlas_AlphaTexture;
+Texture2DArray<float>  g_CardAtlas_AlphaTexture;
+RWTexture2DArray<float3> g_RWCardAtlas_NormalTexture;
+Texture2DArray<float3> g_CardAtlas_NormalTexture;
 // All cards are shaded as lamberitan surfaces
 // Texture2D<float>  g_CardAtlas_MaterialTexture;
 // Card space linear depth.
-Texture2D<float>  g_CardAtlas_LinearDepthTexture;
+RWTexture2DArray<float> g_RWCardAtlas_LinearDepthTexture;
+Texture2DArray<float>  g_CardAtlas_LinearDepthTexture;
 // Lighting
-Texture2D<float3> g_CardAtlas_DirectIlluminationTexture;
-Texture2D<float3> g_CardAtlas_IndirectIlluminationTexture;
+RWTexture2DArray<float3> g_RWCardAtlas_DirectIlluminationTexture;
+Texture2DArray<float3> g_CardAtlas_DirectIlluminationTexture;
+RWTexture2DArray<float3> g_RWCardAtlas_IndirectIlluminationTexture;
+Texture2DArray<float3> g_CardAtlas_IndirectIlluminationTexture;
 // Sum of direct and indirect illumination
-Texture2D<float3> g_CardAtlas_LightingTexture;
+RWTexture2DArray<float3> g_RWCardAtlas_LightingTexture;
+Texture2DArray<float3> g_CardAtlas_LightingTexture;
+
+
+RWTexture2D<float4> g_RWCardWorkspace_ColorAlbedoTexture;
+RWTexture2D<float4> g_RWCardWorkspace_NormalTexture;
+RWTexture2D<float2> g_RWCardWorkspace_LinearDepthTexture;
 
 struct CardSample {
     uint CardIndex;
@@ -140,7 +150,7 @@ void AccumulateCardSample (CardSample Sample, float HitDepth, float WorldToInsta
     }
     float4 Depths = g_CardAtlas_LinearDepthTexture.GatherRed(g_PointClampSampler, Sample.AtlasGatherUV).wzxy * WorldToInstanceScale;
     // UE5 method of biasing
-    float BiasThreshold = CacheBias / 
+    float BiasThreshold = CacheBias / ;
     float4 VisibilityWeights = 1.0f - saturate((abs(HitDepth - Depths) - BiasThreshold) / BiasFalloff);
     float4 Weights = Sample.BillinearWeights * VisibilityWeights;
     float3 Direct = SampleCardAtlas(g_CardAtlas_DirectIlluminationTexture, Sample.AtlasGatherUV, Weights);
@@ -177,5 +187,6 @@ CardSetSample SampleCardSet (
         AccumulateSample(Sample, Accumulator);
     }
 }
+
 
 #endif

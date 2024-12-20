@@ -26,12 +26,17 @@ float Evaluate2DGaussian (float2 P) {
 
 struct GBufferOutput {
     float4 AlbedoAlpha    : SV_Target0;
+#ifndef CARD_SHADERS
 #ifdef OUTPUT_PBR_G_BUFFER
     float4 Roughness      : SV_Target1;
     float4 Depth          : SV_Target2;
 #ifndef RECONSTRUCT_NORMALS_FROM_DEPTH
     float4 Normal         : SV_Target3;
 #endif
+#endif
+#else // CARD_SHADERS
+    float4 Depth          : SV_Target1;
+    float4 Normal         : SV_Target2;
 #endif
 };
 
@@ -60,16 +65,17 @@ GBufferOutput DrawActiveGaussians (DrawActiveGaussians_FSInput Input) {
     GBufferOutput Result = (GBufferOutput)0;
     Result.AlbedoAlpha    = float4(Albedo, Alpha);
 #ifdef OUTPUT_PBR_G_BUFFER
+#ifndef CARD_SHADERS // Cards have no material properties.
     Result.Roughness      = float4(Roughness,   0, 0, Alpha);
+#endif
     // Clip the alpha values for calculating the depth helps smooth the transition between
     // gaussians (cause the gaussians are not fully drawn when rasterizing).
     float DepthAlphaClipValue = UB.DepthAlphaClipValue;
     float DepthMultiplier = min(DepthAlphaClipValue + Alpha, 1.f);
     Result.Depth          = float4(
         LinearDepth, 1, 0, DepthMultiplier);
-    // Result.Roughness = Roughness;
-    // Result.Depth = float2(LinearDepth, 1);
-#ifndef RECONSTRUCT_NORMALS_FROM_DEPTH
+    // Cards have normals directly rendered.
+#if !defined(RECONSTRUCT_NORMALS_FROM_DEPTH) || defined(CARD_SHADERS)
     Result.Normal         = float4(NormalU, Alpha);
 #endif
 #endif

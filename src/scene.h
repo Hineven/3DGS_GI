@@ -27,6 +27,11 @@ struct AABB {
     glm::vec3 mx;
 };
 
+enum class CameraType {
+    ePerspective = CAMERA_TYPE_PERSPECTIVE,
+    eOrthographic = CAMERA_TYPE_ORTHOGRAPHIC
+};
+
 
 class Camera {
 public:
@@ -44,8 +49,12 @@ public:
     glm::vec3 position {0, 0, 0};
     glm::vec3 direction {0, 0, -1};
     glm::vec3 up {0, 1, 0};
+    glm::vec2 min_clip {-1, -1};
+    glm::vec2 max_clip {1, 1};
     // radians
     float fov_y {1.f};
+
+    CameraType type {CameraType::ePerspective};
 
     // fk windows
 #undef near

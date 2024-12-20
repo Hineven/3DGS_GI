@@ -38,6 +38,8 @@ bool Scene::LoadGaussians (std::filesystem::path path, bool always_load_sh) {
 
     happly::PLYData plyIn(path.string());
     auto & element = plyIn.getElement("vertex");
+    // We reserved 24 bits for the count of gaussians for each instance.
+    assert(element.count < (1 << 24));
     // Positions
     {
         auto x = element.getProperty<float>("x");
@@ -333,7 +335,11 @@ glm::mat4x4 Camera::GetProjectionMatrix () const {
     auto width = AppInternal::GetInstance().GetWindowWidth();
     auto height = AppInternal::GetInstance().GetWindowHeight();
     auto aspect = (float)width / height;
-    auto projection_matrix = glm::perspectiveRH_ZO(fov_y, aspect, near, far);
+    glm::mat4 projection_matrix;
+    if (type == CameraType::ePerspective)
+        projection_matrix = glm::perspectiveRH_ZO(fov_y, aspect, near, far);
+    else if (type == CameraType::eOrthographic)
+        projection_matrix = glm::orthoRH_ZO(min_clip.x, max_clip.x, min_clip.y, max_clip.y, near, far);
     return projection_matrix;
 }
 
@@ -378,7 +384,7 @@ CameraDescription Camera::PackDescription(
     ret.Flags = 0;
 
     ret.Up = axis_up;
-    ret.Padding0 = 0;
+    ret.Padding = 0;
 
     ret.FilmTexelSize = 1.f / glm::vec2(film_width, film_height);
     ret.HZBBaseTexelSize = 2.f * ret.FilmTexelSize;

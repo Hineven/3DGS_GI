@@ -120,8 +120,8 @@ struct UniformBlock {
 
     int    DepthFilterRadius;
     float  GaussianClampingScale;
-    uint   Padding1_xx;
-    uint   Padding2_xx;
+    uint   CardCount;
+    uint   CardSetCount;
 
     int2   Debug_CursorPixelCoords;
     uint   Debug_VisualizeLightGridCascade;
@@ -144,6 +144,18 @@ struct UniformBlock {
     
     DeviceVirtualAddressRangeAndStride RT_CallableShaderTable;
     uint2 Padding5;
+};
+
+struct DrawMeshCardUniformBlock {
+    CameraDescription Camera;
+
+    int3 CardAtlasBaseCoords;
+    int InstanceIndex;
+
+    int CardIndex;
+    int CardSetIndex;
+    uint Padding0;
+    uint Padding1;
 };
 
 struct Gaussian {
