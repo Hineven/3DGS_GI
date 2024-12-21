@@ -60,15 +60,6 @@ void ClearCounters () {
 	g_RWActiveGaussianCountBuffer[0] = 0;
 }
 
-uint PackActiveGaussianIndex (int InstanceIndex, int GaussianIndex) {
-	return (uint(InstanceIndex) << 24) | (GaussianIndex & (0x3FFFFFFu));
-}
-
-void UnpackActiveGaussianIndex (uint PackedIndex, out int InstanceIndex, out int GaussianIndex) {
-	InstanceIndex = int(PackedIndex >> 24);
-	GaussianIndex = int(PackedIndex & 0x3FFFFFFu);
-}
-
 // Filter the active gaussians that are visible in the view frustrum
 [numthreads(WAVE_SIZE, 1, 1)]
 void FilterActiveGaussians (uint DispatchID : SV_DispatchThreadID) {
@@ -113,7 +104,7 @@ void FilterActiveGaussians (uint DispatchID : SV_DispatchThreadID) {
 		int ActiveListIndex = GaussianBaseIndex + GaussianRank;
 
 		g_RWActiveGaussianListBuffer[ActiveListIndex] = PackActiveGaussianIndex(InstanceIndex, GaussianIndex);
-		g_RWActiveGaussianIndirectBuffer[ActiveListIndex] = ActiveListIndex;
+		g_RWActiveGaussianIndirectSrcBuffer[ActiveListIndex] = ActiveListIndex;
 		// The view space align the view direction with the negative z axis
 		float LinearDepth = - ViewSpacePosition.z;
 		g_RWActiveGaussianLinearDepthSrcBuffer[ActiveListIndex] = LinearDepth;
@@ -137,13 +128,15 @@ void ProjectActiveGaussians (uint DispatchID : SV_DispatchThreadID) {
 #else
 	// Orthographic projection jacobian
 	// It's the inverse of the scales of the object (in object space)
-	float2 InvScales = float2(Projection[0][0], Projection[1][1]); 
+	float2 InvScales = float2(C.Projection[0][0], C.Projection[1][1]); 
 	float3x3 J = float3x3(
         InvScales.x, 0, 0,
         0, InvScales.y, 0,
         0, 0, 0
     );
 #endif
+
+	// TODO consider instance transforms
     float4 HomogeneousW = mul(C.ProjectionView, float4(G.Position, 1.f));
     float3 Homogeneous = HomogeneousW.xyz / HomogeneousW.w;
 
@@ -198,13 +191,13 @@ void ProjectActiveGaussians (uint DispatchID : SV_DispatchThreadID) {
 	// OPTIMIZE: scale the vectors according to opacity of the gaussian
 	float2 ClampedPosition = saturateDown(Homogeneous.xy * 0.25 + 0.5f);
 	g_RWActiveGaussianNDCPositionBuffer[ActiveIndex] = PackUnorm16x2(ClampedPosition);
-	float LinearDepth = g_RWActiveGaussianLinearDepthBuffer[ActiveIndex];
+	float LinearDepth = g_RWActiveGaussianLinearDepthSrcBuffer[ActiveIndex];
 	// Clamp the radius for gaussians (to fix holes for the dataset)
 	// TODO: this is totally a data-specific trick. But I found it useful.
 #ifdef CARD_SHADERS
  	// Larger objects have larger clamping scale
-	float SqrLambda1 = max(sqrt(abs(Lambda1)), UB.Cards_GaussianClampingScale / InvScale.x);
-	float SqrLambda2 = max(sqrt(abs(Lambda2)), UB.Cards_GaussianClampingScale / InvScale.y);
+	float SqrLambda1 = max(sqrt(abs(Lambda1)), UB.Card_GaussianClampingScale / InvScales.x);
+	float SqrLambda2 = max(sqrt(abs(Lambda2)), UB.Card_GaussianClampingScale / InvScales.y);
 #else
 	// Further objects have larger clamping scale
 	float SqrLambda1 = max(sqrt(abs(Lambda1)), UB.GaussianClampingScale / LinearDepth);
@@ -1206,6 +1199,35 @@ void DisplayCameraRays (uint GroupID : SV_GroupID, uint LocalID : SV_GroupThread
 			g_RW_Radiance[TexelCoords] = float4(RayT.xxx, 1);
 		}
 	}
+}
+
+// Visualize surfaces shaded from mesh cards
+[numthreads(TILE_SIZE, TILE_SIZE, 1)]
+void VisualizeMeshCardScene (uint2 DispatchID : SV_DispatchThreadID) {
+	CameraDescription C = GetCameraDescription();
+	if(IsOutOfFilm(C, DispatchID)) return;
+	int2 PixelCoords = int2(DispatchID);
+	float2 UV = PixelCoords / C.FilmDimensions;
+	float  LinearDepth = GetFilteredDepthTexture(C).Load(int3(PixelCoords, 0)).r;
+	if(LinearDepth > 0) {
+		float3 WorldPosition = RecoverWorldSpacePosition(C, PixelCoords, LinearDepth);
+		float3 ViewDirection = normalize(WorldPosition - C.Position);
+
+		CardSet Cards = FetchCardSet(UB.Debug_CardSetToVisualize);
+		float3x4 WorldToInstanceTransform = g_InstanceInvTransformBuffer[UB.Debug_CardSetToVisualize];
+		float3x3 WorldToInstanceNormalTransform = g_InstanceNormalTransformBuffer[UB.Debug_CardSetToVisualize];
+
+		CardSampleAccumulator Accumulator = SampleCardSet(
+			Cards,
+			WorldToInstanceTransform, 
+			WorldToInstanceNormalTransform,
+			WorldPosition, 
+			ViewDirection
+		);
+
+		g_RW_DebugTexture[DispatchID] = float4(Accumulator.SolveRadiance(), 1);
+	}
+	
 }
 
 [numthreads(WAVE_SIZE, 1, 1)]

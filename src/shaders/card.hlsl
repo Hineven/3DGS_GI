@@ -66,10 +66,22 @@ Texture2DArray<float3> g_CardAtlas_IndirectIlluminationTexture;
 RWTexture2DArray<float3> g_RWCardAtlas_LightingTexture;
 Texture2DArray<float3> g_CardAtlas_LightingTexture;
 
-
-RWTexture2D<float4> g_RWCardWorkspace_ColorAlbedoTexture;
+Texture2D<float4> g_CardWorkspace_ColorAlphaTexture;
+RWTexture2D<float4> g_RWCardWorkspace_ColorAlphaTexture;
+Texture2D<float4> g_CardWorkspace_NormalTexture;
 RWTexture2D<float4> g_RWCardWorkspace_NormalTexture;
+Texture2D<float2> g_CardWorkspace_LinearDepthTexture;
 RWTexture2D<float2> g_RWCardWorkspace_LinearDepthTexture;
+
+Texture2D<float4> g_CardWorkspace_DirectIlluminationTexture;
+RWTexture2D<float4> g_RWCardWorkspace_DirectIlluminationTexture;
+Texture2D<float4> g_CardWorkspace_HistoryDirectIlluminationTexture;
+Texture2D<float4> g_CardWorkspace_IndirectIlluminationTexture;
+RWTexture2D<float4> g_RWCardWorkspace_IndirectIlluminationTexture;
+Texture2D<float4> g_CardWorkspace_HistoryIndirectIlluminationTexture;
+Texture2D<float4> g_CardWorkspace_LightingTexture;
+RWTexture2D<float4> g_RWCardWorkspace_LightingTexture;
+Texture2D<float4> g_CardWorkspace_HistoryLightingTexture;
 
 struct CardSample {
     uint CardIndex;
@@ -87,7 +99,7 @@ CardSample SampleCard (
     float2 AtlasPosition = LocalFilmPosition + CardHeader.AtlasBaseCoords.xy;
     float2 AtlasBillinearPosition = floor(AtlasPosition - 0.5f);
     float2 BillinearWeights = frac(AtlasPosition - 0.5f);
-    float2 AtlasGatherUV = (AtlasBillinearPosition + 1.f) * UB.InvCardAtlasDimensions;
+    float2 AtlasGatherUV = (AtlasBillinearPosition + 1.f) * (1.f / CARD_ATLAS_RESOLUTION);
     float4 GatherWeights = float4(
         (1 - BillinearWeights.x) * (1 - BillinearWeights.y),
         BillinearWeights.x * (1 - BillinearWeights.y),
@@ -106,15 +118,19 @@ CardSample SampleCard (
     return Result;
 }
 
-float3 SampleCardAtlas (Texture2D Atlas, float2 AtlasGatherUV, float4 Weights) {
-    float4 Red = Atlas.GatherRed(g_PointClampSampler, AtlasGatherUV, AtlasGatherUV).wzxy;
-    float4 Green = Atlas.GatherGreen(g_PointClampSampler, AtlasGatherUV, AtlasGatherUV).wzxy;
-    float4 Blue = Atlas.GatherBlue(g_PointClampSampler, AtlasGatherUV, AtlasGatherUV).wzxy;
+float3 SampleCardAtlas3 (Texture2DArray<float3> Atlas, float3 GatherPosition, float4 Weights) {
+    float4 Red = Atlas.GatherRed(g_PointClampSampler, GatherPosition).wzxy;
+    float4 Green = Atlas.GatherGreen(g_PointClampSampler, GatherPosition).wzxy;
+    float4 Blue = Atlas.GatherBlue(g_PointClampSampler, GatherPosition).wzxy;
     return float3(
         dot(Red, Weights),
         dot(Green, Weights),
         dot(Blue, Weights)
     );
+}
+float SampleCardAtlas (Texture2DArray<float> Atlas, float3 GatherPosition, float4 Weights) {
+    float4 Red = Atlas.GatherRed(g_PointClampSampler, GatherPosition).wzxy;
+    return dot(Red, Weights);
 }
 
 int GetCardRank (float3 AxisPositions, int3 CardSetNumCards, float3 ViewDirectionSign, float3 BoundsMin, float3 BoundsMax, int Axis) {
@@ -142,27 +158,44 @@ struct CardSampleAccumulator {
     float3 IndirectIllumination;
     float3 Lighting;
     float  WeightSum;
+
+    float3 SolveRadiance () {
+        return Lighting / max(WeightSum, 1e-6f);
+    }
 };
 
-void AccumulateCardSample (CardSample Sample, float HitDepth, float WorldToInstanceScale, inout CardSampleAccumulator Accuumulator) {
+void AccumulateCardSample (CardSample Sample, 
+    float HitDepth, float InstanceZScale, int NumZAxisCards, float ViewDirectionWeight,
+    inout CardSampleAccumulator Accumulator) {
     if(!Sample.bValid) {
         return;
     }
-    float4 Depths = g_CardAtlas_LinearDepthTexture.GatherRed(g_PointClampSampler, Sample.AtlasGatherUV).wzxy * WorldToInstanceScale;
+    float3 GatherPosition = float3(Sample.AtlasGatherUV, Sample.AtlasIndex);
+    float4 Depths = g_CardAtlas_LinearDepthTexture.GatherRed(
+        g_PointClampSampler, GatherPosition
+    ).wzxy;
+    float BiasThreshold = InstanceZScale / NumZAxisCards * UB.Card_SampleZDepthVisibilityBias;
+    float BiasFalloff = BiasThreshold * 0.25f;
     // UE5 method of biasing
-    float BiasThreshold = CacheBias / ;
     float4 VisibilityWeights = 1.0f - saturate((abs(HitDepth - Depths) - BiasThreshold) / BiasFalloff);
+    VisibilityWeights *= select(Depths > 0, 1, 0); // Filter out invalid depths
     float4 Weights = Sample.BillinearWeights * VisibilityWeights;
-    float3 Direct = SampleCardAtlas(g_CardAtlas_DirectIlluminationTexture, Sample.AtlasGatherUV, Weights);
-    float3 Indirect = SampleCardAtlas(g_CardAtlas_IndirectIlluminationTexture, Sample.AtlasGatherUV, Weights);
-    float3 Lighting = SampleCardAtlas(g_CardAtlas_LightingTexture, Sample.AtlasGatherUV, Weights);
-    float  Opacity  = SampleCardAtlas(g_CardAtlas_AlphaTexture, Sample.AtlasGatherUV, Weights).a;
+    float  SampleWeight = dot(Weights, 1.f.xxxx);
+    if(SampleWeight > 0) {
+        float3 Direct   = SampleCardAtlas3(g_CardAtlas_DirectIlluminationTexture, GatherPosition, Weights);
+        float3 Indirect = SampleCardAtlas3(g_CardAtlas_IndirectIlluminationTexture, GatherPosition, Weights);
+        float3 Lighting = SampleCardAtlas3(g_CardAtlas_LightingTexture, GatherPosition, Weights);
+        float  Opacity  = SampleCardAtlas(g_CardAtlas_AlphaTexture, GatherPosition, Weights).r;
 
-    Accuumulator.Opacity += Opacity * ;
-
+        Accumulator.DirectIllumination += Direct * Opacity;
+        Accumulator.IndirectIllumination += Indirect * Opacity;
+        Accumulator.Lighting += Lighting * Opacity;
+        Accumulator.Opacity += Opacity * SampleWeight;
+        Accumulator.WeightSum += SampleWeight;
+    }
 }
 
-CardSetSample SampleCardSet (
+CardSampleAccumulator SampleCardSet (
     CardSet Cards,
     float3x4 WorldToInstanceTransform,
     float3x3 WorldToInstanceNormalTransform,
@@ -172,10 +205,12 @@ CardSetSample SampleCardSet (
     float3 LocalPosition      = TransformPoint(WorldToInstanceTransform, WorldPosition);
     LocalPosition = clamp(LocalPosition, Cards.MinBounds, Cards.MaxBounds);
     float3 LocalViewDirection = normalize(TransformVector(WorldToInstanceNormalTransform, WorldViewDirection));
-    float3 ViewDirectionWeights = abs(LocalViewDirection);
+    // We can not attain accurate normals, so use the view direction as a proxy
+    float3 ViewDirectionWeights = sqrt(abs(LocalViewDirection));
     ViewDirectionWeights = 1.f / dot(1.f.xxx, ViewDirectionWeights);
     // yz plane
-    if(ViewDirectionWeights.x > UB.Cards_MinCardViewDirectionWeightToSample) {
+    CardSampleAccumulator Accumulator = (CardSampleAccumulator)0;
+    if(ViewDirectionWeights.x > UB.Card_MinCardViewDirectionWeightToSample) {
         int CardRank = GetCardRank(
             LocalPosition, Cards.NumCards, LocalViewDirection, Cards.MinBounds, Cards.MaxBounds, 0
         );
@@ -184,8 +219,42 @@ CardSetSample SampleCardSet (
         CardSample Sample = SampleCard(
             CardIndex, CardHeader, Cards.CardResolutions.yz, Cards.MinBounds.yz, Cards.MaxBounds.yz, LocalPosition.yz
         );
-        AccumulateSample(Sample, Accumulator);
+        float HitDepth = LocalPosition.x - Cards.MinBounds.x;
+        float InstanceZScale = Cards.MaxBounds.x - Cards.MinBounds.x;
+        int   NumCards = Cards.NumCards.x / 2;
+        AccumulateCardSample(Sample, HitDepth, InstanceZScale, NumCards, ViewDirectionWeights.x, Accumulator);
     }
+    // zx plane
+    if(ViewDirectionWeights.y > UB.Card_MinCardViewDirectionWeightToSample) {
+        int CardRank = GetCardRank(
+            LocalPosition, Cards.NumCards, LocalViewDirection, Cards.MinBounds, Cards.MaxBounds, 1
+        );
+        int CardIndex = CardRank + Cards.CardIndexBase;
+        Card CardHeader = FetchCard(CardIndex);
+        CardSample Sample = SampleCard( 
+            CardIndex, CardHeader, Cards.CardResolutions.zx, Cards.MinBounds.zx, Cards.MaxBounds.zx, LocalPosition.zx
+        );
+        float HitDepth = LocalPosition.y - Cards.MinBounds.y;
+        float InstanceZScale = Cards.MaxBounds.y - Cards.MinBounds.y;
+        int   NumCards = Cards.NumCards.y / 2;
+        AccumulateCardSample(Sample, HitDepth, InstanceZScale, NumCards, ViewDirectionWeights.y, Accumulator);
+    }
+    // xy plane
+    if(ViewDirectionWeights.z > UB.Card_MinCardViewDirectionWeightToSample) {
+        int CardRank = GetCardRank(
+            LocalPosition, Cards.NumCards, LocalViewDirection, Cards.MinBounds, Cards.MaxBounds, 2
+        );
+        int CardIndex = CardRank + Cards.CardIndexBase;
+        Card CardHeader = FetchCard(CardIndex);
+        CardSample Sample = SampleCard(
+            CardIndex, CardHeader, Cards.CardResolutions.xy, Cards.MinBounds.xy, Cards.MaxBounds.xy, LocalPosition.xy
+        );
+        float HitDepth = LocalPosition.z - Cards.MinBounds.z;
+        float InstanceZScale = Cards.MaxBounds.z - Cards.MinBounds.z;
+        int   NumCards = Cards.NumCards.z / 2;
+        AccumulateCardSample(Sample, HitDepth, InstanceZScale, NumCards, ViewDirectionWeights.z, Accumulator);
+    }
+    return Accumulator;
 }
 
 

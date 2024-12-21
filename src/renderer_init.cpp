@@ -34,10 +34,12 @@ bool Renderer::CreateResources () {
 
     buf_.active_gaussian_count = gfxCreateBuffer<int>(gfx, 1);
     buf_.active_gaussian_count.setName("GaussianActiveCount");
-    buf_.active_gaussian_list_src = gfxCreateBuffer<int>(gfx, max_num_gaussians);
-    buf_.active_gaussian_list_src.setName("ActiveGaussianSrcList");
     buf_.active_gaussian_list = gfxCreateBuffer<int>(gfx, max_num_gaussians);
     buf_.active_gaussian_list.setName("ActiveGaussianList");
+    buf_.active_gaussian_indirect = gfxCreateBuffer<int>(gfx, max_num_gaussians);
+    buf_.active_gaussian_indirect.setName("ActiveGaussianIndirect");
+    buf_.active_gaussian_indirect_src = gfxCreateBuffer<int>(gfx, max_num_gaussians);
+    buf_.active_gaussian_indirect_src.setName("ActiveGaussianIndirectSrc");
     buf_.active_gaussian_linear_depth_src = gfxCreateBuffer<float>(gfx, max_num_gaussians);
     buf_.active_gaussian_linear_depth_src.setName("ActiveGaussianSrcDepth");
     buf_.active_gaussian_linear_depth = gfxCreateBuffer<float>(gfx, max_num_gaussians);
@@ -91,6 +93,11 @@ bool Renderer::CreateResources () {
     buf_.direct_illumination_ray_contribution = gfxCreateBuffer<uint2>(gfx, max_num_pixels);
     buf_.direct_illumination_ray_contribution.setName("DirectIlluminationRayContribution");
 
+    buf_.card_sets = gfxCreateBuffer<uint2>(gfx, cfg_.max_num_instances);
+    buf_.card_sets.setName("CardSets");
+    buf_.cards = gfxCreateBuffer<uint>(gfx, CARD_ATLAS_RESOLUTION  * CARD_ATLAS_RESOLUTION * NUM_CARD_ATLAS / MIN_CARD_RESOLUTION / MIN_CARD_RESOLUTION);
+    buf_.cards.setName("Cards");
+
 #ifndef _NDEBUG
     buf_.Debug_direct_illumination_pixel_ray_index = gfxCreateBuffer<uint>(gfx, max_num_pixels);
     buf_.Debug_direct_illumination_pixel_ray_index.setName("Debug_DirectIlluminationPixelRayIndex");
@@ -105,9 +112,9 @@ bool Renderer::CreateResources () {
 #endif
 
     uint UB_stride = roundUp((uint32_t)sizeof(UniformBlock), 256u);
-    buf_.UB = gfxCreateBuffer(gfx, UB_stride * gfxGetBackBufferCount(gfx), nullptr, kGfxCpuAccess_Write);
-    buf_.UB.setName("UniformBlock0");
-    buf_.UB.setStride(UB_stride);
+    buf_.UB_pool = gfxCreateBuffer(gfx, cfg_.uniform_buffer_size, nullptr, kGfxCpuAccess_Write);
+    buf_.UB_pool.setName("UniformBufferPool");
+    buf_.UB_pool.setStride(UB_stride);
 
     float zero_clear_value[4] = {0, 0, 0, 0};
     tex_.G_depth = gfxCreateTexture2D(gfx, width, height, options_.depth_format, 1, zero_clear_value);
@@ -147,6 +154,35 @@ bool Renderer::CreateResources () {
     tex_.radiance[1] = gfxCreateTexture2D(gfx, width, height, DXGI_FORMAT_R16G16B16A16_FLOAT, 1, zero_clear_value);
     tex_.radiance[1].setName("Radiance1");
 
+    tex_.card_atlas_color = gfxCreateTexture2DArray(gfx, CARD_ATLAS_RESOLUTION, CARD_ATLAS_RESOLUTION, NUM_CARD_ATLAS, DXGI_FORMAT_R8G8B8A8_UNORM, 1, zero_clear_value);
+    tex_.card_atlas_color.setName("CardAtlasColor");
+    tex_.card_atlas_alpha = gfxCreateTexture2DArray(gfx, CARD_ATLAS_RESOLUTION, CARD_ATLAS_RESOLUTION, NUM_CARD_ATLAS, DXGI_FORMAT_R8_UNORM, 1, zero_clear_value);
+    tex_.card_atlas_alpha.setName("CardAtlasAlpha");
+    tex_.card_atlas_normal = gfxCreateTexture2DArray(gfx, CARD_ATLAS_RESOLUTION, CARD_ATLAS_RESOLUTION, NUM_CARD_ATLAS, DXGI_FORMAT_R8G8B8A8_UNORM, 1, zero_clear_value);
+    tex_.card_atlas_normal.setName("CardAtlasNormal");
+    tex_.card_atlas_linear_depth = gfxCreateTexture2DArray(gfx, CARD_ATLAS_RESOLUTION, CARD_ATLAS_RESOLUTION, NUM_CARD_ATLAS, DXGI_FORMAT_R16_FLOAT, 1, zero_clear_value);
+    tex_.card_atlas_linear_depth.setName("CardAtlasLinearDepth");
+
+    tex_.card_atlas_direct_illumination = gfxCreateTexture2DArray(gfx, CARD_ATLAS_RESOLUTION, CARD_ATLAS_RESOLUTION, NUM_CARD_ATLAS, DXGI_FORMAT_R16G16B16A16_FLOAT, 1, zero_clear_value);
+    tex_.card_atlas_direct_illumination.setName("CardAtlasDirectIllumination");
+    tex_.card_atlas_indirect_illumination = gfxCreateTexture2DArray(gfx, CARD_ATLAS_RESOLUTION, CARD_ATLAS_RESOLUTION, NUM_CARD_ATLAS, DXGI_FORMAT_R16G16B16A16_FLOAT, 1, zero_clear_value);
+    tex_.card_atlas_indirect_illumination.setName("CardAtlasIndirectIllumination");
+    tex_.card_atlas_lighting = gfxCreateTexture2DArray(gfx, CARD_ATLAS_RESOLUTION, CARD_ATLAS_RESOLUTION, NUM_CARD_ATLAS, DXGI_FORMAT_R16G16B16A16_FLOAT, 1, zero_clear_value);
+    tex_.card_atlas_lighting.setName("CardAtlasLighting");
+
+    tex_.card_workspace_direct_illumination[0] = gfxCreateTexture2D(gfx, width, height, DXGI_FORMAT_R16G16B16A16_FLOAT, 1, zero_clear_value);
+    tex_.card_workspace_direct_illumination[0].setName("CardWorkspaceDirectIllumination0");
+    tex_.card_workspace_direct_illumination[1] = gfxCreateTexture2D(gfx, width, height, DXGI_FORMAT_R16G16B16A16_FLOAT, 1, zero_clear_value);
+    tex_.card_workspace_direct_illumination[1].setName("CardWorkspaceDirectIllumination1");
+    tex_.card_workspace_indirect_illumination[0] = gfxCreateTexture2D(gfx, width, height, DXGI_FORMAT_R16G16B16A16_FLOAT, 1, zero_clear_value);
+    tex_.card_workspace_indirect_illumination[0].setName("CardWorkspaceIndirectIllumination0");
+    tex_.card_workspace_indirect_illumination[1] = gfxCreateTexture2D(gfx, width, height, DXGI_FORMAT_R16G16B16A16_FLOAT, 1, zero_clear_value);
+    tex_.card_workspace_indirect_illumination[1].setName("CardWorkspaceIndirectIllumination1");
+    tex_.card_workspace_lighting[0] = gfxCreateTexture2D(gfx, width, height, DXGI_FORMAT_R16G16B16A16_FLOAT, 1, zero_clear_value);
+    tex_.card_workspace_lighting[0].setName("CardWorkspaceLighting0");
+    tex_.card_workspace_lighting[1] = gfxCreateTexture2D(gfx, width, height, DXGI_FORMAT_R16G16B16A16_FLOAT, 1, zero_clear_value);
+    tex_.card_workspace_lighting[1].setName("CardWorkspaceLighting1");
+
     float one_clear_value[4] = {1, 1, 1, 1};
     tex_.rasterization_depth = gfxCreateTexture2D(gfx, width, height, DXGI_FORMAT_D32_FLOAT, 1, one_clear_value);
     tex_.rasterization_depth.setName("RasterizationDepth");
@@ -166,8 +202,9 @@ void Renderer::DestroyResources() {
     gfxDestroyBuffer(gfx, buf_.LightGrid_grid_light_list);
 
     gfxDestroyBuffer(gfx, buf_.active_gaussian_count);
-    gfxDestroyBuffer(gfx, buf_.active_gaussian_list_src);
     gfxDestroyBuffer(gfx, buf_.active_gaussian_list);
+    gfxDestroyBuffer(gfx, buf_.active_gaussian_indirect);
+    gfxDestroyBuffer(gfx, buf_.active_gaussian_indirect_src);
     gfxDestroyBuffer(gfx, buf_.active_gaussian_linear_depth_src);
     gfxDestroyBuffer(gfx, buf_.active_gaussian_linear_depth);
     gfxDestroyBuffer(gfx, buf_.active_gaussian_NDC_position);
@@ -190,7 +227,10 @@ void Renderer::DestroyResources() {
     gfxDestroyBuffer(gfx, buf_.direct_illumination_ray_occlusion_threshold);
     gfxDestroyBuffer(gfx, buf_.direct_illumination_ray_contribution);
 
-    gfxDestroyBuffer(gfx, buf_.UB);
+    gfxDestroyBuffer(gfx, buf_.card_sets);
+    gfxDestroyBuffer(gfx, buf_.cards);
+
+    gfxDestroyBuffer(gfx, buf_.UB_pool);
 
 #ifndef NDEBUG
     gfxDestroyBuffer(gfx, buf_.Debug_direct_illumination_pixel_ray_index);
@@ -218,6 +258,20 @@ void Renderer::DestroyResources() {
     gfxDestroyTexture(gfx, tex_.filtered_direct_illumination);
     gfxDestroyTexture(gfx, tex_.radiance[0]);
     gfxDestroyTexture(gfx, tex_.radiance[1]);
+
+    gfxDestroyTexture(gfx, tex_.card_atlas_color);
+    gfxDestroyTexture(gfx, tex_.card_atlas_alpha);
+    gfxDestroyTexture(gfx, tex_.card_atlas_normal);
+    gfxDestroyTexture(gfx, tex_.card_atlas_linear_depth);
+    gfxDestroyTexture(gfx, tex_.card_atlas_direct_illumination);
+    gfxDestroyTexture(gfx, tex_.card_atlas_indirect_illumination);
+    gfxDestroyTexture(gfx, tex_.card_atlas_lighting);
+    gfxDestroyTexture(gfx, tex_.card_workspace_direct_illumination[0]);
+    gfxDestroyTexture(gfx, tex_.card_workspace_direct_illumination[1]);
+    gfxDestroyTexture(gfx, tex_.card_workspace_indirect_illumination[0]);
+    gfxDestroyTexture(gfx, tex_.card_workspace_indirect_illumination[1]);
+    gfxDestroyTexture(gfx, tex_.card_workspace_lighting[0]);
+    gfxDestroyTexture(gfx, tex_.card_workspace_lighting[1]);
 
     gfxDestroyTexture(gfx, tex_.rasterization_depth);
 }
@@ -304,10 +358,20 @@ bool Renderer::CreateKernels () {
 
         kernel_.FinalComposition = gfxCreateComputeKernel(gfx, program_, "FinalComposition", defines_c.data(), defines_c.size());
 
+        defines_c.push_back("CARD_SHADERS");
+        kernel_.ClearCard = gfxCreateComputeKernel(gfx, program_, "ClearCard", defines_c.data(), defines_c.size());
+        kernel_.FilterActiveGaussiansForCard = gfxCreateComputeKernel(gfx, program_, "FilterActiveGaussians", defines_c.data(), defines_c.size());
+        kernel_.ProjectActiveGaussiansForCard = gfxCreateComputeKernel(gfx, program_, "ProjectActiveGaussians", defines_c.data(), defines_c.size());
+        kernel_.ResolveGBuffersForCard = gfxCreateComputeKernel(gfx, program_, "ResolveGBuffers", defines_c.data(), defines_c.size());
+        kernel_.CopyCardToAtlas = gfxCreateComputeKernel(gfx, program_, "CopyCardToAtlas", defines_c.data(), defines_c.size());
+        defines_c.pop_back();
+
         kernel_.SpawnCameraRays = gfxCreateComputeKernel(gfx, program_, "SpawnCameraRays", defines_c.data(),
                                                          defines_c.size());
         kernel_.DisplayCameraRays = gfxCreateComputeKernel(gfx, program_, "DisplayCameraRays", defines_c.data(),
                                                            defines_c.size());
+        kernel_.VisualizeMeshCardScene = gfxCreateComputeKernel(gfx, program_, "VisualizeMeshCardScene", defines_c.data(),
+                                                                defines_c.size());
     }
 
     // Raytracing kernels
@@ -369,7 +433,7 @@ bool Renderer::CreateKernels () {
 
     {
         GfxDrawState draw_state = {};
-        // Cull gaussianpixels blocked by regular meshes
+        // Cull gaussian fragments blocked by regular meshes
         gfxDrawStateSetDepthStencilTarget(draw_state, DXGI_FORMAT_D32_FLOAT);
         gfxDrawStateSetDepthFunction(draw_state, D3D12_COMPARISON_FUNC_LESS);
         gfxDrawStateSetDepthWriteMask(draw_state, D3D12_DEPTH_WRITE_MASK_ZERO);
@@ -391,6 +455,23 @@ bool Renderer::CreateKernels () {
         kernel_.DrawActiveGaussians = gfxCreateGraphicsKernel(
                 gfx, program_, draw_state, "DrawActiveGaussians", defines_c.data(), defines_c.size()
         );
+    }
+    {
+        GfxDrawState draw_state = {};
+        gfxDrawStateSetBlendMode(draw_state,
+                                         D3D12_BLEND_SRC_ALPHA, D3D12_BLEND_INV_SRC_ALPHA, D3D12_BLEND_OP_ADD,
+                                         D3D12_BLEND_ONE, D3D12_BLEND_INV_SRC_ALPHA, D3D12_BLEND_OP_ADD);
+        gfxDrawStateSetColorTarget(draw_state, 0, tex_.card_workspace_color_alpha.getFormat());
+        gfxDrawStateSetColorTarget(draw_state, 1, tex_.card_workspace_linear_depth.getFormat());
+        gfxDrawStateSetColorTarget(draw_state, 2, tex_.card_workspace_normal.getFormat());
+
+        gfxDrawStateSetPrimitiveTopologyType(draw_state, D3D12_PRIMITIVE_TOPOLOGY_TYPE_POINT);
+        gfxDrawStateSetCullMode(draw_state, D3D12_CULL_MODE_NONE);
+        defines_c.push_back("CARD_SHADERS");
+        kernel_.DrawActiveGaussiansForCard = gfxCreateGraphicsKernel(
+                gfx, program_, draw_state, "DrawActiveGaussians", defines_c.data(), defines_c.size()
+        );
+        defines_c.pop_back();
     }
     {
         GfxDrawState draw_state = {};
@@ -446,10 +527,18 @@ void Renderer::DestroyKernels () {
     gfxDestroyKernel(gfx, kernel_.TemporalFilterDirectIllumination);
     gfxDestroyKernel(gfx, kernel_.FinalComposition);
 
+    gfxDestroyKernel(gfx, kernel_.ClearCard);
+    gfxDestroyKernel(gfx, kernel_.FilterActiveGaussiansForCard);
+    gfxDestroyKernel(gfx, kernel_.ProjectActiveGaussiansForCard);
+    gfxDestroyKernel(gfx, kernel_.DrawActiveGaussiansForCard);
+    gfxDestroyKernel(gfx, kernel_.ResolveGBuffersForCard);
+    gfxDestroyKernel(gfx, kernel_.CopyCardToAtlas);
+
     gfxDestroyKernel(gfx, kernel_.Trace3DGSRays);
     gfxDestroyKernel(gfx, kernel_.Trace3DGSShadowRays);
     gfxDestroyKernel(gfx, kernel_.SpawnCameraRays);
     gfxDestroyKernel(gfx, kernel_.DisplayCameraRays);
+    gfxDestroyKernel(gfx, kernel_.VisualizeMeshCardScene);
 
     gfxDestroyKernel(gfx, kernel_.DrawAreaLights);
     gfxDestroyKernel(gfx, kernel_.DrawActiveGaussians);
@@ -477,6 +566,8 @@ bool Renderer::Initialize () {
         return false;
     }
 
+    ResetUniformBufferPool();
+    ResetStagingBuffers();
 
     return true;
 }
@@ -484,5 +575,6 @@ bool Renderer::Initialize () {
 void Renderer::Destroy() {
     DestroyResources();
     DestroyKernels();
+    ResetStagingBuffers();
     blue_noise_sampler_.Destroy();
 }

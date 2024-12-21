@@ -105,6 +105,10 @@ public:
 
     inline int GetNumLights () const { return light_data_.size(); }
 
+    inline int GetInstanceNumGaussians (int instance_index) const {
+        return gsi_gs_counts_[instance_index];
+    }
+
     inline void SetNumLights (int num_lights) {
         assert(num_lights >= 2);
         light_data_.resize(num_lights);
@@ -161,7 +165,8 @@ protected:
     std::vector<glm::vec3> gsi_bounds_max; // instance local bounds
     std::vector<glm::mat4x3> gsi_transforms_;
     std::vector<glm::mat4x3> gsi_inv_transforms_;
-    std::vector<glm::mat3x3> gsi_normal_transforms_;
+    std::vector<glm::mat3> gsi_normal_transforms_;
+    std::vector<glm::mat3> gsi_inv_normal_transforms_;
     // GS instance GS index offsets
     std::vector<int> gsi_gs_index_offsets_;
     // GS instances GS count

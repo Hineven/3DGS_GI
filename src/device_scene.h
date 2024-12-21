@@ -52,6 +52,7 @@ public:
     GfxBuffer gsi_inv_transform_;
     // To world normal transform, mat3x3 packed
     GfxBuffer gsi_normal_transform_;
+    GfxBuffer gsi_inv_normal_transform_;
 
     GfxScene gfx_scene_;
 

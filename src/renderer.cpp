@@ -50,6 +50,69 @@ void Renderer::GenerateDrawIndirect(const GfxBuffer &vertex_count_buffer) {
     gfxCommandDispatch(gfx, 1, 1, 1);
 }
 
+void Renderer::UploadBufferStaged(GfxBuffer buf, const void *data, size_t size) {
+    if (!size) return ;
+    auto gfx = AppInternal::GetInstance().GetGfx();
+    int id = frame_index_ % kGfxConstant_BackBufferCount;
+    if (frame_index_ != staging_buffer_frame_index_[id]) {
+        staging_buffer_frame_index_[id] = frame_index_;
+        staging_buffer_frame_offset_[id] = 0;
+    }
+    if (staging_buffer_[id].getSize() < staging_buffer_frame_offset_[id] + size) {
+        auto new_size = std::max(staging_buffer_frame_offset_[id] + size, staging_buffer_[id].getSize() * 2);
+        if (staging_buffer_[id]) gfxDestroyBuffer(gfx, staging_buffer_[id]);
+        staging_buffer_[id] = gfxCreateBuffer(gfx, new_size, data, kGfxCpuAccess_Write);
+        staging_buffer_[id].setName("RendererStagingBuffer");
+    }
+    memcpy(gfxBufferGetData(gfx, staging_buffer_[id]), data, size);
+    gfxCommandCopyBuffer(gfx, buf, 0, staging_buffer_[id], 0, size);
+}
+
+void Renderer::ResetStagingBuffers() {
+    auto gfx = AppInternal::GetInstance().GetGfx();
+    for (auto & buf : staging_buffer_) {
+        if (buf) gfxDestroyBuffer(gfx, buf);
+    }
+    for (int i = 0; i < kGfxConstant_BackBufferCount; i++) {
+        staging_buffer_frame_index_[i] = -1;
+        staging_buffer_frame_offset_[i] = 0;
+    }
+}
+
+GfxBuffer Renderer::AllocateUBForCurrentFrame(size_t size) {
+    size = roundUp((uint32_t)size, 256u);
+    int id = frame_index_ % kGfxConstant_BackBufferCount;
+    if (UB_pool_allocation_frames_[id] != frame_index_) {
+        UB_pool_allocation_frames_[id] = frame_index_;
+        UB_pool_allocation_sizes_[id] = 0;
+    }
+    if (cfg_.uniform_buffer_size - UB_pool_allocation_offset_ < size) {
+        UB_pool_allocation_sizes_[id] += cfg_.uniform_buffer_size - UB_pool_allocation_offset_;
+        UB_pool_allocation_offset_ = 0;
+    }
+    int sum_sizes = 0;
+    for (auto e : UB_pool_allocation_sizes_) {
+        sum_sizes += e;
+    }
+    if (sum_sizes + size > cfg_.uniform_buffer_size) {
+        app_warning("Uniform buffer pool is exhausted");
+        return GfxBuffer();
+    }
+    auto gfx = AppInternal::GetInstance().GetGfx();
+    GfxBuffer buf = gfxCreateBufferRange(gfx, buf_.UB_pool, UB_pool_allocation_offset_, size);
+    UB_pool_allocation_offset_ += size;
+    UB_pool_allocation_sizes_[id] += size;
+    return buf;
+}
+
+void Renderer::ResetUniformBufferPool() {
+    for (int i = 0; i < kGfxConstant_BackBufferCount; i++) {
+        UB_pool_allocation_frames_[i] = -1;
+        UB_pool_allocation_sizes_[i] = 0;
+    }
+    UB_pool_allocation_offset_ = 0;
+}
+
 void Renderer::RenderUI () {
     if(ImGui::CollapsingHeader("Renderer")) {
         ImGui::Checkbox("HWRT Visualize", &options_.visualize_HWRT);
@@ -159,6 +222,12 @@ void Renderer::RenderUI () {
                 CB.area_light_local_vertices[idx * 3 + 1] = B;
                 CB.area_light_local_vertices[idx * 3 + 2] = C;
                 CB.area_light_count ++;
+            }
+        }
+
+        if (ImGui::CollapsingHeader("Mesh Cards", ImGuiTreeNodeFlags_DefaultOpen)) {
+            if (ImGui::Button("Redraw All Meshcards")) {
+                RequestRedrawAllMeshCardsForAllInstances();
             }
         }
 
@@ -360,15 +429,21 @@ void Renderer::Render() {
 
         REGISTER_CVAR(UB.DepthFilterRadius, "Filter radius for depth reconstruction.", 1, 0, 3);
         REGISTER_CVAR(UB.GaussianClampingScale, "Magic number for clamping the gaussian 2D eigen value to a minimum value.",
-            5e-6f);
+            1e-3f);
+        UB.Card_PreferredTexelWorldSize = 0.01;
+        REGISTER_CVAR(UB.Debug_CardSetToVisualize, "Index of the card set to visualize.", 0);
+
+        REGISTER_CVAR(UB.Card_SampleZDepthVisibilityBias, "Visibility bias scale for card sampling.", 0.01f, 0.f, 0.1f);
+        REGISTER_CVAR(UB.Card_MinCardViewDirectionWeightToSample, "Minimum view direction weight to sample on an card axis.", 0.f, 0.f, 1.f);
+        REGISTER_CVAR(UB.Card_GaussianClampingScale, "Magic number for clamping the gaussian 2D eigen value to a minimum value "
+                                                     "(upon rendering meshcards).",
+            1e-3f);
+        REGISTER_CVAR(UB.TonemapExposure, "Exposure", 1.0f, 0.1f, 10.0f);
 
         auto im_mouse_pos = ImGui::GetMousePos();
         glm::vec2 mouse_pos = {im_mouse_pos.x, im_mouse_pos.y};
         UB.Debug_CursorPixelCoords = glm::ivec2(mouse_pos);
-
-        REGISTER_CVAR(UB.TonemapExposure, "Exposure", 1.0f, 0.1f, 10.0f);
-
-        UB.Card_PreferredTexelWorldSize = 0.01;
+        REGISTER_CVAR(UB.Debug_VisualizeMeshCardScene, "Shade the scene using meshcards queries.", false);
 
         gfxSbtGetGpuVirtualAddressRangeAndStride(gfx, sbt_,
             (D3D12_GPU_VIRTUAL_ADDRESS_RANGE *)&UB.RT_RayGenerationShaderRecord,
@@ -449,8 +524,9 @@ void Renderer::Render() {
     gfxProgramSetParameter(gfx, program_, "g_RWDrawIndirectCommandBuffer", buf_.draw_indirect_command);
 
     gfxProgramSetParameter(gfx, program_, "g_RWActiveGaussianCountBuffer", buf_.active_gaussian_count);
-    gfxProgramSetParameter(gfx, program_, "g_RWActiveGaussianListSrcBuffer", buf_.active_gaussian_list_src);
     gfxProgramSetParameter(gfx, program_, "g_RWActiveGaussianListBuffer", buf_.active_gaussian_list);
+    gfxProgramSetParameter(gfx, program_, "g_RWActiveGaussianIndirectBuffer", buf_.active_gaussian_indirect);
+    gfxProgramSetParameter(gfx, program_, "g_RWActiveGaussianIndirectSrcBuffer", buf_.active_gaussian_indirect_src);
     gfxProgramSetParameter(gfx, program_, "g_RWActiveGaussianLinearDepthSrcBuffer", buf_.active_gaussian_linear_depth_src);
     gfxProgramSetParameter(gfx, program_, "g_RWActiveGaussianLinearDepthBuffer", buf_.active_gaussian_linear_depth);
 
@@ -503,6 +579,39 @@ void Renderer::Render() {
     gfxProgramSetParameter(gfx, program_, "g_RW_Radiance", tex_.radiance[frame_index_ & 1]);
     gfxProgramSetParameter(gfx, program_, "g_Radiance", tex_.radiance[frame_index_ & 1]);
     gfxProgramSetParameter(gfx, program_, "g_HistoryRadiance", tex_.radiance[(frame_index_ + 1) & 1]);
+
+    // Cards
+    gfxProgramSetParameter(gfx, program_, "g_CardSets", buf_.card_sets);
+    gfxProgramSetParameter(gfx, program_, "g_Cards", buf_.cards);
+    gfxProgramSetParameter(gfx, program_, "g_RWCardAtlas_AlphaTexture", tex_.card_atlas_alpha);
+    gfxProgramSetParameter(gfx, program_, "g_CardAtlas_AlphaTexture", tex_.card_atlas_alpha);
+    gfxProgramSetParameter(gfx, program_, "g_RWCardAtlas_NormalTexture", tex_.card_atlas_normal);
+    gfxProgramSetParameter(gfx, program_, "g_CardAtlas_NormalTexture", tex_.card_atlas_normal);
+    gfxProgramSetParameter(gfx, program_, "g_RWCardAtlas_LinearDepthTexture", tex_.card_atlas_linear_depth);
+    gfxProgramSetParameter(gfx, program_, "g_CardAtlas_LinearDepthTexture", tex_.card_atlas_linear_depth);
+    gfxProgramSetParameter(gfx, program_, "g_RWCardAtlas_DirectIlluminationTexture", tex_.card_atlas_direct_illumination);
+    gfxProgramSetParameter(gfx, program_, "g_CardAtlas_DirectIlluminationTexture", tex_.card_atlas_direct_illumination);
+    gfxProgramSetParameter(gfx, program_, "g_RWCardAtlas_IndirectIlluminationTexture", tex_.card_atlas_indirect_illumination);
+    gfxProgramSetParameter(gfx, program_, "g_CardAtlas_IndirectIlluminationTexture", tex_.card_atlas_indirect_illumination);
+    gfxProgramSetParameter(gfx, program_, "g_RWCardAtlas_LightingTexture", tex_.card_atlas_lighting);
+    gfxProgramSetParameter(gfx, program_, "g_CardAtlas_LightingTexture", tex_.card_atlas_lighting);
+
+    gfxProgramSetParameter(gfx, program_, "g_CardWorkspace_ColorAlphaTexture", tex_.card_workspace_color_alpha);
+    gfxProgramSetParameter(gfx, program_, "g_RWCardWorkspace_ColorAlphaTexture", tex_.card_workspace_color_alpha);
+    gfxProgramSetParameter(gfx, program_, "g_CardWorkspace_NormalTexture", tex_.card_workspace_normal);
+    gfxProgramSetParameter(gfx, program_, "g_RWCardWorkspace_NormalTexture", tex_.card_workspace_normal);
+    gfxProgramSetParameter(gfx, program_, "g_CardWorkspace_LinearDepthTexture", tex_.card_workspace_linear_depth);
+    gfxProgramSetParameter(gfx, program_, "g_RWCardWorkspace_LinearDepthTexture", tex_.card_workspace_linear_depth);
+
+    gfxProgramSetParameter(gfx, program_, "g_CardWorkspace_DirectIlluminationTexture", tex_.card_workspace_direct_illumination[frame_index_ & 1]);
+    gfxProgramSetParameter(gfx, program_, "g_RWCardWorkspace_DirectIlluminationTexture", tex_.card_workspace_direct_illumination[frame_index_ & 1]);
+    gfxProgramSetParameter(gfx, program_, "g_CardWorkspace_HistoryDirectIlluminationTexture", tex_.card_workspace_direct_illumination[(frame_index_ + 1) & 1]);
+    gfxProgramSetParameter(gfx, program_, "g_CardWorkspace_IndirectIlluminationTexture", tex_.card_workspace_indirect_illumination[frame_index_ & 1]);
+    gfxProgramSetParameter(gfx, program_, "g_RWCardWorkspace_IndirectIlluminationTexture", tex_.card_workspace_indirect_illumination[frame_index_ & 1]);
+    gfxProgramSetParameter(gfx, program_, "g_CardWorkspace_HistoryIndirectIlluminationTexture", tex_.card_workspace_indirect_illumination[(frame_index_ + 1) & 1]);
+    gfxProgramSetParameter(gfx, program_, "g_CardWorkspace_LightingTexture", tex_.card_workspace_lighting[frame_index_ & 1]);
+    gfxProgramSetParameter(gfx, program_, "g_RWCardWorkspace_LightingTexture", tex_.card_workspace_lighting[frame_index_ & 1]);
+    gfxProgramSetParameter(gfx, program_, "g_CardWorkspace_HistoryLightingTexture", tex_.card_workspace_lighting[(frame_index_ + 1) & 1]);
 
     gfxProgramSetParameter(gfx, program_, "g_RasterizationDepthTexture", tex_.rasterization_depth);
 
@@ -646,7 +755,7 @@ void Renderer::Render() {
             while (i < num_cards && atlas_index < NUM_CARD_ATLAS) {
                 auto pos = find(spans, atlas_index);
                 if (pos.x == -1) {
-                    return -1;
+                    return false;
                 } else {
                     fill(pos.x, pos.y, pos.z, spans);
                     MC.cards[card_header_start_index + i].AtlasBaseCoords = glm::ivec3(pos.y, pos.z, pos.x);
@@ -752,9 +861,9 @@ void Renderer::Render() {
                 Z |= (card_set.NumCards.x & 0xfu) << 16;
                 Z |= (card_set.NumCards.y & 0xfu) << 20;
                 Z |= (card_set.NumCards.z & 0xfu) << 24;
-                uint W = glm::log2(card_set.CardResolutions.x / MIN_CARD_RESOLUTION) & 0xfu;
-                W |= (glm::log2(card_set.CardResolutions.y / MIN_CARD_RESOLUTION) & 0xfu) << 4;
-                W |= (glm::log2(card_set.CardResolutions.z / MIN_CARD_RESOLUTION) & 0xfu) << 8;
+                uint W = uint(glm::log2((float)card_set.CardResolutions.x / MIN_CARD_RESOLUTION)) & 0xfu;
+                W |= (uint(glm::log2((float)card_set.CardResolutions.y / MIN_CARD_RESOLUTION)) & 0xfu) << 4;
+                W |= (uint(glm::log2((float)card_set.CardResolutions.z / MIN_CARD_RESOLUTION)) & 0xfu) << 8;
                 card_sets_packed[i * 2 + 1] = {card_set.MaxBounds.y, card_set.MaxBounds.z,
                     std::bit_cast<float>(Z), std::bit_cast<float>(W)};
             }
@@ -811,7 +920,8 @@ void Renderer::Render() {
                     auto section = TimedSection(*this, "FilterActiveGaussiansForCard");
                     gfxCommandBindKernel(gfx, kernel_.FilterActiveGaussiansForCard);
                     auto threads = gfxKernelGetNumThreads(gfx, kernel_.FilterActiveGaussiansForCard);
-                    gfxCommandDispatch(gfx, divideAndRoundUp(, (int)threads[0]));
+                    int num_instance_gaussians = scene.GetInstanceNumGaussians(instance_id);
+                    gfxCommandDispatch(gfx, divideAndRoundUp(num_instance_gaussians, (int)threads[0]), 1, 1);
                 }
                 {
                     auto section = TimedSection(*this, "ProjectActiveGaussiansForCard");
@@ -820,9 +930,9 @@ void Renderer::Render() {
                     gfxCommandDispatchIndirect(gfx, buf_.dispatch_indirect_command);
                 }
                 {
-                    auto section = TimedSection(*this, "SortActiveGaussians");
+                    auto section = TimedSection(*this, "SortActiveGaussiansForCard");
                     gfxCommandSortRadix(gfx, buf_.active_gaussian_linear_depth, buf_.active_gaussian_linear_depth_src,
-                                        &buf_.active_gaussian_list, &buf_.active_gaussian_list_src, &buf_.active_gaussian_count);
+                                        &buf_.active_gaussian_indirect, &buf_.active_gaussian_indirect_src, &buf_.active_gaussian_count);
                 }
                 {
                     // Rasterize the G-Buffers
@@ -874,8 +984,8 @@ void Renderer::Render() {
                             card_camera.direction[axis] = direction_sgn ? -1 : 1;
                             card_camera.up = {};
                             card_camera.up[t_axis] = 1;
-                            card_camera.near = glm::mix(aabb.mn[axis], aabb.mx[axis], i / num_cards[axis]);
-                            card_camera.far = glm::mix(aabb.mn[axis], aabb.mx[axis], glm::saturate((i + 1) / num_cards[axis] + offset));
+                            card_camera.near = glm::mix(aabb.mn[axis], aabb.mx[axis], (float) i / num_cards[axis]);
+                            card_camera.far = glm::mix(aabb.mn[axis], aabb.mx[axis], glm::saturate((float) (i + 1) / num_cards[axis] + offset));
                             card_camera.min_clip = {aabb.mn[s_axis], aabb.mn[t_axis]};
                             card_camera.max_clip = {aabb.mx[s_axis], aabb.mx[t_axis]};
                             card_camera.position = {};
@@ -984,7 +1094,7 @@ void Renderer::Render() {
             // So we can later draw them in order.
             auto section = TimedSection(*this, "SortActiveGaussians");
             gfxCommandSortRadix(gfx, buf_.active_gaussian_linear_depth, buf_.active_gaussian_linear_depth_src,
-                                &buf_.active_gaussian_list, &buf_.active_gaussian_list_src, &buf_.active_gaussian_count);
+                                &buf_.active_gaussian_indirect, &buf_.active_gaussian_indirect_src, &buf_.active_gaussian_count);
         }
 
         {
@@ -1011,7 +1121,6 @@ void Renderer::Render() {
             auto section = TimedSection(*this, "ResolveGBuffers");
             gfxCommandBindKernel(gfx, kernel_.ResolveGBuffers);
             auto num_threads = gfxKernelGetNumThreads(gfx, kernel_.ResolveGBuffers);
-            assert(UB.ScreenDimensions.x % num_threads[0] == 0 && UB.ScreenDimensions.y % num_threads[1] == 0);
             uint num_groups_x = divideAndRoundUp((uint)UB.ScreenDimensions.x, num_threads[0]);
             uint num_groups_y = divideAndRoundUp((uint)UB.ScreenDimensions.y, num_threads[1]);
             gfxCommandDispatch(gfx, num_groups_x, num_groups_y, 1);
@@ -1180,6 +1289,12 @@ void Renderer::Render() {
             gfxCommandCopyTexture(gfx, tex_.direct_illumination[frame_index_ & 1], tex_.filtered_direct_illumination);
         }
 
+        if (UB.Debug_VisualizeMeshCardScene) {
+            auto section = TimedSection(*this, "VisualizeMeshCardScene");
+            gfxCommandBindKernel(gfx, kernel_.VisualizeMeshCardScene);
+            gfxCommandDispatch(gfx, UB.TileDimensions.x, UB.TileDimensions.y, 1);
+        }
+
         // Final radiance composition
         {
             auto section = TimedSection(*this, "FinalComposition");
@@ -1198,4 +1313,14 @@ void Renderer::Render() {
     gfxDestroyBuffer(gfx, UB_range);
 
     frame_index_ ++;
+}
+
+void Renderer::RequestRedrawAllMeshCardsForAllInstances() {
+    for (int i = 0; i < (int)MC.card_sets.size(); i++) {
+        MC.card_set_remove_requests.push_back(i);
+    }
+    auto & scene = AppInternal::GetInstance().GetScene();
+    for (int i = 0; i < scene.GetNumInstances(); i++) {
+        MC.card_set_add_requests.push_back(i);
+    }
 }

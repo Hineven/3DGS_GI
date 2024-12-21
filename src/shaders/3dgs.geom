@@ -4,7 +4,6 @@
 struct DrawActiveGaussians_GSInput
 {
     uint PrimitiveIndex : TEXCOORD0;
-    uint InstanceIndex  : SV_InstanceID;
 };
 
 struct DrawActiveGaussians_GSOutput
@@ -24,7 +23,7 @@ struct DrawActiveGaussians_GSOutput
 // bool CullActiveListGaussian(uint ActiveListIndex, out float2 NDCPosition, out float LinearDepth) {
 //     uint Level = g_RWActiveGaussianHiZLevelBuffer[ActiveListIndex];
 //     NDCPosition = UnpackUnorm16x2(g_RWActiveGaussianNDCPositionBuffer[ActiveListIndex]) * 4 - 2;
-//     LinearDepth = g_RWActiveGaussianLinearDepthBuffer[ActiveListIndex];
+//     LinearDepth = g_RWActiveGaussianLinearDepthSrcBuffer[ActiveListIndex];
 //     float2 UV = NDCPosition * 0.5 + 0.5;
 //     float4 DepthValues = g_HiZTexture.GatherRed(g_PointClampSampler, UV, Level);
 //     float4 AlphaValues = g_HiATexture.GatherRed(g_PointClampSampler, UV, Level);
@@ -36,8 +35,7 @@ struct DrawActiveGaussians_GSOutput
 [maxvertexcount(6)]
 void DrawActiveGaussians(point DrawActiveGaussians_GSInput Input[1], inout TriangleStream<DrawActiveGaussians_GSOutput> TriStream)
 {
-    int ActiveListIndex = Input[0].PrimitiveIndex;
-    int InstanceIndex   = Input[0].InstanceIndex;
+    int ActiveListIndex = g_RWActiveGaussianIndirectBuffer[Input[0].PrimitiveIndex];
     // if(ActiveListIndex % 4 != UB.FrameIndex % 4) return ;
     // if(CullActiveListGaussian(ActiveListIndex)) return ;
     
@@ -57,12 +55,13 @@ void DrawActiveGaussians(point DrawActiveGaussians_GSInput Input[1], inout Trian
     float2 Right1 = Center + Expand * ( Vec2 -Vec1H);
     float2 Right2 = Center + Expand * ( Vec2 +Vec1H);
     
-    float  Depth   =  g_RWActiveGaussianLinearDepthBuffer[ActiveListIndex];
+    float  Depth   =  g_RWActiveGaussianLinearDepthSrcBuffer[ActiveListIndex];
     
-    // float2 Depth01 = g_RWActiveGaussianQuadLinearDepthsBuffer[ActiveListIndex];
+    // float2 Depth01 = g_RWActiveGaussianQuadLinearDepthSrcBuffer[ActiveListIndex];
     // Magnify according to the expand parameter
     // Depth01 = Depth + (Depth - Depth01) * Expand;
-    int GaussianIndex = g_RWActiveGaussianListBuffer[ActiveListIndex];
+    int GaussianIndex, InstanceIndex;
+    UnpackActiveGaussianIndex(g_RWActiveGaussianListBuffer[ActiveListIndex], InstanceIndex, GaussianIndex);
     Gaussian G = FetchGaussian(GaussianIndex);
     float3x3 InvCov;
     float3 Direction0 = NDC2ToCameraDirectionUnnormalized(C, Top);
@@ -90,7 +89,7 @@ void DrawActiveGaussians(point DrawActiveGaussians_GSInput Input[1], inout Trian
 #endif
     
     // Is the quantilization affecting render quality?
-    int Seed = UB.FrameIndex + InstanceIndex * 77183;
+    int Seed = UB.FrameIndex + InstanceIndex * 77183 + GaussianIndex * 81937121;
     float Q_Noise = 0.01 * (frac(sin(Seed) * 43758.5453) - 0.5f);
     AlbedoAlpha.a = saturate(AlbedoAlpha.a + Q_Noise);
 
@@ -98,7 +97,7 @@ void DrawActiveGaussians(point DrawActiveGaussians_GSInput Input[1], inout Trian
     float  Alpha = AlbedoAlpha.w;
     float  Roughness = G_PBR.Roughness;
     // SHCoefficents3 SH = FetchGaussianSHCoefficients(GaussianIndex, 0);
-    float3 WorldNormal = GaussianInstance_TransformLocalToWorld_Normal(G_PBR.Normal, Input[0].InstanceIndex);
+    float3 WorldNormal = GaussianInstance_TransformLocalToWorld_Normal(G_PBR.Normal, InstanceIndex);
     float3 NormalU = saturateDown(WorldNormal * 0.5 + 0.5);
 
     float InvFarPlane = 1 / C.FarPlane;

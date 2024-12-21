@@ -33,6 +33,9 @@ typedef glm::ivec2 int2;
 typedef glm::ivec3 int3;
 typedef glm::ivec4 int4;
 
+#define INLINE inline
+#else
+#define INLINE 
 #endif
 
 // Some of the simple kernels use this value to determine the work

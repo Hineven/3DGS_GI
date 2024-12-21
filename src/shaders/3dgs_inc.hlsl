@@ -56,6 +56,7 @@ StructuredBuffer<float3x4> g_InstanceTransformBuffer;
 StructuredBuffer<float3x4> g_InstanceInvTransformBuffer;
 // Normal transforms of the gaussian instances (GS groups) (to world space)
 StructuredBuffer<float3x3> g_InstanceNormalTransformBuffer;
+StructuredBuffer<float3x3> g_InstanceInvNormalTransformBuffer;
 // AABBs of the gaussian instances (GS groups)
 // StructuredBuffer<float3>   g_InstanceAABBMinBuffer;
 // StructuredBuffer<float3>   g_InstanceAABBMaxBuffer;
@@ -102,6 +103,7 @@ RWStructuredBuffer<float> g_RWActiveGaussianLinearDepthSrcBuffer;
 // RWStructuredBuffer<float> g_RWActiveGaussianLinearDepthSortedBuffer;
 // Sorted active gaussian indirection list (sorted by depth)
 RWStructuredBuffer<uint>  g_RWActiveGaussianIndirectBuffer;
+RWStructuredBuffer<uint>  g_RWActiveGaussianIndirectSrcBuffer;
 // List of active gaussian instances and gaussian indices (packed into 1 uint)
 RWStructuredBuffer<uint>  g_RWActiveGaussianListBuffer;
 RWStructuredBuffer<float> g_RWActiveGaussianLinearDepthBuffer;

@@ -37,10 +37,18 @@ protected:
     void GenerateDispatchRaysIndirect (const GfxBuffer & thread_count_buffer);
     void GenerateDrawIndirect (const GfxBuffer & vertex_count_buffer);
 
+    GfxBuffer staging_buffer_[kGfxConstant_BackBufferCount];
+    int staging_buffer_frame_index_[kGfxConstant_BackBufferCount];
+    int staging_buffer_frame_offset_[kGfxConstant_BackBufferCount];
     void UploadBufferStaged (GfxBuffer buf, const void * data, size_t size);
+    void ResetStagingBuffers ();
 
     BlueNoiseSampler blue_noise_sampler_;
 
+
+    // -----------------------------
+    // Device resource handles
+    // -----------------------------
     struct {
         GfxBuffer dispatch_indirect_command;
         GfxBuffer dispatch_rays_indirect_command;
@@ -54,8 +62,9 @@ protected:
 
         // Rasterization
         GfxBuffer active_gaussian_count;
-        GfxBuffer active_gaussian_list_src;
         GfxBuffer active_gaussian_list;
+        GfxBuffer active_gaussian_indirect;
+        GfxBuffer active_gaussian_indirect_src;
         GfxBuffer active_gaussian_linear_depth_src;
         GfxBuffer active_gaussian_linear_depth;
 
@@ -136,21 +145,21 @@ protected:
         GfxTexture card_workspace_linear_depth;
 
 
-        GfxTexture card_atlas_color[NUM_CARD_ATLAS];
-        GfxTexture card_atlas_alpha[NUM_CARD_ATLAS];
-        GfxTexture card_atlas_normal[NUM_CARD_ATLAS];
-        GfxTexture card_atlas_linear_depth[NUM_CARD_ATLAS];
+        GfxTexture card_atlas_color;
+        GfxTexture card_atlas_alpha;
+        GfxTexture card_atlas_normal;
+        GfxTexture card_atlas_linear_depth;
         // RGBA16F
-        GfxTexture card_atlas_direct_illumination[NUM_CARD_ATLAS];
+        GfxTexture card_atlas_direct_illumination;
         // RGBA16F
-        GfxTexture card_atlas_indirect_illumination[NUM_CARD_ATLAS];
-        GfxTexture card_atlas_lighting[NUM_CARD_ATLAS];
-        // Used for filtering...etc.
+        GfxTexture card_atlas_indirect_illumination;
+        GfxTexture card_atlas_lighting;
+        // Used for rendering / updating / filtering canvas...etc.
         // I don't want to code more... so the update is only limited to 1 page of the
         // atlas at a time. (anyway 32x32 large tiles in 1 page should be enough for small scenes)
-        GfxTexture card_workspace_direct_illumination;
-        GfxTexture card_workspace_indirect_illumination;
-        GfxTexture card_workspace_lighting;
+        GfxTexture card_workspace_direct_illumination[2];
+        GfxTexture card_workspace_indirect_illumination[2];
+        GfxTexture card_workspace_lighting[2];
 
 
         // The depth buffer used for rasterization
@@ -201,10 +210,17 @@ protected:
         GfxKernel DirectIlluminationTrace3DGSShadowRays;
         GfxKernel SpawnCameraRays;
         GfxKernel DisplayCameraRays;
+        GfxKernel VisualizeMeshCardScene;
 
         GfxKernel TonemapAndDraw;
     } kernel_ {};
 
+    GfxProgram program_ {};
+    GfxSbt sbt_ {};
+
+    // ----------------------------
+    // Options (may change per frame)
+    // ----------------------------
     struct {
         // Maximum number of rays to trace in 1 dispatch.
         int max_num_rays {4 * 1024 * 1024};
@@ -238,26 +254,38 @@ protected:
         uint debug_mode {0};
     } options_;
 
+    // ----------------------------
+    // Uniform buffer allocator
+    // ----------------------------
     GfxBuffer AllocateUBForCurrentFrame (size_t size) ;
     template<typename T>
     inline GfxBuffer AllocateUBForCurrentFrame (int count = 1) {
-        GfxBuffer buf = AllocateUBForCurrentFrame(roundUp(sizeof(T), 256u) * count);
-        buf.setStride(sizeof(T));
+        // Align to 256 bytes for uniform buffers.
+        auto stride = roundUp((uint32_t)sizeof(T), 256u);
+        GfxBuffer buf = AllocateUBForCurrentFrame(stride * count);
+        buf.setStride(stride);
         return buf;
     }
+    // Allocation sizes for each frame.
+    int UB_pool_allocation_sizes_ [kGfxConstant_BackBufferCount] {};
+    int UB_pool_allocation_frames_ [kGfxConstant_BackBufferCount] {};
+    int UB_pool_allocation_offset_ {};
 
+    void ResetUniformBufferPool ();
+
+
+    // ----------------------------
+    // Configuration (consistent across frames)
+    // ----------------------------
     struct {
         int wave_lane_count {};
+        int uniform_buffer_size {4 * 1024 * 1024};
+        int max_num_instances {256};
     } cfg_;
 
-    GfxProgram program_ {};
-
-    GfxSbt sbt_ {};
-
+    // Frame flags and states
     int frame_index_ {};
-
     bool should_build_acceleration_structure_ {true};
-
     bool need_reload_shaders_ {false};
 
     struct {
@@ -274,6 +302,9 @@ protected:
     UniformBlock UB {};
     UniformBlock history_UB_ {};
 
+    // ----------------------------
+    // Meshcards related host data
+    // ----------------------------
     struct {
         std::vector<int> card_set_remove_requests {}; // instance id
         std::vector<int> card_set_add_requests {}; // instance id
@@ -284,6 +315,11 @@ protected:
         std::vector<Card> cards {};
     } MC {}; // Meshcards related host data
 
+    void RequestRedrawAllMeshCardsForAllInstances ();
+
+    // ----------------------------
+    // micro CVar system
+    // ----------------------------
     struct CVar {
         std::string name;
         std::string desc;
@@ -304,13 +340,18 @@ protected:
         double mx;
     };
     std::map<void*, CVar> cvar_;
-    bool auto_switch_debug_ = false;
 
+    // ----------------------------
+    // Misc
+    // ----------------------------
+    // host random number generator
     std::mt19937 rng_;
-
     inline float nextFloat () {
         return std::uniform_real_distribution<float>(0, 1)(rng_);
     }
+
+    // UI related persistent flags
+    bool auto_switch_debug_ = false;
 };
 
 #endif //INC_3DGS_ADVGI_RENDERER_H

@@ -3,17 +3,14 @@
 struct DrawActiveGaussians_GSInput
 {
     uint PrimitiveIndex : TEXCOORD0;
-    uint InstanceIndex  : SV_InstanceID;
 };
 
 DrawActiveGaussians_GSInput DrawActiveGaussians (
-    uint VertexIndex : SV_VertexID,
-    uint InstanceIndex : SV_InstanceID
+    uint VertexIndex : SV_VertexID
 ) {
     DrawActiveGaussians_GSInput Input;
     // In reverse order (farthest to nearest)
     Input.PrimitiveIndex = g_RWActiveGaussianCountBuffer[0] - VertexIndex - 1;
-    Input.InstanceIndex  = InstanceIndex;
     return Input;
 }
 

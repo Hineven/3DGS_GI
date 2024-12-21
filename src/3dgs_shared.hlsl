@@ -46,7 +46,7 @@ struct CameraDescription {
     float2 HZBBaseTexelSize;
 };
 
-int GetCameraType (CameraDescription C) {
+INLINE int GetCameraType (CameraDescription C) {
     // Lowest 4 bits specifies the camera type
     return C.Flags & 0xf;
 }
@@ -120,19 +120,20 @@ struct UniformBlock {
 
     int    DepthFilterRadius;
     float  GaussianClampingScale;
-    uint   CardCount;
-    uint   CardSetCount;
-
-    int2   Debug_CursorPixelCoords;
-    uint   Debug_VisualizeLightGridCascade;
-    float  TonemapExposure;
-
     // Mesh cards will be allocated according to this value (world space size). 
     // (no reallocation if the instance transform changes)
     float  Card_PreferredTexelWorldSize;
-    uint   Padding0;
-    uint   Padding1;
-    uint   Padding2;
+    uint   Debug_CardSetToVisualize;
+
+    float Card_SampleZDepthVisibilityBias;
+    float Card_MinCardViewDirectionWeightToSample;
+    float Card_GaussianClampingScale;
+    float TonemapExposure;
+    
+
+    int2   Debug_CursorPixelCoords;
+    uint   Debug_VisualizeLightGridCascade;
+    uint   Debug_VisualizeMeshCardScene;
 
     DeviceVirtualAddressRange RT_RayGenerationShaderRecord;
     

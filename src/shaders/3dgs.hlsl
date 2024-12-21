@@ -10,6 +10,7 @@
 #include "conventions.hlsl"
 #include "bluenoise.hlsl"
 #include "material.hlsl"
+#include "card.hlsl"
 
 bool IsInvalid (uint Value) {
     return Value == INVALID_U32;
@@ -479,29 +480,44 @@ CameraDescription GetCameraDescription () {
 }
 
 Texture2D<float2> GetDepthTexture (CameraDescription C) {
-    // TODO meshcards
+#ifndef CARD_SHADERS
     return g_GDepthTexture;
+#else
+    return g_CardWorkspace_LinearDepthTexture;
+#endif
 }
 
 RWTexture2D<float2> GetRWDepthTexture (CameraDescription C) {
-    // TODO meshcards
+#ifndef CARD_SHADERS
     return g_RW_GDepthTexture;
+#else
+    return g_RWCardWorkspace_LinearDepthTexture;
+#endif
 }
 
 // Sometimes it stores albedo and alpha. Sometimes it stores color and alpha.
 Texture2D<float4> GetColorTexture (CameraDescription C) {
-    // TODO meshcards
+#ifndef CARD_SHADERS
     return g_GColorTexture;
+#else
+    return g_CardWorkspace_ColorAlphaTexture;
+#endif
 }
 
 RWTexture2D<float4> GetRWColorTexture (CameraDescription C) {
-    // TODO meshcards
+#ifndef CARD_SHADERS
     return g_RW_GColorTexture;
+#else
+    return g_RWCardWorkspace_ColorAlphaTexture;
+#endif
 }
 
 Texture2D<float4>  GetNormalTexture (CameraDescription C) {
-    // TODO meshcards
+#ifndef CARD_SHADERS
     return g_GNormalTexture;
+#else
+    return g_CardWorkspace_NormalTexture;
+#endif
 }
 
 float3 GetTexelNormalFromTextureUV (Texture2D<float4> NormalTexture, float2 UV) {
@@ -509,27 +525,26 @@ float3 GetTexelNormalFromTextureUV (Texture2D<float4> NormalTexture, float2 UV) 
 }
 
 RWTexture2D<float4> GetRWNormalTexture (CameraDescription C) {
-    // TODO meshcards
+#ifndef CARD_SHADERS
     return g_RW_GNormalTexture;
+#else
+    return g_RWCardWorkspace_NormalTexture;
+#endif
 }
 
 Texture2D<float> GetFilteredDepthTexture (CameraDescription C) {
-    // TODO meshcards
     return g_GFilteredDepthTexture;
 }
 
 RWTexture2D<float> GetRWFilteredDepthTexture (CameraDescription C) {
-    // TODO meshcards
     return g_RW_GFilteredDepthTexture;
 }
 
 Texture2D<float> GetZDepthTexture (CameraDescription C) {
-    // TODO meshcards
     return g_GZDepthTexture;
 }
 
 RWTexture2D<float> GetRWZDepthTexture (CameraDescription C) {
-    // TODO meshcards
     return g_RW_GZDepthTexture;
 }
 
@@ -542,41 +557,58 @@ Texture2D<float> GetNearHZBTexture (CameraDescription C) {
 }
 
 Texture2D<float4> GetRadianceTexture (CameraDescription C) {
-    // TODO meshcards
+#ifndef CARD_SHADERS
     return g_Radiance;
+#else
+    return g_CardWorkspace_LightingTexture;
+#endif
 }
 
 RWTexture2D<float4> GetRWRadianceTexture (CameraDescription C) {
-    // TODO meshcards
+#ifndef CARD_SHADERS
     return g_RW_Radiance;
+#else
+    return g_RWCardWorkspace_LightingTexture;
+#endif
 }
 
 Texture2D<float4> GetHistoryRadianceTexture (CameraDescription C) {
+#ifndef CARD_SHADERS
     return g_HistoryRadiance;
+#else
+    return g_CardWorkspace_HistoryLightingTexture;
+#endif
 }
 
 Texture2D<float4> GetDirectIlluminationTexture (CameraDescription C) {
-    // TODO meshcards
+#ifndef CARD_SHADERS
     return g_DirectIllumination;
+#else
+    return g_CardWorkspace_DirectIlluminationTexture;
+#endif
 }
 
 RWTexture2D<float4> GetRWDirectIlluminationTexture (CameraDescription C) {
-    // TODO meshcards
+#ifndef CARD_SHADERS
     return g_RW_DirectIllumination;
+#else
+    return g_RWCardWorkspace_DirectIlluminationTexture;
+#endif
 }
 
 Texture2D<float4> GetHistoryDirectIlluminationTexture (CameraDescription C) {
-    // TODO meshcards
+#ifndef CARD_SHADERS
     return g_HistoryDirectIllumination;
+#else
+    return g_CardWorkspace_HistoryDirectIlluminationTexture;
+#endif
 }
 
 Texture2D<float4> GetFilteredDirectIlluminationTexture (CameraDescription C) {
-    // TODO meshcards
     return g_FilteredDirectIllumination;
 }
 
 RWTexture2D<float4> GetRWFilteredDirectIlluminationTexture (CameraDescription C) {
-    // TODO meshcards
     return g_RW_FilteredDirectIllumination;
 }
 
@@ -725,6 +757,15 @@ float3 SH3Evaluate(float3 ViewDirection, SHCoefficents3 SH3, int Degree)
 	// Seems that 3DGS padded the SH (maybe this made optimization easier?)
 	result += 0.5f;
 	return max(result, 0.0f);
+}
+
+uint PackActiveGaussianIndex (int InstanceIndex, int GaussianIndex) {
+	return (uint(InstanceIndex) << 24) | (GaussianIndex & (0x3FFFFFFu));
+}
+
+void UnpackActiveGaussianIndex (uint PackedIndex, out int InstanceIndex, out int GaussianIndex) {
+	InstanceIndex = int(PackedIndex >> 24);
+	GaussianIndex = int(PackedIndex & 0x3FFFFFFu);
 }
 
 #endif // INC_3DGS_HLSL

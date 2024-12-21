@@ -178,11 +178,26 @@ bool Scene::LoadGaussians (std::filesystem::path path, bool always_load_sh) {
     gsi_transforms_.resize(1);
     gsi_transforms_[0] = glm::mat4x3(1.f);
 
+    gsi_inv_transforms_.resize(gsi_transforms_.size());
+
+    for (int i = 0; i < (int)gsi_transforms_.size(); i++) {
+        glm::mat3 inner = gsi_transforms_[i];
+        glm::mat3 inv_inner = glm::inverse(inner);
+        gsi_inv_transforms_[i] = glm::mat4x3(inv_inner);
+        gsi_inv_transforms_[i][3][0] = -gsi_transforms_[i][3][0];
+        gsi_inv_transforms_[i][3][1] = -gsi_transforms_[i][3][1];
+        gsi_inv_transforms_[i][3][2] = -gsi_transforms_[i][3][2];
+    }
+
     gsi_inv_transforms_.resize(1);
     gsi_inv_transforms_[0] = glm::mat4x3(1.f);
 
     gsi_normal_transforms_.resize(1);
     gsi_normal_transforms_[0] = glm::mat3x3(1.f);
+    gsi_inv_normal_transforms_.resize(gsi_normal_transforms_.size());
+    for (int i = 0; i < (int)gsi_normal_transforms_.size(); i++) {
+        gsi_inv_normal_transforms_[i] = glm::inverse(gsi_normal_transforms_[i]);
+    }
 
     gsi_gs_index_offsets_.resize(1);
     gsi_gs_index_offsets_[0] = 0;
