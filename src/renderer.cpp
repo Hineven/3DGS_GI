@@ -61,17 +61,19 @@ void Renderer::UploadBufferStaged(GfxBuffer buf, const void *data, size_t size) 
     if (staging_buffer_[id].getSize() < staging_buffer_frame_offset_[id] + size) {
         auto new_size = std::max(staging_buffer_frame_offset_[id] + size, staging_buffer_[id].getSize() * 2);
         if (staging_buffer_[id]) gfxDestroyBuffer(gfx, staging_buffer_[id]);
-        staging_buffer_[id] = gfxCreateBuffer(gfx, new_size, data, kGfxCpuAccess_Write);
+        staging_buffer_[id] = gfxCreateBuffer(gfx, new_size, nullptr, kGfxCpuAccess_Write);
         staging_buffer_[id].setName("RendererStagingBuffer");
     }
-    memcpy(gfxBufferGetData(gfx, staging_buffer_[id]), data, size);
-    gfxCommandCopyBuffer(gfx, buf, 0, staging_buffer_[id], 0, size);
+    memcpy((char*)gfxBufferGetData(gfx, staging_buffer_[id]) + staging_buffer_frame_offset_[id], data, size);
+    gfxCommandCopyBuffer(gfx, buf, 0, staging_buffer_[id], staging_buffer_frame_offset_[id], size);
+    staging_buffer_frame_offset_[id] += size;
 }
 
 void Renderer::ResetStagingBuffers() {
     auto gfx = AppInternal::GetInstance().GetGfx();
     for (auto & buf : staging_buffer_) {
         if (buf) gfxDestroyBuffer(gfx, buf);
+        buf = {};
     }
     for (int i = 0; i < kGfxConstant_BackBufferCount; i++) {
         staging_buffer_frame_index_[i] = -1;
@@ -445,6 +447,13 @@ void Renderer::Render() {
         UB.Debug_CursorPixelCoords = glm::ivec2(mouse_pos);
         REGISTER_CVAR(UB.Debug_VisualizeMeshCardScene, "Shade the scene using meshcards queries.", false);
 
+        REGISTER_CVAR(UB.Debug_VisualizeMeshCardAtlas, "Display the atlas directly.", false);
+        REGISTER_CVAR(UB.Debug_VisualizeMeshCardAtlasLayer, "Layer of the atlas to visualize.", 0);
+        REGISTER_CVAR(UB.Debug_VisualizeMeshCardAtlasChannel, "Channel", 0, 0, 3);
+        REGISTER_CVAR(UB.Debug_VisualizeMeshCardAtlasScale, "Scale", 0.5, 0.01, 1);
+
+        REGISTER_CVAR(UB.Debug_VisualizeMeshCardAtlasOffset, "Offset", glm::vec2(0, 0), 0, CARD_ATLAS_RESOLUTION);
+
         gfxSbtGetGpuVirtualAddressRangeAndStride(gfx, sbt_,
             (D3D12_GPU_VIRTUAL_ADDRESS_RANGE *)&UB.RT_RayGenerationShaderRecord,
             (D3D12_GPU_VIRTUAL_ADDRESS_RANGE_AND_STRIDE *)&UB.RT_MissShaderTable,
@@ -583,6 +592,8 @@ void Renderer::Render() {
     // Cards
     gfxProgramSetParameter(gfx, program_, "g_CardSets", buf_.card_sets);
     gfxProgramSetParameter(gfx, program_, "g_Cards", buf_.cards);
+    gfxProgramSetParameter(gfx, program_, "g_RWCardAtlas_ColorTexture", tex_.card_atlas_color);
+    gfxProgramSetParameter(gfx, program_, "g_CardAtlas_ColorTexture", tex_.card_atlas_color);
     gfxProgramSetParameter(gfx, program_, "g_RWCardAtlas_AlphaTexture", tex_.card_atlas_alpha);
     gfxProgramSetParameter(gfx, program_, "g_CardAtlas_AlphaTexture", tex_.card_atlas_alpha);
     gfxProgramSetParameter(gfx, program_, "g_RWCardAtlas_NormalTexture", tex_.card_atlas_normal);
@@ -704,32 +715,34 @@ void Renderer::Render() {
             }
             return result;
         };
-        auto check = [&] (int i, int x, int y, glm::vec2 spans) {
-            for (int dx = 0; dx < spans.x; dx++) {
-                for (int dy = 0; dy < spans.y; dy++) {
-                    if (MC.atlas_occupancy[i][x + dx][y + dy]) {
+        auto check = [&] (int i, int x, int y, glm::vec2 tiles) {
+            for (int dy = 0; dy < tiles.y; dy++) {
+                for (int dx = 0; dx < tiles.x; dx++) {
+                    if (MC.atlas_occupancy[i][y + dy][x + dx]) {
                         return false;
                     }
                 }
             }
             return true;
         };
-        auto find = [&] (glm::ivec2 spans, int start_i = 0, int start_x = 0, int start_y = 0) {
+        auto find = [&] (glm::ivec2 tiles, int start_i = 0, int start_x = 0, int start_y = 0) {
+            int lim_x = (CARD_ATLAS_RESOLUTION / MIN_CARD_RESOLUTION - tiles.x) ;
+            int lim_y = (CARD_ATLAS_RESOLUTION / MIN_CARD_RESOLUTION - tiles.y) ;
             for (int i = start_i; i < NUM_CARD_ATLAS; i++) {
-                for (int x = start_x; x < CARD_ATLAS_RESOLUTION - spans.x; x++) {
-                    for (int y = start_y; y < CARD_ATLAS_RESOLUTION - spans.y; y++) {
-                        if (check(i, x, y, spans)) {
-                            return glm::ivec3(i, x, y);
+                for (int y = start_y; y < lim_y; y++) {
+                    for (int x = start_x; x < lim_x; x++) {
+                        if (check(i, x, y, tiles)) {
+                            return glm::ivec3(x, y, i);
                         }
                     }
                 }
             }
             return glm::ivec3(-1, -1, -1);
         };
-        auto fill = [&] (int i, int x, int y, glm::vec2 spans, int fill_value = 1) {
-            for (int dx = 0; dx < spans.x; dx++) {
-                for (int dy = 0; dy < spans.y; dy++) {
-                    MC.atlas_occupancy[i][x + dx][y + dy] = fill_value;
+        auto fill = [&] (int i, int x, int y, glm::vec2 tiles, int fill_value = 1) {
+            for (int dy = 0; dy < tiles.y; dy++) {
+                for (int dx = 0; dx < tiles.x; dx++) {
+                    MC.atlas_occupancy[i][y + dy][x + dx] = fill_value;
                 }
             }
         };
@@ -746,24 +759,24 @@ void Renderer::Render() {
                 if (flag) {
                     found_card_start_index = i;
                     break;
-                }
+                } else i = j;
             }
             return found_card_start_index;
         };
-        auto allocate_cards = [&] (int card_header_start_index, int num_cards, glm::ivec2 spans) {
+        auto allocate_cards = [&] (int card_header_start_index, int num_cards, glm::ivec2 tiles) {
             int atlas_index = 0, i = 0;
             while (i < num_cards && atlas_index < NUM_CARD_ATLAS) {
-                auto pos = find(spans, atlas_index);
+                auto pos = find(tiles, atlas_index);
                 if (pos.x == -1) {
-                    return false;
+                    atlas_index ++;
                 } else {
-                    fill(pos.x, pos.y, pos.z, spans);
-                    MC.cards[card_header_start_index + i].AtlasBaseCoords = glm::ivec3(pos.y, pos.z, pos.x);
+                    fill(pos.z, pos.x, pos.y, tiles);
+                    MC.cards[card_header_start_index + i].AtlasBaseCoords = pos * MIN_CARD_RESOLUTION;
                     i ++;
-                    atlas_index = pos.x;
+                    atlas_index = pos.z;
                 }
             }
-            return true;
+            return i == num_cards;
         };
 
         // Remove card sets
@@ -780,14 +793,23 @@ void Renderer::Render() {
             int card_index_base = card_set.CardIndexBase;
             auto resolutions = card_set.CardResolutions;
             // remove cards
-            for (int i = 0; i < card_set.NumCards[0]; i ++) {
-                auto & card = MC.cards[card_index_base + i];
-                if (card.AtlasBaseCoords.x != -1) {
-                    fill(card.AtlasBaseCoords.z, card.AtlasBaseCoords.x, card.AtlasBaseCoords.y, {resolutions.y, resolutions.z}, 0);
+            int card_rank = 0;
+            for (int ax = 0; ax < 3; ax ++) {
+                int s_axis = (ax + 1) % 3;
+                int t_axis = (ax + 2) % 3;
+                for (int i = 0; i < card_set.NumCards[ax]; i ++) {
+                    auto & card = MC.cards[card_index_base + card_rank];
+                    if (card.AtlasBaseCoords.x != -1) {
+                        // Clean occupancy
+                        fill(card.AtlasBaseCoords.z, card.AtlasBaseCoords.x, card.AtlasBaseCoords.y,
+                            {resolutions[s_axis], resolutions[t_axis]}, 0);
+                    }
+                    // remove card header
+                    card = {{-1, -1, -1}};
+                    card_rank ++;
                 }
-                card = {{-1, -1, -1}};
             }
-            // remove header
+            // remove set header
             card_set = {};
         }
         // Allocate card sets
@@ -810,14 +832,17 @@ void Renderer::Render() {
             }
             int max_resolution = glm::min(1 << base_level, MAX_CARD_RESOLUTION);
             float factor = (float)max_resolution / max_num_texels;
-            glm::ivec3 texel_counts = glm::ivec3(glm::ceil(world_extents * factor));
+            glm::ivec3 texel_counts = glm::ivec3(glm::ceil(glm::vec3(preferred_num_texels) * factor));
             for (int i = 0; i < 3; i++) {
                 texel_counts[i] = roundUpPow2(glm::clamp(texel_counts[i], MIN_CARD_RESOLUTION, MAX_CARD_RESOLUTION));
             }
             // TODO allocate multiple cards for each axis adaptively
             glm::ivec3 num_cards = {1, 1, 1};
             // Find and allocate texture atlas for the mesh cards (brute force)
-            glm::ivec3 spans = texel_counts / MIN_CARD_RESOLUTION;
+            // The following code produces zeroes. glm substitutes division into multiplying a inversion of integer...
+            // which is for certain 0.
+            //glm::ivec3 tiles = texel_counts / MIN_CARD_RESOLUTION;
+            glm::ivec3 tiles = (1.f / MIN_CARD_RESOLUTION) * glm::vec3(texel_counts);
             int num_cards_to_allocate = 2 * (num_cards.x + num_cards.y + num_cards.z);
             int card_header_offset = find_consecutive_card_headers(num_cards_to_allocate);
             if (card_header_offset == -1) {
@@ -830,13 +855,13 @@ void Renderer::Render() {
             CardSet card_set = {};
             card_set.CardIndexBase = card_header_offset;
             // yz plane
-            assert(allocate_cards(card_header_offset, num_cards.x * 2, glm::ivec2(spans.y, spans.z)));
+            assert(allocate_cards(card_header_offset, num_cards.x * 2, glm::ivec2(tiles.y, tiles.z)));
             card_header_offset += num_cards.x * 2;
-            // xz plane
-            assert(allocate_cards(card_header_offset , num_cards.y * 2, glm::ivec2(spans.x, spans.z)));
+            // zx plane
+            assert(allocate_cards(card_header_offset , num_cards.y * 2, glm::ivec2(tiles.z, tiles.x)));
             card_header_offset += num_cards.y * 2;
             // xy plane
-            assert(allocate_cards(card_header_offset, num_cards.z, glm::ivec2(spans.x, spans.y)));
+            assert(allocate_cards(card_header_offset, num_cards.z * 2, glm::ivec2(tiles.x, tiles.y)));
 
             card_set.CardResolutions = texel_counts;
             card_set.NumCards = num_cards * 2;
@@ -872,9 +897,9 @@ void Renderer::Render() {
             cards_packed.resize(MC.cards.size());
             for (int i = 0; i < (int)MC.cards.size(); i++) {
                 auto & card = MC.cards[i];
-                uint X = card.AtlasBaseCoords.x & 0xffu;
-                X |= (card.AtlasBaseCoords.y & 0xffu) << 8;
-                X |= (card.AtlasBaseCoords.z & 0xffu) << 16;
+                uint X = card.AtlasBaseCoords.x & 0xfffu;
+                X |= (card.AtlasBaseCoords.y & 0xfffu) << 12;
+                X |= (card.AtlasBaseCoords.z & 0xffu) << 24;
                 cards_packed[i] = X;
             }
             UploadBufferStaged(buf_.cards, cards_packed.data(), cards_packed.size() * sizeof(uint));
@@ -903,7 +928,7 @@ void Renderer::Render() {
                 gfxBufferGetData<DrawMeshCardUniformBlock>(gfx, MCUB_range)[0] = MCUB;
                 gfxProgramSetParameter(gfx, program_, "MCUB", MCUB_range);
                 // Clear card atlas data
-                glm::ivec2 card_groups = {divideAndRoundUp(resolution.x, UB.TileDimensions.x), divideAndRoundUp(resolution.y, UB.TileDimensions.y)};
+                glm::ivec2 card_groups = {divideAndRoundUp(resolution.x, TILE_SIZE), divideAndRoundUp(resolution.y, TILE_SIZE)};
                 {
                     auto section = TimedSection(*this, "ClearCard");
                     gfxCommandBindKernel(gfx, kernel_.ClearCard);
@@ -938,16 +963,20 @@ void Renderer::Render() {
                     // Rasterize the G-Buffers
                     auto section = TimedSection(*this, "DrawActiveGaussiansForCard");
                     // Cleared to (0, 0, 0, 0)
-                    gfxCommandClearTexture(gfx, tex_.G_depth);
                     GenerateDrawIndirect(buf_.active_gaussian_count);
+                    gfxCommandClearTexture(gfx, tex_.card_workspace_color_alpha);
+                    gfxCommandClearTexture(gfx, tex_.card_workspace_linear_depth);
+                    gfxCommandClearTexture(gfx, tex_.card_workspace_normal);
                     gfxCommandBindKernel(gfx, kernel_.DrawActiveGaussiansForCard);
                     gfxCommandBindColorTarget(gfx, 0, tex_.card_workspace_color_alpha);
                     gfxCommandBindColorTarget(gfx, 1, tex_.card_workspace_linear_depth);
                     gfxCommandBindColorTarget(gfx, 2, tex_.card_workspace_normal);
+                    gfxCommandSetViewport(gfx, 0, 0, resolution.x, resolution.y);
 
         #ifndef NO_INDIRECT_DISPATCH
                     gfxCommandMultiDrawIndirect(gfx, buf_.draw_indirect_command, 1);
         #endif
+                    gfxCommandSetViewport(gfx);
                 }
 
                 {
@@ -969,13 +998,13 @@ void Renderer::Render() {
             };
             auto render_cards = [&] (int card_set_index) {
                 CardSet & card_set = MC.card_sets[card_set_index];
-                auto num_cards = card_set.NumCards;
+                auto num_cards = glm::ivec3(0.5f * glm::vec3(card_set.NumCards));
                 auto aabb = scene.GetInstanceAABB(instance_id);
-                float offset = 0.01f;
+                float offset = 0.05f;
+                int card_rank = 0;
                 for (int axis = 0; axis < 3; axis ++) {
                     int s_axis = (axis + 1) % 3;
                     int t_axis = (axis + 2) % 3;
-                    int card_rank = 0;
                     glm::ivec2 card_resolution = {card_set.CardResolutions[s_axis], card_set.CardResolutions[t_axis]};
                     for (int direction_sgn = 0; direction_sgn < 2; direction_sgn ++) {
                         for (int i = 0; i < num_cards[axis]; i++) {
@@ -984,13 +1013,20 @@ void Renderer::Render() {
                             card_camera.direction[axis] = direction_sgn ? -1 : 1;
                             card_camera.up = {};
                             card_camera.up[t_axis] = 1;
-                            card_camera.near = glm::mix(aabb.mn[axis], aabb.mx[axis], (float) i / num_cards[axis]);
-                            card_camera.far = glm::mix(aabb.mn[axis], aabb.mx[axis], glm::saturate((float) (i + 1) / num_cards[axis] + offset));
-                            card_camera.min_clip = {aabb.mn[s_axis], aabb.mn[t_axis]};
-                            card_camera.max_clip = {aabb.mx[s_axis], aabb.mx[t_axis]};
+                            float step = 1.f / num_cards[axis];
+                            float t = i * step;
+                            float t_next = (i + 1 + offset) * step;
+                            if (direction_sgn) t = 1 - t, t_next = 1 - t_next;
+                            float near_abs = glm::mix(aabb.mn[axis], aabb.mx[axis], t);
+                            float far_abs = glm::mix(aabb.mn[axis], aabb.mx[axis], glm::saturate(t_next));
+                            card_camera.near = abs(near_abs - (direction_sgn ? aabb.mx[axis] : aabb.mn[axis]));
+                            card_camera.far = abs(far_abs - (direction_sgn ? aabb.mx[axis] : aabb.mn[axis]));
+                            card_camera.min_clip = {asdasdasdasdasdas-aabb.mx[s_axis], aabb.mn[t_axis]};
+                            card_camera.max_clip = {-aabb.mn[s_axis], aabb.mx[t_axis]};
                             card_camera.position = {};
                             card_camera.position[axis] = direction_sgn ? aabb.mx[axis] : aabb.mn[axis];
-                            int card_index = card_set.CardIndexBase + card_set.CardIndexBase + card_rank;
+                            card_camera.type = CameraType::eOrthographic;
+                            int card_index = card_set.CardIndexBase + card_rank;
                             Card & card = MC.cards[card_index];
                             render_card(card_index, card_set_index, card.AtlasBaseCoords, card_resolution, card_camera);
                             card_rank ++;
@@ -1292,6 +1328,12 @@ void Renderer::Render() {
         if (UB.Debug_VisualizeMeshCardScene) {
             auto section = TimedSection(*this, "VisualizeMeshCardScene");
             gfxCommandBindKernel(gfx, kernel_.VisualizeMeshCardScene);
+            gfxCommandDispatch(gfx, UB.TileDimensions.x, UB.TileDimensions.y, 1);
+        }
+
+        if (UB.Debug_VisualizeMeshCardAtlas) {
+            auto section = TimedSection(*this, "VisualizeMeshCardAtlas");
+            gfxCommandBindKernel(gfx, kernel_.VisualizeMeshCardAtlas);
             gfxCommandDispatch(gfx, UB.TileDimensions.x, UB.TileDimensions.y, 1);
         }
 

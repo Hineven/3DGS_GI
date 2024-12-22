@@ -626,7 +626,7 @@ RWTexture2D<float4> GetRWEmissionAlphaTexture (CameraDescription C) {
 
 float3 RecoverWorldSpacePositionNDC2 (CameraDescription C, float2 NDC2, float LinearDepth) {
     float3 Direction = NDC2ToCameraDirectionUnnormalized(C, NDC2);
-    float3 Origin = C.Position + NDC2ToCameraOrigin(C, NDC2);
+    float3 Origin = NDC2ToCameraOrigin(C, NDC2);
     float3 WorldSpacePosition = Origin + LinearDepth * Direction;
     return WorldSpacePosition;
 }

@@ -154,6 +154,13 @@ bool Renderer::CreateResources () {
     tex_.radiance[1] = gfxCreateTexture2D(gfx, width, height, DXGI_FORMAT_R16G16B16A16_FLOAT, 1, zero_clear_value);
     tex_.radiance[1].setName("Radiance1");
 
+    tex_.card_workspace_color_alpha = gfxCreateTexture2D(gfx, MAX_CARD_RESOLUTION, MAX_CARD_RESOLUTION, DXGI_FORMAT_R8G8B8A8_UNORM, 1, zero_clear_value);
+    tex_.card_workspace_color_alpha.setName("CardWorkspaceColorAlpha");
+    tex_.card_workspace_normal = gfxCreateTexture2D(gfx, MAX_CARD_RESOLUTION, MAX_CARD_RESOLUTION, DXGI_FORMAT_R8G8B8A8_UNORM, 1, zero_clear_value);
+    tex_.card_workspace_normal.setName("CardWorkspaceNormal");
+    tex_.card_workspace_linear_depth = gfxCreateTexture2D(gfx, MAX_CARD_RESOLUTION, MAX_CARD_RESOLUTION, DXGI_FORMAT_R16G16_FLOAT, 1, zero_clear_value);
+    tex_.card_workspace_linear_depth.setName("CardWorkspaceLinearDepth");
+
     tex_.card_atlas_color = gfxCreateTexture2DArray(gfx, CARD_ATLAS_RESOLUTION, CARD_ATLAS_RESOLUTION, NUM_CARD_ATLAS, DXGI_FORMAT_R8G8B8A8_UNORM, 1, zero_clear_value);
     tex_.card_atlas_color.setName("CardAtlasColor");
     tex_.card_atlas_alpha = gfxCreateTexture2DArray(gfx, CARD_ATLAS_RESOLUTION, CARD_ATLAS_RESOLUTION, NUM_CARD_ATLAS, DXGI_FORMAT_R8_UNORM, 1, zero_clear_value);
@@ -372,6 +379,8 @@ bool Renderer::CreateKernels () {
                                                            defines_c.size());
         kernel_.VisualizeMeshCardScene = gfxCreateComputeKernel(gfx, program_, "VisualizeMeshCardScene", defines_c.data(),
                                                                 defines_c.size());
+        kernel_.VisualizeMeshCardAtlas = gfxCreateComputeKernel(gfx, program_, "VisualizeMeshCardAtlas", defines_c.data(),
+                                                                defines_c.size());
     }
 
     // Raytracing kernels
@@ -539,6 +548,7 @@ void Renderer::DestroyKernels () {
     gfxDestroyKernel(gfx, kernel_.SpawnCameraRays);
     gfxDestroyKernel(gfx, kernel_.DisplayCameraRays);
     gfxDestroyKernel(gfx, kernel_.VisualizeMeshCardScene);
+    gfxDestroyKernel(gfx, kernel_.VisualizeMeshCardAtlas);
 
     gfxDestroyKernel(gfx, kernel_.DrawAreaLights);
     gfxDestroyKernel(gfx, kernel_.DrawActiveGaussians);

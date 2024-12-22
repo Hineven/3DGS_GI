@@ -90,7 +90,7 @@ void FilterActiveGaussians (uint DispatchID : SV_DispatchThreadID) {
 	float3 ViewSpacePosition = 0;
 	// We only clip gaussians by their positions in this pass.
 	if(IsPointInFrustrum(
-		UB.MainCamera, TransformedPosition, ViewSpacePosition,
+		GetCameraDescription(), TransformedPosition, ViewSpacePosition,
 		 false, GetCameraDescription().NearPlane, 0.1f
 	)) {
 		int GaussianCount = WaveActiveCountBits(1);
@@ -128,7 +128,7 @@ void ProjectActiveGaussians (uint DispatchID : SV_DispatchThreadID) {
 #else
 	// Orthographic projection jacobian
 	// It's the inverse of the scales of the object (in object space)
-	float2 InvScales = float2(C.Projection[0][0], C.Projection[1][1]); 
+	float2 InvScales = abs(float2(C.Projection[0][0], C.Projection[1][1])); 
 	float3x3 J = float3x3(
         InvScales.x, 0, 0,
         0, InvScales.y, 0,
@@ -195,14 +195,15 @@ void ProjectActiveGaussians (uint DispatchID : SV_DispatchThreadID) {
 	// Clamp the radius for gaussians (to fix holes for the dataset)
 	// TODO: this is totally a data-specific trick. But I found it useful.
 #ifdef CARD_SHADERS
- 	// Larger objects have larger clamping scale
-	float SqrLambda1 = max(sqrt(abs(Lambda1)), UB.Card_GaussianClampingScale / InvScales.x);
-	float SqrLambda2 = max(sqrt(abs(Lambda2)), UB.Card_GaussianClampingScale / InvScales.y);
+	float Bias = UB.Card_GaussianClampingScale / InvScales.x;
 #else
-	// Further objects have larger clamping scale
-	float SqrLambda1 = max(sqrt(abs(Lambda1)), UB.GaussianClampingScale / LinearDepth);
-	float SqrLambda2 = max(sqrt(abs(Lambda2)), UB.GaussianClampingScale / LinearDepth);
+	float Bias = UB.GaussianClampingScale / LinearDepth;
 #endif
+	Lambda1 = abs(Lambda1) + Bias*Bias;
+	Lambda2 = abs(Lambda2) + Bias*Bias;
+ 	// Larger objects have larger clamping scale
+	float SqrLambda1 = sqrt(Lambda1);
+	float SqrLambda2 = sqrt(Lambda2);
     float2 ClampedVector1 = Eigenvector1 * SqrLambda1;
 	g_RWActiveGaussianQuadNDCVector0Buffer[ActiveIndex] = PackUnorm16x2(saturateDown(ClampedVector1 * 0.5 + 0.5));
 	float2 ClampedVector2 = Eigenvector2 * SqrLambda2;
@@ -222,8 +223,9 @@ void ResolveGBuffers (uint2 DispatchID : SV_DispatchThreadID) {
 	float2 DepthUnnormalized = GetRWDepthTexture(C)[DispatchID].xy;
 	float Weight = DepthUnnormalized.y;
 	float Depth = DepthUnnormalized.x / max(Weight, 1e-6f);
-	// TODO dynamic thresh
-	if(Weight < 0.05) {
+	float Opacity = GetRWColorTexture(C)[DispatchID].w;
+	bool bEmpty = Opacity < UB.OpaqueThreshold;
+	if(bEmpty) {
 		// Empty pixel.
 		Depth = 0;
 	}
@@ -1086,7 +1088,7 @@ void FinalComposition (uint2 DispatchID : SV_DispatchThreadID) {
         RadianceW = float4(Alpha.xxx, 1);
     } else if(UB.DebugMode == 6) {
 		float3 Color = g_DebugTexture.Load(int3(DispatchID, 0)).rgb;
-		RadianceW = float4(Color.xxx, 1);
+		RadianceW = float4(Color, 1);
 	}
 	float3 ViewDirection = -NDC2ToCameraDirection(C, FilmToNDC2(C, DispatchID + 0.5f.xx));
 	float3 SkyRadiance = EvaluateSkyRadiance(ViewDirection);
@@ -1171,7 +1173,7 @@ void SpawnCameraRays (uint GroupID : SV_GroupID, uint LocalID : SV_GroupThreadID
 		
 		float2 ScreenPosition = float2(TexelCoords) + 0.5f;
 
-		RayToTrace Ray = SpawnCameraRay(UB.MainCamera, ScreenPosition);
+		RayToTrace Ray = SpawnCameraRay(GetCameraDescription(), ScreenPosition);
 		Ray.Seed = UB.HWRT_StochasticRayTracingQuality * BlueNoise_Sample1D(TexelCoords, UB.FrameIndex);
 		int RayIndex = TexelCoords.x + TexelCoords.y * UB.ScreenDimensions.x;
 		g_RWRayToTraceListBuffer[RayIndex] = RayIndex;
@@ -1228,6 +1230,32 @@ void VisualizeMeshCardScene (uint2 DispatchID : SV_DispatchThreadID) {
 		g_RW_DebugTexture[DispatchID] = float4(Accumulator.SolveRadiance(), 1);
 	}
 	
+}
+
+// Inspect card atlas
+[numthreads(TILE_SIZE, TILE_SIZE, 1)]
+void VisualizeMeshCardAtlas (uint2 DispatchID : SV_DispatchThreadID) {
+	CameraDescription C = GetCameraDescription();
+	if(IsOutOfFilm(C, DispatchID)) return;
+	int2 PixelCoords = int2(DispatchID);
+	float3 AtlasPosition = float3(
+		PixelCoords * UB.Debug_VisualizeMeshCardAtlasScale + UB.Debug_VisualizeMeshCardAtlasOffset,
+		UB.Debug_VisualizeMeshCardAtlasLayer
+	);
+	float3 AtlasSamplePosition = float3(AtlasPosition.xy / CARD_ATLAS_RESOLUTION, AtlasPosition.z);
+	if(UB.Debug_VisualizeMeshCardAtlasChannel == 0) {
+		g_RW_DebugTexture[PixelCoords] = float4(
+			g_CardAtlas_ColorTexture.SampleLevel(g_LinearClampSampler, AtlasSamplePosition, 0).rgb, 1);
+	} else if(UB.Debug_VisualizeMeshCardAtlasChannel == 1) {
+		g_RW_DebugTexture[PixelCoords] = float4(
+			g_CardAtlas_AlphaTexture.SampleLevel(g_LinearClampSampler, AtlasSamplePosition, 0).rrr, 1);
+	} else if(UB.Debug_VisualizeMeshCardAtlasChannel == 2) {
+		g_RW_DebugTexture[PixelCoords] = float4(
+			g_CardAtlas_NormalTexture.SampleLevel(g_LinearClampSampler, AtlasSamplePosition, 0).rgb, 1);
+	} else if(UB.Debug_VisualizeMeshCardAtlasChannel == 3) {
+		g_RW_DebugTexture[PixelCoords] = float4(
+			g_CardAtlas_LinearDepthTexture.SampleLevel(g_LinearClampSampler, AtlasSamplePosition, 0).rrr, 1);
+	}
 }
 
 [numthreads(WAVE_SIZE, 1, 1)]

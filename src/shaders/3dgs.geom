@@ -66,12 +66,15 @@ void DrawActiveGaussians(point DrawActiveGaussians_GSInput Input[1], inout Trian
     float3x3 InvCov;
     float3 Direction0 = NDC2ToCameraDirectionUnnormalized(C, Top);
     float3 Direction1 = NDC2ToCameraDirectionUnnormalized(C, 0.5 * (Left1 + Left2));
-    float3 InstanceLocalOrigin     = GaussianInstance_TransformWorldToLocal(C.Position, InstanceIndex);
+    float3 RayOrigin0 = NDC2ToCameraOrigin(C, Top);
+    float3 RayOrigin1 = NDC2ToCameraOrigin(C, 0.5 * (Left1 + Left2));
+    float3 InstanceLocalOrigin0    = GaussianInstance_TransformWorldToLocal(RayOrigin0, InstanceIndex);
+    float3 InstanceLocalOrigin1    = GaussianInstance_TransformWorldToLocal(RayOrigin1, InstanceIndex);
     float3 InstanceLocalDirection0 = GaussianInstance_TransformWorldToLocal_Vector(Direction0, InstanceIndex);
     float3 InstanceLocalDirection1 = GaussianInstance_TransformWorldToLocal_Vector(Direction1, InstanceIndex);
     float2 Depth01 = float2(
-        EvaluateGaussianResponseRayT(InstanceLocalOrigin, InstanceLocalDirection0, G, InvCov),
-        EvaluateGaussianResponseRayT(InstanceLocalOrigin, InstanceLocalDirection1, G, InvCov)
+        EvaluateGaussianResponseRayT(InstanceLocalOrigin0, InstanceLocalDirection0, G, InvCov),
+        EvaluateGaussianResponseRayT(InstanceLocalOrigin1, InstanceLocalDirection1, G, InvCov)
     );
 #ifdef CONSTANT_GAUSSIAN_DEPTH
     Depth01.xy = Depth.xx;

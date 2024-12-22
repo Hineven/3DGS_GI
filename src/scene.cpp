@@ -396,7 +396,7 @@ CameraDescription Camera::PackDescription(
     ret.InvFilmDimensions = glm::vec2(1.0 / film_width, 1.0 / film_height);
 
     ret.Right = axis_right;
-    ret.Flags = 0;
+    ret.Flags = ((uint)type) & 0xfu;
 
     ret.Up = axis_up;
     ret.Padding = 0;

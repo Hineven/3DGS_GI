@@ -137,11 +137,11 @@ protected:
         // fp16x4
         GfxTexture radiance[2];
 
-        // RGBA8
+        // RGBA8 (max card res)
         GfxTexture card_workspace_color_alpha;
-        // RGBA8
+        // RGBA8 (max card res)
         GfxTexture card_workspace_normal;
-        // RG32F
+        // RG32F (max card res)
         GfxTexture card_workspace_linear_depth;
 
 
@@ -154,6 +154,7 @@ protected:
         // RGBA16F
         GfxTexture card_atlas_indirect_illumination;
         GfxTexture card_atlas_lighting;
+        // (max atlas page res)
         // Used for rendering / updating / filtering canvas...etc.
         // I don't want to code more... so the update is only limited to 1 page of the
         // atlas at a time. (anyway 32x32 large tiles in 1 page should be enough for small scenes)
@@ -211,6 +212,7 @@ protected:
         GfxKernel SpawnCameraRays;
         GfxKernel DisplayCameraRays;
         GfxKernel VisualizeMeshCardScene;
+        GfxKernel VisualizeMeshCardAtlas;
 
         GfxKernel TonemapAndDraw;
     } kernel_ {};

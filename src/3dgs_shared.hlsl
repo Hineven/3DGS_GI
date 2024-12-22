@@ -130,10 +130,17 @@ struct UniformBlock {
     float Card_GaussianClampingScale;
     float TonemapExposure;
     
-
     int2   Debug_CursorPixelCoords;
     uint   Debug_VisualizeLightGridCascade;
     uint   Debug_VisualizeMeshCardScene;
+
+    uint   Debug_VisualizeMeshCardAtlas;
+    uint   Debug_VisualizeMeshCardAtlasChannel;
+    uint   Debug_VisualizeMeshCardAtlasLayer;
+    float  Debug_VisualizeMeshCardAtlasScale;
+
+    float2 Debug_VisualizeMeshCardAtlasOffset;
+    uint2 Padding222;
 
     DeviceVirtualAddressRange RT_RayGenerationShaderRecord;
     
