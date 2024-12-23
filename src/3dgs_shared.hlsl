@@ -55,6 +55,7 @@ INLINE int GetCameraType (CameraDescription C) {
 // Each empty line indicates the end of evey 16 bytes packed in the struct.
 struct UniformBlock {
     CameraDescription MainCamera;
+    CameraDescription PreviousMainCamera;
 
     int   NumGaussians;
     // Paper says 0.3 will be good.
@@ -70,6 +71,9 @@ struct UniformBlock {
     int2  ScreenDimensions;
     // Dimension of the screen (in 16x16 tiles)
     int2  TileDimensions;
+
+    float2 InvScreenDimensions;
+    float2 InvTileDimensions;
 
     // Dimension of the screen (in small 8x8 tiles)
     int2 SmallTileDimensions;
@@ -117,6 +121,24 @@ struct UniformBlock {
     uint   DI_NoTemporalDenoising;
     uint   DI_NoSpatialDenoising;
     float  DI_Denoiser_TargetNumSamples;
+
+    uint   II_NoTemporalDenoising;
+    float  II_Denoiser_TargetNumSamples;
+    float  II_SecondaryVertexNormalOffset;
+    uint   SSRC_ProbeFiltering;
+
+    uint   SSRC_NoImportanceSampling;
+    uint   SSRC_UniformScreenProbeCount;
+    uint   SSRC_BaseUpdateRayWaves;
+    uint   SSRC_ResetCache;
+
+    uint   SSRC_MaxAdaptiveProbeCount;
+    uint   SSRC_NoAdaptiveProbes;
+    float2 PreviousTAAJitterUV;
+
+    float2 TAAJitterUV;
+    float  LightingSkyRadianceLOD;
+    float  Padding;
 
     int    DepthFilterRadius;
     float  GaussianClampingScale;
@@ -265,5 +287,15 @@ struct Card {
 #define LIGHT_TYPE_DIRECTIONAL 0
 #define LIGHT_TYPE_SKY  1
 #define LIGHT_TYPE_AREA 2
+
+#define SSRC_PROBE_TEXTURE_SIZE 8
+#define SSRC_PROBE_TEXTURE_TEXEL_COUNT (SSRC_PROBE_TEXTURE_SIZE * SSRC_PROBE_TEXTURE_SIZE)
+#define SSRC_PROBE_TEXTURE_TEXEL_COUNT_L2 6
+#if SSRC_PROBE_TEXTURE_TEXEL_COUNT != (1 << SSRC_PROBE_TEXTURE_TEXEL_COUNT_L2)
+#error "inconsistent SSRC_PROBE_TEXTURE_TEXEL_COUNT and SSRC_PROBE_TEXTURE_TEXEL_COUNT_L2"
+#endif
+#define SSRC_PROBE_NORMAL_OFFSET (2e-4f)
+
+#define SSRC_MAX_NUM_UPDATE_RAY_PER_PROBE 128
 
 #endif // INC_3DGS_SHARED_HLSL

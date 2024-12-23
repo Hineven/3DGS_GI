@@ -134,6 +134,8 @@ protected:
         // fp16x4
         GfxTexture direct_illumination[2];
         GfxTexture filtered_direct_illumination;
+        GfxTexture indirect_illumination[2];
+        GfxTexture filtered_indirect_illumination;
         // fp16x4
         GfxTexture radiance[2];
 

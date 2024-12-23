@@ -22,7 +22,7 @@ RaytracingShaderConfig Trace3DGSShaderConfig =
 
 RaytracingShaderConfig Trace3DGSShadowShaderConfig =
 {
-    8, // max payload size in bytes
+    16, // max payload size in bytes
     8  // max attribute size
 };
 
@@ -39,15 +39,21 @@ struct Trace3DGSPayload {
 struct Trace3DGSShadowPayload {
     float Seed;
     float HitDist;
+    uint  HitMaterial;
+    uint  HitNormal;
 };
 
 // Trace shading rays and shade them according to "3DGS Ray Tracing" in the paper
 [shader("raygeneration")]
 void Trace3DGSRaygen ()
 {
+#ifndef NO_RAY_INDIRECTION_LIST
     int RayRank = DispatchRaysIndex().x;
     if(RayRank >= g_RWRayToTraceCountBuffer[0]) return ;
     int RayIndex = g_RWRayToTraceListBuffer[RayRank];
+#else
+    int RayIndex = DispatchRaysIndex().x;
+#endif
     Trace3DGSPayload Payload;
     RayDesc Ray;
     {
@@ -159,10 +165,12 @@ void Trace3DGSAnyHit (inout Trace3DGSPayload Payload, in BuiltInTriangleIntersec
 
 // Trace shadow rays. We only get the stochastic hit distances.
 [shader("raygeneration")]
-#ifndef DIRECT_ILLUMINATION_SHADOW_RAY_TRACING
-void Trace3DGSShadowRaygen ()
-#else
+#ifdef DIRECT_ILLUMINATION_SHADOW_RAY_TRACING
 void DirectIlluminationTrace3DGSShadowRaygen ()
+#elif defined(PROBE_UPDATE_STOCHASTIC_RAY_TRACING)
+void SSRC_Trace3DGSStochasticRaygen
+#else
+void Trace3DGSShadowRaygen ()
 #endif
 {
     CameraDescription C = GetCameraDescription();
@@ -210,6 +218,12 @@ void DirectIlluminationTrace3DGSShadowRaygen ()
     // Write the result to the output buffer
     bool bHit = Payload.HitDist != 0;
     WriteRayTraceFlags(RayIndex, bHit, bHit ? Payload.HitDist : Ray.TMax);
+#ifdef PROBE_UPDATE_STOCHASTIC_RAY_TRACING
+    // Extra hit results
+    if(bHit) {
+        g_RWRayToTraceResultBuffer[RayIndex] = uint2(Payload.HitMaterial, Payload.HitNormal);
+    }
+#endif
 }
 
 
@@ -246,7 +260,12 @@ void Trace3DGSShadowAnyHit (inout Trace3DGSShadowPayload Payload, in BuiltInTria
     bool ShouldIgnore = Alpha < InPayload.Seed;
     if(ShouldIgnore) {
         InPayload.Seed = (InPayload.Seed - Alpha) / (1 - Alpha);
-    } else InPayload.HitDist = RayT / max(1e-6, RayScaler); // Use the max response T as reply
+    } else {
+        GaussianPBR Pbr = FetchGaussianPBR(HitGaussianIndex);
+        InPayload.HitDist = RayT / max(1e-6, RayScaler); // Use the max response T as reply
+        InPayload.HitNormal   = PackNormal(Pbr.Normal);
+        InPayload.HitMaterial = PackCachedMaterial(Pbr.Albedo, Pbr.Roughness);
+    }
     Payload = InPayload;
     if(ShouldIgnore) IgnoreHit();
 }

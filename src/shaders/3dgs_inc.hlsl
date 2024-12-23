@@ -93,6 +93,10 @@ StructuredBuffer<uint> g_RaysToDispatchCountBuffer;
 RWStructuredBuffer<DispatchIndirectCommand> g_RWDispatchIndirectCommandBuffer;
 StructuredBuffer<uint> g_ThreadsToDispatchCountBuffer;
 
+RWStructuredBuffer<DispatchIndirectCommand> g_RWProbeDispatchCommandBuffer;
+RWStructuredBuffer<DispatchIndirectCommand> g_RWProbePerLaneDispatchCommandBuffer;
+RWStructuredBuffer<uint> g_RWProbeUpdateRayReduceCountBuffer;
+
 RWStructuredBuffer<DrawIndirectCommand> g_RWDrawIndirectCommandBuffer;
 StructuredBuffer<uint> g_VertexToDrawCountBuffer;
 
@@ -146,7 +150,10 @@ RWStructuredBuffer<uint>   g_RWRayToTraceFlagsBuffer;
 #define RAY_FLAG_TMIN_MASK (0x7fffffffu)
 
 // Keep the result (rgba) of the traced ray, RGBA16 Packed
-// Only written to in shading ray tracing, used to visualize the ray tracing scene.
+// Written to in shading ray tracing / probe update ray tracing,
+// used to visualize the ray tracing scene or update SSRC.
+// When tracing stochastic shading rays, the x componment pack cached material
+// the y component packs the hit gaussian normal.
 RWStructuredBuffer<uint2> g_RWRayToTraceResultBuffer;
 
 // Direct illumination required buffers
@@ -188,6 +195,13 @@ Texture2D<float4>        g_DirectIllumination;
 Texture2D<float4>        g_HistoryDirectIllumination;
 RWTexture2D<float4>      g_RW_FilteredDirectIllumination;
 Texture2D<float4>        g_FilteredDirectIllumination;
+
+RWTexture2D<float4>      g_RW_IndirectIllumination;
+Texture2D<float4>        g_IndirectIllumination;
+Texture2D<float4>        g_HistoryIndirectIllumination;
+RWTexture2D<float4>      g_RW_FilteredIndirectIllumination;
+Texture2D<float4>        g_FilteredIndirectIllumination;
+
 RWTexture2D<float4>      g_RW_Radiance;
 Texture2D<float4>        g_Radiance;
 Texture2D<float4>        g_HistoryRadiance;

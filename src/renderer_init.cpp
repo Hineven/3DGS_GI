@@ -149,6 +149,13 @@ bool Renderer::CreateResources () {
     tex_.filtered_direct_illumination = gfxCreateTexture2D(gfx, width, height, DXGI_FORMAT_R16G16B16A16_FLOAT, 1, zero_clear_value);
     tex_.filtered_direct_illumination.setName("FilteredDirectIllumination");
 
+    tex_.indirect_illumination[0] = gfxCreateTexture2D(gfx, width, height, DXGI_FORMAT_R16G16B16A16_FLOAT, 1, zero_clear_value);
+    tex_.indirect_illumination[0].setName("IndirectIllumination0");
+    tex_.indirect_illumination[1] = gfxCreateTexture2D(gfx, width, height, DXGI_FORMAT_R16G16B16A16_FLOAT, 1, zero_clear_value);
+    tex_.indirect_illumination[1].setName("IndirectIllumination1");
+    tex_.filtered_indirect_illumination = gfxCreateTexture2D(gfx, width, height, DXGI_FORMAT_R16G16B16A16_FLOAT, 1, zero_clear_value);
+    tex_.filtered_indirect_illumination.setName("FilteredIndirectIllumination");
+
     tex_.radiance[0] = gfxCreateTexture2D(gfx, width, height, DXGI_FORMAT_R16G16B16A16_FLOAT, 1, zero_clear_value);
     tex_.radiance[0].setName("Radiance0");
     tex_.radiance[1] = gfxCreateTexture2D(gfx, width, height, DXGI_FORMAT_R16G16B16A16_FLOAT, 1, zero_clear_value);
@@ -263,6 +270,9 @@ void Renderer::DestroyResources() {
     gfxDestroyTexture(gfx, tex_.direct_illumination[0]);
     gfxDestroyTexture(gfx, tex_.direct_illumination[1]);
     gfxDestroyTexture(gfx, tex_.filtered_direct_illumination);
+    gfxDestroyTexture(gfx, tex_.indirect_illumination[0]);
+    gfxDestroyTexture(gfx, tex_.indirect_illumination[1]);
+    gfxDestroyTexture(gfx, tex_.filtered_indirect_illumination);
     gfxDestroyTexture(gfx, tex_.radiance[0]);
     gfxDestroyTexture(gfx, tex_.radiance[1]);
 

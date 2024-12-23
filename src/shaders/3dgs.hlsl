@@ -318,6 +318,10 @@ struct RayToTrace {
     bool   bHit;
     // Ray seed when performing stochastic operations
     float  Seed;
+
+    bool IsValid () {
+        return !bHit || RayTMin > 0;
+    }
 };
 
 // Initialize the ray to trace struct
@@ -391,7 +395,7 @@ float EvaluateGaussianResponse (float3 Origin, float3 Direction, Gaussian G, out
     float3x3 InvCov;
     RayMaxResponseT = EvaluateGaussianResponseRayT(Origin, Direction, G, InvCov);
     float3 Position = Origin + RayMaxResponseT * Direction;
-    return exp(dot(G.Position - Position, mul(InvCov, Position - G.Position))) * G.Alpha;//EvaluateGaussian(G, Position);
+    return exp(dot(G.Position - Position, mul(InvCov, Position - G.Position))) * G.Alpha;
 }
 
 // Map (film space) NDC to a direction in world space
@@ -471,8 +475,9 @@ float3 DebugColorHeatMap (float h) {
 }
 
 // Get the current active camera description
-CameraDescription GetCameraDescription () {
+CameraDescription GetCameraDescription (bool bPrevious = false) {
 #ifndef CARD_SHADERS
+    if(bPrevious) return UB.PreviousMainCamera;
     return UB.MainCamera;
 #else
     return MCUB.Camera;
@@ -530,6 +535,10 @@ RWTexture2D<float4> GetRWNormalTexture (CameraDescription C) {
 #else
     return g_RWCardWorkspace_NormalTexture;
 #endif
+}
+
+Texture2D<float> GetMaterialTexture(CameraDescription C) {
+    return g_GMaterialTexture;
 }
 
 Texture2D<float> GetFilteredDepthTexture (CameraDescription C) {
@@ -612,6 +621,26 @@ RWTexture2D<float4> GetRWFilteredDirectIlluminationTexture (CameraDescription C)
     return g_RW_FilteredDirectIllumination;
 }
 
+Texture2D<float4> GetIndirectIlluminationTexture (CameraDescription C) {
+    return g_IndirectIllumination;
+}
+
+RWTexture2D<float4> GetRWIndirectIlluminationTexture (CameraDescription C) {
+    return g_RW_IndirectIllumination;
+}
+
+Texture2D<float4> GetHistoryIndirectIlluminationTexture (CameraDescription C) {
+    return g_HistoryIndirectIllumination;
+}
+
+Texture2D<float4> GetFilteredIndirectIlluminationTexture (CameraDescription C) {
+    return g_FilteredIndirectIllumination;
+}
+
+RWTexture2D<float4> GetRWFilteredIndirectIlluminationTexture (CameraDescription C) {
+    return g_RW_FilteredIndirectIllumination;
+}
+
 Texture2D<float> GetRasterizationDepthTexture (CameraDescription C) {
     return g_RasterizationDepthTexture;
 }
@@ -667,23 +696,6 @@ float3 GetSkyBoxDirection (int i) {
 
 float3 EvaluateSkyRadiance (float3 Direction, float LOD = 0) {
     return g_EnvironmentMap.SampleLevel(g_LinearWrapSampler, Direction, LOD).xyz;
-}
-
-// Copy-pasted from UE5. A simple and fast way to get an interleaved gradient noise.
-
-// high frequency dither pattern appearing almost random without banding steps
-//note: from "NEXT GENERATION POST PROCESSING IN CALL OF DUTY: ADVANCED WARFARE"
-//      http://advances.realtimerendering.com/s2014/index.html
-// Epic extended by FrameId
-// ~7 ALU operations (2 frac, 3 mad, 2 *)
-// @return 0..1
-float InterleavedGradientNoise( float2 uv, float FrameId )
-{
-	// magic values are found by experimentation
-	uv += FrameId * (float2(47, 17) * 0.695f);
-
-    const float3 magic = float3( 0.06711056f, 0.00583715f, 52.9829189f );
-    return frac(magic.z * frac(dot(uv, magic.xy)));
 }
 
 float3 ReprojectToPreviousUVWFromUVW (CameraDescription C, float3 UVW) {
@@ -766,6 +778,16 @@ uint PackActiveGaussianIndex (int InstanceIndex, int GaussianIndex) {
 void UnpackActiveGaussianIndex (uint PackedIndex, out int InstanceIndex, out int GaussianIndex) {
 	InstanceIndex = int(PackedIndex >> 24);
 	GaussianIndex = int(PackedIndex & 0x3FFFFFFu);
+}
+
+uint PackCachedMaterial (float3 Albedo, float Roughness) {
+    return PackUnorm8x4Safe(float4(Albedo, Roughness));
+}
+
+Material UnpackCachedMaterial (uint Packed) {
+    float4 Unpacked = UnpackUnorm8x4(Packed);
+    Material M = MakeMaterial(0, Unpacked.xyz, Unpacked.w);
+    return M;
 }
 
 #endif // INC_3DGS_HLSL

@@ -57,6 +57,17 @@ uint PackUnorm16x2 (float2 Unpacked) {
     return uint(Unpacked.x * 65536.0f) + (uint(Unpacked.y * 65536.0f) << 16);
 }
 
+int2 UnpackUint16x2 (uint Packed) {
+    return int2(
+        Packed & 0xFFFF,
+        Packed >> 16
+    );
+}
+
+uint PackUint16x2 (int2 Unpacked) {
+    return uint(Unpacked.x) + (uint(Unpacked.y) << 16);
+}
+
 uint2 PackFp16x4Safe (float4 Unpacked) {
     // Clamp to fp16 range
     Unpacked = clamp(Unpacked, -65504.0f, 65504.0f);
@@ -121,6 +132,38 @@ uint PackRGBA8 (float4 Unpacked) {
 }
 
 float4 UnpackRGBA8 (uint Packed) {
+    return float4(
+        (Packed & 0xFFu) / 256.0f,
+        ((Packed >> 8u) & 0xFF) / 256.0f,
+        ((Packed >> 16u) & 0xFFu) / 256.0f,
+        ((Packed >> 24u) & 0xFFu) / 256.0f
+    );
+}
+
+uint PackNormal (float3 Normal) {
+    Normal = saturateDown((Normal + 1.f) * 0.5f);
+    return uint(Normal.x * 1024.0f) 
+        | (uint(Normal.y * 1024.0f) << 10)
+        | (uint(Normal.z * 4096.0f) << 20);
+} 
+
+float3 UnpackNormal (uint Packed) {
+    return normalize(float3(
+        (Packed & 0x3FFu) / 1024.0f + (1.f / 2048.0f),
+        ((Packed >> 10u) & 0x3FFu) / 1024.0f + (1.f / 2048.0f),
+        ((Packed >> 20u) & 0xFFFu) / 4096.0f + (1.f / 8192.0f)
+    ) * 2.f - 1.f);
+}
+
+uint PackUnorm8x4Safe (float4 Unpacked) {
+    Unpacked = saturateDown(Unpacked);
+    return uint(Unpacked.x * 256.0f) 
+        | (uint(Unpacked.y * 256.0f) << 8)
+        | (uint(Unpacked.z * 256.0f) << 16)
+        | (uint(Unpacked.w * 256.0f) << 24);
+}
+
+float4 UnpackUnorm8x4 (uint Packed) {
     return float4(
         (Packed & 0xFFu) / 256.0f,
         ((Packed >> 8u) & 0xFF) / 256.0f,

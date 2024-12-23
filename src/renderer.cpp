@@ -1021,8 +1021,9 @@ void Renderer::Render() {
                             float far_abs = glm::mix(aabb.mn[axis], aabb.mx[axis], glm::saturate(t_next));
                             card_camera.near = abs(near_abs - (direction_sgn ? aabb.mx[axis] : aabb.mn[axis]));
                             card_camera.far = abs(far_abs - (direction_sgn ? aabb.mx[axis] : aabb.mn[axis]));
-                            card_camera.min_clip = {asdasdasdasdasdas-aabb.mx[s_axis], aabb.mn[t_axis]};
-                            card_camera.max_clip = {-aabb.mn[s_axis], aabb.mx[t_axis]};
+                            // FIXME here handness may change, so the clip space may change directions...
+                            card_camera.min_clip = {aabb.mn[s_axis], aabb.mn[t_axis]};
+                            card_camera.max_clip = {aabb.mx[s_axis], aabb.mx[t_axis]};
                             card_camera.position = {};
                             card_camera.position[axis] = direction_sgn ? aabb.mx[axis] : aabb.mn[axis];
                             card_camera.type = CameraType::eOrthographic;
