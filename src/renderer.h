@@ -33,6 +33,8 @@ protected:
     void DestroyResources ();
     void DestroyKernels ();
 
+    void ComputeShadingLUT ();
+
     void GenerateDispatchIndirect (const GfxBuffer & thread_count_buffer);
     void GenerateDispatchRaysIndirect (const GfxBuffer & thread_count_buffer);
     void GenerateDrawIndirect (const GfxBuffer & vertex_count_buffer);
@@ -196,7 +198,31 @@ protected:
         GfxKernel CompactRayTraces;
         GfxKernel ResolveDirectLighting;
         GfxKernel SpatialFilterDirectIllumination[2];
-        GfxKernel TemporalFilterDirectIllumination;
+        GfxKernel SSRC_ReInsertHashGridTiles;
+        GfxKernel SSRC_AllocateUniformProbes;
+        GfxKernel SSRC_AllocateAdaptiveProbes;
+        GfxKernel SSRC_PrepareProbeProcessing;
+        GfxKernel SSRC_ResetProbeTexels;
+        GfxKernel SSRC_ReprojectProbeHistory;
+        GfxKernel SSRC_AllocateProbeUpdateRays;
+        GfxKernel SSRC_SetRayCounts;
+        GfxKernel SSRC_SampleProbeUpdateRay;
+        GfxKernel TraceRaysInScreenSpaceForSSRC;
+        // Trace3DGSProbeUpdateRays
+        GfxKernel SSRC_ResolveRayDepths;
+        GfxKernel SSRC_ResolveHitLightingFromScreenHistory;
+        GfxKernel SSRC_SampleLightRays;
+        GfxKernel SSRC_PrepareClearNewHashGridTileCells;
+        GfxKernel SSRC_ClearNewHashGridTileCells;
+        // Trace3DGSShadowRaysWithoutIndirectionList
+        GfxKernel SSRC_ResolveHitDirectLightingFromTraceResult;
+        GfxKernel SSRC_FilterHashGrids;
+        GfxKernel SSRC_ResolveProbeUpdateRayRadianceFromCells;
+        GfxKernel SSRC_UpdateProbes;
+        GfxKernel SSRC_FilterProbes;
+        GfxKernel SSRC_PadProbeTextureEdges;
+        GfxKernel SSRC_IntegrateASG;
+        GfxKernel TemporalDenoiseLighting;
         GfxKernel FinalComposition;
 
         GfxKernel ClearCard;
@@ -211,6 +237,7 @@ protected:
         // Trace shadow rays
         GfxKernel Trace3DGSShadowRays;
         GfxKernel DirectIlluminationTrace3DGSShadowRays;
+        GfxKernel Trace3DGSProbeUpdateRays;
         GfxKernel SpawnCameraRays;
         GfxKernel DisplayCameraRays;
         GfxKernel VisualizeMeshCardScene;

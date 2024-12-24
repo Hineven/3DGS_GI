@@ -3,8 +3,6 @@
 
 #include "../3dgs_shared.hlsl"
 
-#define INVALID_U32 (0xffffffffu)
-
 #define ZDEPTH_INF (1.f + FLT_EPSILON)
 
 #ifndef WAVE_SIZE
@@ -125,7 +123,7 @@ RWStructuredBuffer<float3>  g_RWActiveGaussianColorBuffer;
 // Raytracing related stuff
 
 // States of rays to be traced (or during tracing)
-// Number of rays in total
+// Number of rays to trace before any compression
 RWStructuredBuffer<uint>   g_RWRayCountBuffer;
 // Number of rays to be traced.
 RWStructuredBuffer<uint>   g_RWRayToTraceCountBuffer;
@@ -158,9 +156,12 @@ RWStructuredBuffer<uint2> g_RWRayToTraceResultBuffer;
 
 // Direct illumination required buffers
 // Threshould for shadow ray occlusion tests.
-RWStructuredBuffer<float> g_RWDirectIlluminationRayOcclusionThresholdBuffer;
+RWStructuredBuffer<float>  g_RWDirectIlluminationRayOcclusionThresholdBuffer;
 // Contribution of the direct illumination for each ray (fp16 packed)
 RWStructuredBuffer<uint2>  g_RWDirectIlluminationRayContributionBuffer;
+// Some direct illumination shadow rays are used to shade hits from probe update rays.
+// Memorize indirections.
+RWStructuredBuffer<uint>  g_RWDirectIlluminationRayProbeUpdateRayIndexBuffer;
 
 // G-Buffers
 RWTexture2D<float4>      g_RW_GColorTexture; // stores color / albedo; alpha (gaussians / combined)
@@ -221,6 +222,9 @@ SamplerState g_PointWrapSampler;
 // Output buffers for ray tracing proxy mesh building
 RWStructuredBuffer<float3> g_RW_RTVertexBuffer;
 RWStructuredBuffer<uint>   g_RW_RTIndexBuffer;
+
+// Shading LUT 
+Texture2D<float2> g_ShadingLUTTexture;
 
 #ifndef NDEBUG
 // Buffers for debugging purposes

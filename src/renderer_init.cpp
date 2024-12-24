@@ -371,7 +371,7 @@ bool Renderer::CreateKernels () {
         defines_c.push_back("FILTER_PASS=1");
         kernel_.SpatialFilterDirectIllumination[1] = gfxCreateComputeKernel(gfx, program_, "SpatialFilterDirectIllumination", defines_c.data(), defines_c.size());
         defines_c.pop_back();
-        kernel_.TemporalFilterDirectIllumination = gfxCreateComputeKernel(gfx, program_, "TemporalFilterDirectIllumination", defines_c.data(), defines_c.size());
+        asdf
 
         kernel_.FinalComposition = gfxCreateComputeKernel(gfx, program_, "FinalComposition", defines_c.data(), defines_c.size());
 
@@ -543,7 +543,29 @@ void Renderer::DestroyKernels () {
     gfxDestroyKernel(gfx, kernel_.ResolveDirectLighting);
     gfxDestroyKernel(gfx, kernel_.SpatialFilterDirectIllumination[0]);
     gfxDestroyKernel(gfx, kernel_.SpatialFilterDirectIllumination[1]);
-    gfxDestroyKernel(gfx, kernel_.TemporalFilterDirectIllumination);
+    gfxDestroyKernel(gfx, kernel_.SSRC_ReInsertHashGridTiles);
+    gfxDestroyKernel(gfx, kernel_.SSRC_AllocateUniformProbes);
+    gfxDestroyKernel(gfx, kernel_.SSRC_AllocateAdaptiveProbes);
+    gfxDestroyKernel(gfx, kernel_.SSRC_PrepareProbeProcessing);
+    gfxDestroyKernel(gfx, kernel_.SSRC_ResetProbeTexels);
+    gfxDestroyKernel(gfx, kernel_.SSRC_ReprojectProbeHistory);
+    gfxDestroyKernel(gfx, kernel_.SSRC_AllocateProbeUpdateRays);
+    gfxDestroyKernel(gfx, kernel_.SSRC_SetRayCounts);
+    gfxDestroyKernel(gfx, kernel_.SSRC_SampleProbeUpdateRay);
+    gfxDestroyKernel(gfx, kernel_.TraceRaysInScreenSpaceForSSRC);
+    gfxDestroyKernel(gfx, kernel_.SSRC_ResolveRayDepths);
+    gfxDestroyKernel(gfx, kernel_.SSRC_ResolveHitLightingFromScreenHistory);
+    gfxDestroyKernel(gfx, kernel_.SSRC_SampleLightRays);
+    gfxDestroyKernel(gfx, kernel_.SSRC_PrepareClearNewHashGridTileCells);
+    gfxDestroyKernel(gfx, kernel_.SSRC_ClearNewHashGridTileCells);
+    gfxDestroyKernel(gfx, kernel_.SSRC_ResolveHitDirectLightingFromTraceResult);
+    gfxDestroyKernel(gfx, kernel_.SSRC_FilterHashGrids);
+    gfxDestroyKernel(gfx, kernel_.SSRC_ResolveProbeUpdateRayRadianceFromCells);
+    gfxDestroyKernel(gfx, kernel_.SSRC_UpdateProbes);
+    gfxDestroyKernel(gfx, kernel_.SSRC_FilterProbes);
+    gfxDestroyKernel(gfx, kernel_.SSRC_PadProbeTextureEdges);
+    gfxDestroyKernel(gfx, kernel_.SSRC_IntegrateASG);
+    gfxDestroyKernel(gfx, kernel_.TemporalDenoiseLighting);
     gfxDestroyKernel(gfx, kernel_.FinalComposition);
 
     gfxDestroyKernel(gfx, kernel_.ClearCard);
@@ -555,6 +577,8 @@ void Renderer::DestroyKernels () {
 
     gfxDestroyKernel(gfx, kernel_.Trace3DGSRays);
     gfxDestroyKernel(gfx, kernel_.Trace3DGSShadowRays);
+    gfxDestroyKernel(gfx, kernel_.DirectIlluminationTrace3DGSShadowRays);
+    gfxDestroyKernel(gfx, kernel_.Trace3DGSProbeUpdateRays);
     gfxDestroyKernel(gfx, kernel_.SpawnCameraRays);
     gfxDestroyKernel(gfx, kernel_.DisplayCameraRays);
     gfxDestroyKernel(gfx, kernel_.VisualizeMeshCardScene);
@@ -588,6 +612,8 @@ bool Renderer::Initialize () {
 
     ResetUniformBufferPool();
     ResetStagingBuffers();
+
+    ComputeShadingLUT();
 
     return true;
 }

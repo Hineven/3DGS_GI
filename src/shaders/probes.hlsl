@@ -46,14 +46,21 @@ RWStructuredBuffer<uint>  g_RWProbeUpdateRayOffsetBuffer;
 RWStructuredBuffer<uint>  g_RWProbeAllUpdateRayCountBuffer;
 // Index probe index with ray index (index with RayIndex / WAVE_SIZE as rays are allocated in waves)
 RWStructuredBuffer<uint>  g_RWProbeUpdateRayProbeBuffer;
-// Octahedral packed direction for each update ray (fp16x2)
-// RWStructuredBuffer<uint>  g_RWUpdateRayDirectionBuffer;
-// bBypass & Traced Radiance & InvPdf for each update ray
+// Normal packed update ray direction
+RWStructuredBuffer<uint>  g_RWProbeUpdateRayDirectionBuffer;
+// bBypass & Traced Radiance & InvPdf for each update ray 
 RWStructuredBuffer<uint2>  g_RWProbeUpdateRayResultBuffer;
+// Hit depth for each update ray
+RWStructuredBuffer<float>  g_RWProbeUpdateRayDepthBuffer;
 
 // Number of ray hits that failed in reprojection and requires DI shading
 RWStructuredBuffer<uint>  g_RWProbeUpdateRayHitShadeCountBuffer;
 RWStructuredBuffer<uint>  g_RWProbeUpdateRayHitShadeListBuffer;
+
+// Some probe update rays should resolve radiance results from the hash grid cache
+// Record the cache cell index they resolve result from
+RWStructuredBuffer<uint>  g_RWProbeUpdateRayResolveHashCellIndexBuffer;
+
 // Extra info for secondary vertex shading
 RWStructuredBuffer<float3>  g_RWProbeUpdateRayHitShadePositionBuffer;
 RWStructuredBuffer<uint>    g_RWProbeUpdateRayHitShadeViewDirectionBuffer;

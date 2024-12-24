@@ -131,4 +131,12 @@ float3 InterpolateBarycentrics (float3 A, float3 B, float3 C, float2 UV) {
     return A * (1 - UV.x - UV.y) + B * UV.x + C * UV.y;
 }
 
+uint hadd (uint2 Value) {
+    return Value.x + Value.y;
+}
+
+uint hadd (uint4 Value) {
+    return Value.x + Value.y + Value.z + Value.w;
+}
+
 #endif

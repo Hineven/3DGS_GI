@@ -3,6 +3,8 @@
 
 #include "device_shared.hlsl"
 
+#define INVALID_U32 (0xffffffffu)
+
 #define TILE_SIZE 16
 
 #define SMALL_TILE_SIZE 8
@@ -134,11 +136,24 @@ struct UniformBlock {
 
     uint   SSRC_MaxAdaptiveProbeCount;
     uint   SSRC_NoAdaptiveProbes;
-    float2 PreviousTAAJitterUV;
+    uint   SSRC_TileJitterFrameSeed;
+    uint   SSRC_PreviousTileJitterFrameSeed;
 
     float2 TAAJitterUV;
     float  LightingSkyRadianceLOD;
-    float  Padding;
+    uint   HashGrids_MaxNumSamples;
+
+    float3 HashGrids_Center;
+    float  HashGrids_InvCascadeRadius;
+
+    float  HashGrids_CellSize;
+    uint   HashGrids_NumBuckets;
+    uint   HashGrids_NumInterleavedEntriesPerBucket;
+    uint   HashGrids_TargetSampleCount;
+
+    uint   HashGrids_TileLifespan;
+    uint   HashGrids_MaxNumEntriesSearchedPerBucket;
+    float2 PreviousTAAJitterUV;
 
     int    DepthFilterRadius;
     float  GaussianClampingScale;
@@ -147,10 +162,10 @@ struct UniformBlock {
     float  Card_PreferredTexelWorldSize;
     uint   Debug_CardSetToVisualize;
 
-    float Card_SampleZDepthVisibilityBias;
-    float Card_MinCardViewDirectionWeightToSample;
-    float Card_GaussianClampingScale;
-    float TonemapExposure;
+    float  Card_SampleZDepthVisibilityBias;
+    float  Card_MinCardViewDirectionWeightToSample;
+    float  Card_GaussianClampingScale;
+    float  TonemapExposure;
     
     int2   Debug_CursorPixelCoords;
     uint   Debug_VisualizeLightGridCascade;
