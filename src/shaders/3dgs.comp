@@ -1006,6 +1006,16 @@ void SpatialFilterDirectIllumination (uint2 DispatchID : SV_DispatchThreadID) {
 
 // Indirect illumination
 
+[numthreads(WAVE_SIZE, 1, 1)]	
+void SSRC_ResetHashGrids (uint DispatchID : SV_DispatchThreadID) {
+	if(DispatchID >= UB.HashGrids_MaxNumTiles) return;
+	if(DispatchID == 0) {
+		g_HashGrids_HistoryActiveTileCountBuffer[0] = 0;
+		g_HashGrids_FreeTileCountBuffer[0] = UB.HashGrids_MaxNumTiles;
+	}
+	g_HashGrids_FreeTileListBuffer[DispatchID] = UB.HashGrids_MaxNumTiles - DispatchID - 1;
+}
+
 [numthreads(WAVE_SIZE, 1, 1)]
 void SSRC_ReInsertHashGridTiles (uint DispatchID : SV_DispatchThreadID) {
 	if(DispatchID >= g_HashGrids_HistoryActiveTileCountBuffer[0]) return;
@@ -1342,12 +1352,12 @@ void SSRC_PrepareProbeProcessing () {
     DispatchIndirectCommand Command = (DispatchIndirectCommand)0;
     Command.ThreadGroupCountX = UB.SSRC_NumUniformScreenProbes + g_RWAdaptiveProbeCountBuffer[0];
     Command.ThreadGroupCountY = 1;
-    Command.ThreadGroupCountX = 1;
+    Command.ThreadGroupCountZ = 1;
     g_RWProbeDispatchCommandBuffer[0] = Command;
 
     Command.ThreadGroupCountX = (UB.SSRC_NumUniformScreenProbes + g_RWAdaptiveProbeCountBuffer[0] + WAVE_SIZE - 1) / WAVE_SIZE;
     Command.ThreadGroupCountY = 1;
-    Command.ThreadGroupCountX = 1;
+    Command.ThreadGroupCountZ = 1;
     g_RWProbePerLaneDispatchCommandBuffer[0] = Command;
 
     // Also, set the reduce count for scan sum update rays
@@ -1502,7 +1512,7 @@ void SSRC_ReprojectProbeHistory (int LocalID : SV_GroupThreadID, int GroupID : S
                     int SrcTexelIndex = BaseProbeTexelIndex + LocalID;
                     int2 ProbeTexelCoords = int2(SrcTexelIndex % SSRC_PROBE_TEXTURE_SIZE, SrcTexelIndex / SSRC_PROBE_TEXTURE_SIZE); 
                     float4 RadianceDepth = GetScreenProbeOctahedronRadianceDepth(SrcProbeIndex, ProbeTexelCoords, true);
-                    float3 RayRadiance = RadianceDepth.xyz;
+					float3 RayRadiance = RadianceDepth.xyz;
                     float RayDepth = RadianceDepth.w;
                     float3 Tangent, Bitangent;
                     GetOrthoVectors(SrcProbeHeader.Normal, Tangent, Bitangent);
@@ -1589,7 +1599,8 @@ void SSRC_AllocateProbeUpdateRays (int DispatchID : SV_DispatchThreadID) {
     float Trust = g_RWProbeHistoryTrustTexture[ProbeIndex];
     int   Bonus = UB.SSRC_BaseUpdateRayWaves + (1.f - Trust) * 
 		(SSRC_MAX_NUM_UPDATE_RAY_PER_PROBE / WAVE_SIZE - UB.SSRC_BaseUpdateRayWaves);
-    g_RWProbeUpdateRayCountsBuffer[DispatchID] = min(WAVE_SIZE * max(1, Bonus), SSRC_MAX_NUM_UPDATE_RAY_PER_PROBE);
+	if(UB.SSRC_ResetCache) Bonus = 0;
+	g_RWProbeUpdateRayCountsBuffer[DispatchID] = min(WAVE_SIZE * max(1, Bonus), SSRC_MAX_NUM_UPDATE_RAY_PER_PROBE);
 }
 
 // A scan sum is performed to accumulate allocated raycount for each probe
@@ -1598,8 +1609,8 @@ void SSRC_AllocateProbeUpdateRays (int DispatchID : SV_DispatchThreadID) {
 void SSRC_SetRayCounts () {
     int ProbeCount = UB.SSRC_NumUniformScreenProbes + g_RWAdaptiveProbeCountBuffer[0];
     g_RWProbeAllUpdateRayCountBuffer[0] = g_RWProbeUpdateRayOffsetsBuffer[ProbeCount];
-	g_RWRayToTraceCountBuffer[0] = g_RWProbeAllUpdateRayCountBuffer[0];
-	g_RWRayCountBuffer[0] = g_RWProbeAllUpdateRayCountBuffer[0];
+	g_RWRayToTraceCountBuffer[0] = g_RWProbeUpdateRayOffsetsBuffer[ProbeCount];
+	g_RWRayCountBuffer[0] = g_RWProbeUpdateRayOffsetsBuffer[ProbeCount];
 }
 
 // TODO: Should we study from Lumen to use a large number? (Lumen: 0.1)
@@ -1658,8 +1669,6 @@ void SSRC_SampleProbeUpdateRays (int LocalID : SV_GroupThreadID, int GroupID : S
     // Allocate a number of rays to sample the probe octahedron
     // Round to a multiple of WAVE_SIZE with russian roulette for maximum wave coherence & occupancy
     int NumProbeOctahedronSamples = RayCount;
-    // Calculate the probability for using octahedron sampling (use RR result)
-    float P_SampleOctahedron = 1;
     // Sample probe octahedron
     [unroll(SSRC_MAX_NUM_UPDATE_RAY_PER_PROBE / WAVE_SIZE)]
     for(int RayRankBase = 0; RayRankBase < NumProbeOctahedronSamples; RayRankBase += WAVE_SIZE) {
@@ -1682,12 +1691,9 @@ void SSRC_SampleProbeUpdateRays (int LocalID : SV_GroupThreadID, int GroupID : S
         RayDirection = RayDirection.x * ProbeTangent + RayDirection.y * ProbeBitangent + RayDirection.z * Header.Normal;
         // Convert from [0, 1]^2 to S^2
         float AreaCorrectionFactor = 1.f;
-#ifdef UE_STYLE_HEMISPHERICAL_OCT_MAPPING
-        AreaCorrectionFactor = 1.f / (SSRC_PROBE_TEXTURE_TEXEL_COUNT * g_UEHemiOctahedronCorrectionLutTexture.Load(int3(TexelCoords, 0)).x);
-#endif
         OctPdf = OctPdf * AreaCorrectionFactor * (1.f / TWO_PI);
 
-        float RayPdf = OctPdf * P_SampleOctahedron;
+        float RayPdf = OctPdf;
         if(UB.SSRC_NoImportanceSampling) {
             RayPdf = UniformSampleHemispherePdf();
             RayDirection = UniformSampleHemisphere(u2);
@@ -1697,6 +1703,12 @@ void SSRC_SampleProbeUpdateRays (int LocalID : SV_GroupThreadID, int GroupID : S
         float bValid = dot(RayDirection, Header.Normal) > 0;
         int ProbeIndex1 = ProbeIndex.x + ProbeIndex.y * UB.TileDimensions.x;
         int RayIndex = RayRank + g_RWProbeUpdateRayOffsetsBuffer[ProbeIndex1];
+		if(WaveIsFirstLane()) {
+			// Record the probe index for the (wave of) ray
+			g_RWProbeUpdateRayProbeBuffer[RayIndex / WAVE_SIZE] = PackUint16x2(ProbeIndex);
+		}
+		// Setup ray to trace indirection list (for later compound tracing)
+		g_RWRayToTraceListBuffer[RayIndex] = RayIndex;
         if(RayPdf >= MIN_PDF_TO_TRACE && bValid) {
 			// A valid update ray is spawned
 			// Queue up for a ray trace
@@ -1845,6 +1857,7 @@ void SSRC_SampleLightRays (uint DispatchID : SV_DispatchThreadID) {
 	uint2 PackedHitResult = g_RWRayToTraceResultBuffer[ProbeUpdateRayIndex];
 	Material HitMaterial = UnpackCachedMaterial(PackedHitResult.x);
 	float3 HitNormal     = UnpackNormal(PackedHitResult.y);
+	HitMaterial.Normal = HitNormal;
 	// Offset the hit position to avoid self-intersection
 	HitPosition += HitNormal * UB.II_SecondaryVertexNormalOffset;
 
@@ -1974,10 +1987,10 @@ void SSRC_ClearNewHashGridTileCells (uint GroupID : SV_GroupID, uint LocalID : S
 			g_HashGrids_CellValueBuffer[DWordIndex] = 0;
 		}
 	}
-	Start = TileIndex * HASHGRIDS_NUM_CELLS_PER_TILE * 4;
-	for(int BaseCellOffset = 0; BaseCellOffset < (HASHGRIDS_NUM_CELLS_PER_TILE * 4); BaseCellOffset += WAVE_SIZE) {
+	Start = TileIndex * HASHGRIDS_TILE_CELL_MIP_OFFSET_1 * 4;
+	for(int BaseCellOffset = 0; BaseCellOffset < (HASHGRIDS_TILE_CELL_MIP_OFFSET_1 * 4); BaseCellOffset += WAVE_SIZE) {
 		int DWordIndex = Start + BaseCellOffset + LocalID;
-		if(DWordIndex < (HASHGRIDS_NUM_CELLS_PER_TILE * 4)) {
+		if(DWordIndex < (HASHGRIDS_TILE_CELL_MIP_OFFSET_1 * 4)) {
 			g_HashGrids_UpdateCellValueXBuffer[DWordIndex] = 0;
 		}
 	}
@@ -2018,7 +2031,8 @@ void SSRC_ResolveHitDirectLightingFromTraceResult (uint DispatchID : SV_Dispatch
 		// Bypass hash grid cache, directly transfer radiance from DI results
 		if(Result.bBypass) {
 			Result.Radiance = Radiance;
-			WriteProbeUpdateRayResult(ProbeUpdateRayIndex, Result);
+			// FIXME
+			// WriteProbeUpdateRayResult(ProbeUpdateRayIndex, Result);
 		}
 	}
 }
@@ -2132,7 +2146,8 @@ void SSRC_ResolveProbeUpdateRayRadianceFromCells (uint DispatchID : SV_DispatchT
 	if(!Result.bBypass) {
 		// Resolve radiance from hash grid cache if no bypass is specified
 		Result.Radiance = Radiance.xyz;
-		WriteProbeUpdateRayResult(ProbeUpdateRayIndex, Result);
+		// FIXME
+		// WriteProbeUpdateRayResult(ProbeUpdateRayIndex, Result);
 	}
 }
 
@@ -2791,7 +2806,7 @@ void TemporalDenoiseLighting (uint2 DispatchID : SV_DispatchThreadID) {
 			}
 			float ClampedOldSampleCount = min(OldSampleCount, max(UB.DI_Denoiser_TargetNumSamples - NewSampleCount_DI, 0));
 			float SampleCount = ClampedOldSampleCount + NewSampleCount_DI;
-			float BlendingFactor = ClampedOldSampleCount / SampleCount;
+			float BlendingFactor = ClampedOldSampleCount / max(SampleCount, 1e-4f);
 			DenoisedDI = float4(
 				lerp(NewDirectIllumination_C.rgb, OldDirectIllumination, BlendingFactor),
 				SampleCount
@@ -2805,7 +2820,7 @@ void TemporalDenoiseLighting (uint2 DispatchID : SV_DispatchThreadID) {
 			}
 			float ClampedOldSampleCount = min(OldSampleCount, max(UB.II_Denoiser_TargetNumSamples - NewSampleCount_II_Diffuse, 0));
 			float SampleCount = ClampedOldSampleCount + NewSampleCount_II_Diffuse;
-			float BlendingFactor = ClampedOldSampleCount / SampleCount;
+			float BlendingFactor = ClampedOldSampleCount / max(SampleCount, 1e-4f);
 			DenoisedII_Diffuse = float4(
 				lerp(NewIndirectIllumination_Diffuse_C.rgb, OldIndirectIllumination_Diffuse, BlendingFactor),
 				SampleCount
@@ -2837,10 +2852,12 @@ void FinalComposition (uint2 DispatchID : SV_DispatchThreadID) {
 
 	// 1. Direct illumination
 	Material M = FetchMaterial(C, DispatchID);
-	RadianceW.rgb += DirectIllumination * M.Albedo;
+	// RadianceW.rgb += DirectIllumination * M.Albedo;
 
 	// 2. Indirect illumination 
 	RadianceW.rgb += IndirectIllumination * M.Albedo;
+
+	RadianceW.rgb = g_RWProbeColorTexture.Load(int3(DispatchID / 2, 0)).rgb;
 
 	// Debugging
 	if(UB.DebugMode == 1) {

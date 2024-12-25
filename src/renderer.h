@@ -261,6 +261,7 @@ protected:
         GfxKernel CompactRayTraces;
         GfxKernel ResolveDirectLighting;
         GfxKernel SpatialFilterDirectIllumination[2];
+        GfxKernel SSRC_ResetHashGrids;
         GfxKernel SSRC_ReInsertHashGridTiles;
         GfxKernel SSRC_AllocateUniformProbes;
         GfxKernel SSRC_AllocateAdaptiveProbes[SSRC_MAX_ADAPTIVE_PROBE_LAYERS];
@@ -391,6 +392,7 @@ protected:
     // Frame flags and states
     int frame_index_ {};
     bool should_build_acceleration_structure_ {true};
+    bool should_reset_hash_grids_ {true};
     bool need_reload_shaders_ {false};
 
     struct {

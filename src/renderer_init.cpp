@@ -526,6 +526,7 @@ bool Renderer::CreateKernels () {
         defines_c.push_back("FILTER_PASS=1");
         kernel_.SpatialFilterDirectIllumination[1] = gfxCreateComputeKernel(gfx, program_, "SpatialFilterDirectIllumination", defines_c.data(), defines_c.size());
         defines_c.pop_back();
+        kernel_.SSRC_ResetHashGrids = gfxCreateComputeKernel(gfx, program_, "SSRC_ResetHashGrids", defines_c.data(), defines_c.size());
         kernel_.SSRC_ReInsertHashGridTiles = gfxCreateComputeKernel(gfx, program_, "SSRC_ReInsertHashGridTiles", defines_c.data(), defines_c.size());
         kernel_.SSRC_AllocateUniformProbes = gfxCreateComputeKernel(gfx, program_, "SSRC_AllocateUniformProbes", defines_c.data(), defines_c.size());
         for (int i = 0; i < SSRC_MAX_ADAPTIVE_PROBE_LAYERS; i++) {
@@ -759,6 +760,7 @@ void Renderer::DestroyKernels () {
     gfxDestroyKernel(gfx, kernel_.ResolveDirectLighting);
     gfxDestroyKernel(gfx, kernel_.SpatialFilterDirectIllumination[0]);
     gfxDestroyKernel(gfx, kernel_.SpatialFilterDirectIllumination[1]);
+    gfxDestroyKernel(gfx, kernel_.SSRC_ResetHashGrids);
     gfxDestroyKernel(gfx, kernel_.SSRC_ReInsertHashGridTiles);
     gfxDestroyKernel(gfx, kernel_.SSRC_AllocateUniformProbes);
     for (int i = 0; i < SSRC_MAX_ADAPTIVE_PROBE_LAYERS; i ++) {
@@ -831,11 +833,13 @@ bool Renderer::InitializeConfig () {
         return false;
     }
     cfg_.wave_lane_count = 32;
+    return true;
 }
 
 bool Renderer::Initialize () {
     // Reset flags and counters
     should_build_acceleration_structure_ = true;
+    should_reset_hash_grids_ = true;
     frame_index_ = 0;
 
     rng_ = std::mt19937(0);

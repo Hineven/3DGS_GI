@@ -140,8 +140,8 @@ struct UniformBlock {
     uint   SSRC_PreviousTileJitterFrameSeed;
 
     float2 TAAJitterUV;
-    float  LightingSkyRadianceLOD;
     uint   HashGrids_MaxNumSamples;
+    uint   HashGrids_MaxNumTiles;
 
     float3 HashGrids_Center;
     float  HashGrids_InvCascadeRadius;
@@ -167,17 +167,19 @@ struct UniformBlock {
     float  Card_GaussianClampingScale;
     float  TonemapExposure;
     
-    int2   Debug_CursorPixelCoords;
+    
+    float  LightingSkyRadianceLOD;
     uint   Debug_VisualizeLightGridCascade;
-    uint   Debug_VisualizeMeshCardScene;
+    int2   Debug_CursorPixelCoords;
 
+    uint   Debug_VisualizeMeshCardScene;
     uint   Debug_VisualizeMeshCardAtlas;
     uint   Debug_VisualizeMeshCardAtlasChannel;
     uint   Debug_VisualizeMeshCardAtlasLayer;
-    float  Debug_VisualizeMeshCardAtlasScale;
 
     float2 Debug_VisualizeMeshCardAtlasOffset;
-    uint2 Padding222;
+    float  Debug_VisualizeMeshCardAtlasScale;
+    uint   Padding222;
 
     DeviceVirtualAddressRange RT_RayGenerationShaderRecord;
     
