@@ -91,12 +91,12 @@ StructuredBuffer<uint> g_RaysToDispatchCountBuffer;
 RWStructuredBuffer<DispatchIndirectCommand> g_RWDispatchIndirectCommandBuffer;
 StructuredBuffer<uint> g_ThreadsToDispatchCountBuffer;
 
+RWStructuredBuffer<DrawIndirectCommand> g_RWDrawIndirectCommandBuffer;
+StructuredBuffer<uint> g_VertexToDrawCountBuffer;
+
 RWStructuredBuffer<DispatchIndirectCommand> g_RWProbeDispatchCommandBuffer;
 RWStructuredBuffer<DispatchIndirectCommand> g_RWProbePerLaneDispatchCommandBuffer;
 RWStructuredBuffer<uint> g_RWProbeUpdateRayReduceCountBuffer;
-
-RWStructuredBuffer<DrawIndirectCommand> g_RWDrawIndirectCommandBuffer;
-StructuredBuffer<uint> g_VertexToDrawCountBuffer;
 
 // Number of active gaussians. Updated every frame.
 RWStructuredBuffer<uint>  g_RWActiveGaussianCountBuffer;
@@ -210,6 +210,9 @@ Texture2D<float4>        g_HistoryRadiance;
 // ZDepth for regular meshes
 Texture2D<float>         g_RasterizationDepthTexture;
 
+// Shading LUT 
+Texture2D<float2> g_ShadingLUTTexture;
+
 // All non-resource uniforms
 ConstantBuffer<UniformBlock> UB;
 ConstantBuffer<DrawMeshCardUniformBlock> MCUB;
@@ -223,8 +226,6 @@ SamplerState g_PointWrapSampler;
 RWStructuredBuffer<float3> g_RW_RTVertexBuffer;
 RWStructuredBuffer<uint>   g_RW_RTIndexBuffer;
 
-// Shading LUT 
-Texture2D<float2> g_ShadingLUTTexture;
 
 #ifndef NDEBUG
 // Buffers for debugging purposes

@@ -58,6 +58,8 @@ void Trace3DGSRaygen ()
     RayDesc Ray;
     {
         RayToTrace RayData = FetchRayToTrace(RayIndex, UB.RT_MaxTraceDistance);
+        // Early out if the ray is invalid
+        if(!RayData.IsValid()) return;
         Ray.Origin = RayData.Origin;
         Ray.Direction = RayData.Direction;
         Ray.TMin = RayData.RayTMin;
@@ -168,15 +170,18 @@ void Trace3DGSAnyHit (inout Trace3DGSPayload Payload, in BuiltInTriangleIntersec
 #ifdef DIRECT_ILLUMINATION_SHADOW_RAY_TRACING
 void DirectIlluminationTrace3DGSShadowRaygen ()
 #elif defined(PROBE_UPDATE_STOCHASTIC_RAY_TRACING)
-void SSRC_Trace3DGSStochasticRaygen
+void Trace3DGSProbeUpdateRaysRaygen
 #else
 void Trace3DGSShadowRaygen ()
 #endif
 {
-    CameraDescription C = GetCameraDescription();
+#ifndef NO_RAY_INDIRECTION_LIST
     int RayRank = DispatchRaysIndex().x;
     if(RayRank >= g_RWRayToTraceCountBuffer[0]) return ;
     int RayIndex = g_RWRayToTraceListBuffer[RayRank];
+#else
+    int RayIndex = DispatchRaysIndex().x;
+#endif
     Trace3DGSShadowPayload Payload = (Trace3DGSShadowPayload) 0;
     RayDesc Ray;
     {
@@ -194,6 +199,8 @@ void Trace3DGSShadowRaygen ()
         float  LinearDepth  = GetFilteredDepthTexture(C).Load(int3(FilmPosition, 0)).x;
         RayData.Origin = RecoverWorldSpacePosition(C, FilmPosition, LinearDepth);
 #endif
+        // Early out if the ray is invalid
+        if(!RayData.IsValid()) return;
         Ray.Origin = RayData.Origin;
         Ray.Direction = RayData.Direction;
         Ray.TMin = RayData.RayTMin;
@@ -236,6 +243,8 @@ RayDesc GetRayDesc () {
     return Ray;
 }
 
+
+// TODO reduce bandwidth by packing gaussian data
 [shader("anyhit")]
 void Trace3DGSShadowAnyHit (inout Trace3DGSShadowPayload Payload, in BuiltInTriangleIntersectionAttributes HitAttr)
 {

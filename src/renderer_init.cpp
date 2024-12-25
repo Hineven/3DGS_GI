@@ -21,6 +21,13 @@ bool Renderer::CreateResources () {
     buf_.draw_indirect_command = gfxCreateBuffer<DrawIndirectCommand>(gfx, 1);
     buf_.draw_indirect_command.setName("DrawIndirectCommand");
 
+    buf_.probe_dispatch_command = gfxCreateBuffer<DispatchIndirectCommand>(gfx, 1);
+    buf_.probe_dispatch_command.setName("ProbeDispatchCommand");
+    buf_.probe_per_lane_dispatch_command = gfxCreateBuffer<DispatchIndirectCommand>(gfx, 1);
+    buf_.probe_per_lane_dispatch_command.setName("ProbePerLaneDispatchCommand");
+
+    buf_.probe_update_ray_reduce_count = gfxCreateBuffer<uint>(gfx, 1);
+    buf_.probe_update_ray_reduce_count.setName("ProbeUpdateRayReduceCount");
 
     buf_.LightGrid_grid_light_list_allocator = gfxCreateBuffer<uint>(gfx, 1);
     buf_.LightGrid_grid_light_list_allocator.setName("LightGridGridLightListAllocator");
@@ -31,6 +38,59 @@ bool Renderer::CreateResources () {
     buf_.LightGrid_grid_light_list_offset.setName("LightGridGridLightListOffset");
     buf_.LightGrid_grid_light_list = gfxCreateBuffer<uint>(gfx, options_.light_grid_max_num_entries);
     buf_.LightGrid_grid_light_list.setName("LightGridGridLightList");
+
+    buf_.HashGrids_free_tile_count = gfxCreateBuffer<uint>(gfx, 1);
+    buf_.HashGrids_free_tile_count.setName("HashGridsFreeTileCount");
+    buf_.HashGrids_free_tile_list = gfxCreateBuffer<uint>(gfx, options_.HashGrids_max_num_tiles);
+    buf_.HashGrids_free_tile_list.setName("HashGridsFreeTileList");
+    buf_.HashGrids_bucket_hash = gfxCreateBuffer<uint>(gfx, options_.HashGrids_max_num_buckets * options_.HashGrids_num_slots_per_bucket);
+    buf_.HashGrids_bucket_hash.setName("HashGridsBucketHash");
+    buf_.HashGrids_bucket_tile_index = gfxCreateBuffer<uint>(gfx, options_.HashGrids_max_num_buckets * options_.HashGrids_num_slots_per_bucket);
+    buf_.HashGrids_bucket_tile_index.setName("HashGridsBucketTileIndex");
+    buf_.HashGrids_tile_timestamp = gfxCreateBuffer<uint>(gfx, options_.HashGrids_max_num_tiles);
+    buf_.HashGrids_tile_timestamp.setName("HashGridsTileTimestamp");
+    buf_.HashGrids_tile_bucket_hash = gfxCreateBuffer<uint>(gfx, options_.HashGrids_max_num_tiles);
+    buf_.HashGrids_tile_bucket_hash.setName("HashGridsTileBucketHash");
+    buf_.HashGrids_cell_value = gfxCreateBuffer<uint2>(gfx, options_.HashGrids_max_num_tiles * HASHGRIDS_NUM_CELLS_PER_TILE);
+    buf_.HashGrids_cell_value.setName("HashGridsCellValue");
+    buf_.HashGrids_update_cell_value_X = gfxCreateBuffer<uint4>(gfx, options_.HashGrids_max_num_tiles * HASHGRIDS_TILE_CELL_MIP_OFFSET_1);
+    buf_.HashGrids_update_cell_value_X.setName("HashGridsUpdateCellValueX");
+    buf_.HashGrids_update_tile_count = gfxCreateBuffer<uint>(gfx, 1);
+    buf_.HashGrids_update_tile_count.setName("HashGridsUpdateTileCount");
+    buf_.HashGrids_update_tile_list = gfxCreateBuffer<uint>(gfx, options_.HashGrids_max_num_tiles);
+    buf_.HashGrids_update_tile_list.setName("HashGridsUpdateTileList");
+    buf_.HashGrids_active_tile_count_before_allocation = gfxCreateBuffer<uint>(gfx, 1);
+    buf_.HashGrids_active_tile_count_before_allocation.setName("HashGridsActiveTileCountBeforeAllocation");
+    buf_.HashGrids_active_tile_count[0] = gfxCreateBuffer<uint>(gfx, 1);
+    buf_.HashGrids_active_tile_count[0].setName("HashGridsActiveTileCount0");
+    buf_.HashGrids_active_tile_count[1] = gfxCreateBuffer<uint>(gfx, 1);
+    buf_.HashGrids_active_tile_count[1].setName("HashGridsActiveTileCount1");
+    buf_.HashGrids_active_tile_list[0] = gfxCreateBuffer<uint>(gfx, options_.HashGrids_max_num_tiles);
+    buf_.HashGrids_active_tile_list[0].setName("HashGridsActiveTileList");
+    buf_.HashGrids_active_tile_list[1] = gfxCreateBuffer<uint>(gfx, options_.HashGrids_max_num_tiles);
+    buf_.HashGrids_active_tile_list[1].setName("HashGridsActiveTileList");
+
+    // Leave 1 extra slot for the "sum all" operation
+    buf_.probe_update_ray_counts = gfxCreateBuffer<uint>(gfx, options_.SSRC_max_num_probes + 1);
+    buf_.probe_update_ray_counts.setName("ProbeUpdateRayCounts");
+    buf_.probe_update_ray_offsets = gfxCreateBuffer<uint>(gfx, options_.SSRC_max_num_probes + 1);
+    buf_.probe_update_ray_offsets.setName("ProbeUpdateRayOffsets");
+    buf_.probe_all_update_ray_count = gfxCreateBuffer<uint>(gfx, 1);
+    buf_.probe_all_update_ray_count.setName("ProbeAllUpdateRayCount");
+    buf_.probe_update_ray_probe = gfxCreateBuffer<uint>(gfx, divideAndRoundUp(options_.SSRC_max_num_probe_update_rays, cfg_.wave_lane_count));
+    buf_.probe_update_ray_probe.setName("ProbeUpdateRayProbe");
+    buf_.probe_update_ray_direction = gfxCreateBuffer<uint>(gfx, options_.SSRC_max_num_probe_update_rays);
+    buf_.probe_update_ray_direction.setName("ProbeUpdateRayDirection");
+    buf_.probe_update_ray_result = gfxCreateBuffer<uint2>(gfx, options_.SSRC_max_num_probe_update_rays);
+    buf_.probe_update_ray_result.setName("ProbeUpdateRayResult");
+    buf_.probe_update_ray_depth = gfxCreateBuffer<float>(gfx, options_.SSRC_max_num_probe_update_rays);
+    buf_.probe_update_ray_hit_shade_count = gfxCreateBuffer<uint>(gfx, 1);
+    buf_.probe_update_ray_hit_shade_count.setName("ProbeUpdateRayHitShadeCount");
+    buf_.probe_update_ray_hit_shade_list = gfxCreateBuffer<uint>(gfx, options_.SSRC_max_num_probe_update_rays);
+    buf_.probe_update_ray_hit_shade_list.setName("ProbeUpdateRayHitShadeList");
+    buf_.probe_update_ray_resolve_hash_cell_index = gfxCreateBuffer<uint>(gfx, options_.SSRC_max_num_probe_update_rays);
+    buf_.adaptive_probe_count = gfxCreateBuffer<uint>(gfx, 1);
+    buf_.adaptive_probe_count.setName("AdaptiveProbeCount");
 
     buf_.active_gaussian_count = gfxCreateBuffer<int>(gfx, 1);
     buf_.active_gaussian_count.setName("GaussianActiveCount");
@@ -88,10 +148,15 @@ bool Renderer::CreateResources () {
     buf_.ray_to_trace_result.setName("RayToTraceResult");
 
     int max_num_pixels = width * height;
-    buf_.direct_illumination_ray_occlusion_threshold = gfxCreateBuffer<float>(gfx, max_num_pixels);
+    buf_.direct_illumination_ray_occlusion_threshold = gfxCreateBuffer<float>(gfx, std::max(max_num_pixels, options_.SSRC_max_num_probe_update_rays));
     buf_.direct_illumination_ray_occlusion_threshold.setName("DirectIlluminationRayOcclusionThreshold");
-    buf_.direct_illumination_ray_contribution = gfxCreateBuffer<uint2>(gfx, max_num_pixels);
+    buf_.direct_illumination_ray_contribution = gfxCreateBuffer<uint2>(gfx, std::max(max_num_pixels, options_.SSRC_max_num_probe_update_rays));
     buf_.direct_illumination_ray_contribution.setName("DirectIlluminationRayContribution");
+    buf_.direct_illumination_ray_probe_update_ray_index = gfxCreateBuffer(gfx, options_.SSRC_max_num_probe_update_rays);
+    buf_.direct_illumination_ray_probe_update_ray_index.setName("DirectIlluminationRayProbeUpdateRayIndex");
+
+    assert(max_num_rays >= options_.SSRC_max_num_probe_update_rays);
+    assert(max_num_rays >= max_num_pixels);
 
     buf_.card_sets = gfxCreateBuffer<uint2>(gfx, cfg_.max_num_instances);
     buf_.card_sets.setName("CardSets");
@@ -131,6 +196,8 @@ bool Renderer::CreateResources () {
     tex_.G_zdepth[0].setName("G_zdepth0");
     tex_.G_zdepth[1] = gfxCreateTexture2D(gfx, width, height, DXGI_FORMAT_R32_FLOAT, 1, zero_clear_value);
     tex_.G_zdepth[1].setName("G_zdepth1");
+    tex_.G_filtered_depth = gfxCreateTexture2D(gfx, width, height, DXGI_FORMAT_R32_FLOAT, 1, zero_clear_value);
+    tex_.G_filtered_depth.setName("G_filtered_depth");
     int num_mips = gfxCalculateMipCount(width, height);
     assert(num_mips > 1);
     tex_.near_HZB = gfxCreateTexture2D(gfx, divideAndRoundUp(width, 2), divideAndRoundUp(height, 2), DXGI_FORMAT_R32_FLOAT, num_mips - 1, zero_clear_value);
@@ -139,8 +206,52 @@ bool Renderer::CreateResources () {
     tex_.debug = gfxCreateTexture2D(gfx, width, height, DXGI_FORMAT_R16G16B16A16_FLOAT, 1, zero_clear_value);
     tex_.debug.setName("Debug");
 
-    tex_.G_filtered_depth = gfxCreateTexture2D(gfx, width, height, DXGI_FORMAT_R32_FLOAT, 1, zero_clear_value);
-    tex_.G_filtered_depth.setName("G_filtered_depth");
+    int probe_width = divideAndRoundUp(width, TILE_SIZE);
+    int probe_height = divideAndRoundUp(options_.SSRC_max_num_probes, probe_width);
+    tex_.probe_screen_coords[0] = gfxCreateTexture2D(gfx, probe_width, probe_height, DXGI_FORMAT_R32_UINT);
+    tex_.probe_screen_coords[0].setName("ProbeScreenCoords0");
+    tex_.probe_screen_coords[1] = gfxCreateTexture2D(gfx, probe_width, probe_height, DXGI_FORMAT_R32_UINT);
+    tex_.probe_screen_coords[1].setName("ProbeScreenCoords1");
+    tex_.probe_linear_depth[0] = gfxCreateTexture2D(gfx, probe_width, probe_height, DXGI_FORMAT_R32_FLOAT);
+    tex_.probe_linear_depth[0].setName("ProbeLinearDepth0");
+    tex_.probe_linear_depth[1] = gfxCreateTexture2D(gfx, probe_width, probe_height, DXGI_FORMAT_R32_FLOAT);
+    tex_.probe_linear_depth[1].setName("ProbeLinearDepth1");
+    tex_.probe_world_position[0] = gfxCreateTexture2D(gfx, probe_width, probe_height, DXGI_FORMAT_R32G32B32_FLOAT);
+    tex_.probe_world_position[0].setName("ProbeWorldPosition0");
+    tex_.probe_world_position[1] = gfxCreateTexture2D(gfx, probe_width, probe_height, DXGI_FORMAT_R32G32B32_FLOAT);
+    tex_.probe_world_position[1].setName("ProbeWorldPosition1");
+    tex_.probe_normal[0] = gfxCreateTexture2D(gfx, probe_width, probe_height, DXGI_FORMAT_R32_UINT);
+    tex_.probe_normal[0].setName("ProbeNormal0");
+    tex_.probe_normal[1] = gfxCreateTexture2D(gfx, probe_width, probe_height, DXGI_FORMAT_R32_UINT);
+    tex_.probe_normal[1].setName("ProbeNormal1");
+    int probe_atlas_width = probe_width * SSRC_PROBE_TEXTURE_SIZE;
+    int probe_atlas_height = probe_height * SSRC_PROBE_TEXTURE_SIZE;
+    tex_.probe_color[0] = gfxCreateTexture2D(gfx, probe_atlas_width, probe_atlas_height, DXGI_FORMAT_R16G16B16A16_FLOAT);
+    tex_.probe_color[0].setName("ProbeColor0");
+    tex_.probe_color[1] = gfxCreateTexture2D(gfx, probe_atlas_width, probe_atlas_height, DXGI_FORMAT_R16G16B16A16_FLOAT);
+    tex_.probe_color[1].setName("ProbeColor1");
+    int probe_atlas_width_ex = probe_width * (1 + SSRC_PROBE_TEXTURE_SIZE + 1);
+    int probe_atlas_height_ex = probe_height * (1 + SSRC_PROBE_TEXTURE_SIZE + 1);
+    tex_.probe_sample_color = gfxCreateTexture2D(gfx, probe_atlas_width_ex, probe_atlas_height_ex, DXGI_FORMAT_R16G16B16A16_FLOAT);
+    tex_.probe_sample_color.setName("ProbeSampleColor");
+    tex_.probe_SH_coefficients_R = gfxCreateTexture2D(gfx, probe_width * 2, probe_height, DXGI_FORMAT_R16G16B16A16_FLOAT);
+    tex_.probe_SH_coefficients_R.setName("ProbeSHCoefficientsR");
+    tex_.probe_SH_coefficients_G = gfxCreateTexture2D(gfx, probe_width * 2, probe_height, DXGI_FORMAT_R16G16B16A16_FLOAT);
+    tex_.probe_SH_coefficients_G.setName("ProbeSHCoefficientsG");
+    tex_.probe_SH_coefficients_B = gfxCreateTexture2D(gfx, probe_width * 2, probe_height, DXGI_FORMAT_R16G16B16A16_FLOAT);
+    tex_.probe_SH_coefficients_B.setName("ProbeSHCoefficientsB");
+    tex_.probe_irradiance = gfxCreateTexture2D(gfx, probe_width, probe_height, DXGI_FORMAT_R16G16B16A16_FLOAT);
+    tex_.probe_irradiance.setName("ProbeIrradiance");
+    tex_.probe_history_trust = gfxCreateTexture2D(gfx, probe_width, probe_height, DXGI_FORMAT_R32_FLOAT);
+    tex_.probe_history_trust.setName("ProbeHistoryTrust");
+    tex_.tile_adaptive_probe_count[0] = gfxCreateTexture2D(gfx, probe_width, probe_height, DXGI_FORMAT_R32_UINT);
+    tex_.tile_adaptive_probe_count[0].setName("TileAdaptiveProbeCount0");
+    tex_.tile_adaptive_probe_count[1] = gfxCreateTexture2D(gfx, probe_width, probe_height, DXGI_FORMAT_R32_UINT);
+    tex_.tile_adaptive_probe_count[1].setName("TileAdaptiveProbeCount1");
+    tex_.tile_adaptive_probe_index[0] = gfxCreateTexture2D(gfx, probe_width * TILE_SIZE, probe_height * TILE_SIZE, DXGI_FORMAT_R16_UINT);
+    tex_.tile_adaptive_probe_index[0].setName("TileAdaptiveProbeIndex0");
+    tex_.tile_adaptive_probe_index[1] = gfxCreateTexture2D(gfx, probe_width * TILE_SIZE, probe_height * TILE_SIZE, DXGI_FORMAT_R16_UINT);
+    tex_.tile_adaptive_probe_index[1].setName("TileAdaptiveProbeIndex1");
 
     tex_.direct_illumination[0] = gfxCreateTexture2D(gfx, width, height, DXGI_FORMAT_R16G16B16A16_FLOAT, 1, zero_clear_value);
     tex_.direct_illumination[0].setName("DirectIllumination0");
@@ -201,6 +312,9 @@ bool Renderer::CreateResources () {
     tex_.rasterization_depth = gfxCreateTexture2D(gfx, width, height, DXGI_FORMAT_D32_FLOAT, 1, one_clear_value);
     tex_.rasterization_depth.setName("RasterizationDepth");
 
+    tex_.shading_LUT = gfxCreateTexture2D(gfx, 32, 32, DXGI_FORMAT_R16G16_FLOAT);
+    tex_.shading_LUT.setName("ShadingLUT");
+
     return true;
 }
 
@@ -209,11 +323,42 @@ void Renderer::DestroyResources() {
     gfxDestroyBuffer(gfx, buf_.dispatch_indirect_command);
     gfxDestroyBuffer(gfx, buf_.dispatch_rays_indirect_command);
     gfxDestroyBuffer(gfx, buf_.draw_indirect_command);
+    gfxDestroyBuffer(gfx, buf_.probe_dispatch_command);
+    gfxDestroyBuffer(gfx, buf_.probe_per_lane_dispatch_command);
+    gfxDestroyBuffer(gfx, buf_.probe_update_ray_reduce_count);
 
     gfxDestroyBuffer(gfx, buf_.LightGrid_grid_light_list_allocator);
     gfxDestroyBuffer(gfx, buf_.LightGrid_grid_light_count);
     gfxDestroyBuffer(gfx, buf_.LightGrid_grid_light_list_offset);
     gfxDestroyBuffer(gfx, buf_.LightGrid_grid_light_list);
+
+    gfxDestroyBuffer(gfx, buf_.HashGrids_free_tile_count);
+    gfxDestroyBuffer(gfx, buf_.HashGrids_free_tile_list);
+    gfxDestroyBuffer(gfx, buf_.HashGrids_bucket_hash);
+    gfxDestroyBuffer(gfx, buf_.HashGrids_bucket_tile_index);
+    gfxDestroyBuffer(gfx, buf_.HashGrids_tile_timestamp);
+    gfxDestroyBuffer(gfx, buf_.HashGrids_tile_bucket_hash);
+    gfxDestroyBuffer(gfx, buf_.HashGrids_cell_value);
+    gfxDestroyBuffer(gfx, buf_.HashGrids_update_cell_value_X);
+    gfxDestroyBuffer(gfx, buf_.HashGrids_update_tile_count);
+    gfxDestroyBuffer(gfx, buf_.HashGrids_update_tile_list);
+    gfxDestroyBuffer(gfx, buf_.HashGrids_active_tile_count_before_allocation);
+    gfxDestroyBuffer(gfx, buf_.HashGrids_active_tile_count[0]);
+    gfxDestroyBuffer(gfx, buf_.HashGrids_active_tile_count[1]);
+    gfxDestroyBuffer(gfx, buf_.HashGrids_active_tile_list[0]);
+    gfxDestroyBuffer(gfx, buf_.HashGrids_active_tile_list[1]);
+
+    gfxDestroyBuffer(gfx, buf_.probe_update_ray_counts);
+    gfxDestroyBuffer(gfx, buf_.probe_update_ray_offsets);
+    gfxDestroyBuffer(gfx, buf_.probe_all_update_ray_count);
+    gfxDestroyBuffer(gfx, buf_.probe_update_ray_probe);
+    gfxDestroyBuffer(gfx, buf_.probe_update_ray_direction);
+    gfxDestroyBuffer(gfx, buf_.probe_update_ray_result);
+    gfxDestroyBuffer(gfx, buf_.probe_update_ray_depth);
+    gfxDestroyBuffer(gfx, buf_.probe_update_ray_hit_shade_count);
+    gfxDestroyBuffer(gfx, buf_.probe_update_ray_hit_shade_list);
+    gfxDestroyBuffer(gfx, buf_.probe_update_ray_resolve_hash_cell_index);
+    gfxDestroyBuffer(gfx, buf_.adaptive_probe_count);
 
     gfxDestroyBuffer(gfx, buf_.active_gaussian_count);
     gfxDestroyBuffer(gfx, buf_.active_gaussian_list);
@@ -240,6 +385,7 @@ void Renderer::DestroyResources() {
 
     gfxDestroyBuffer(gfx, buf_.direct_illumination_ray_occlusion_threshold);
     gfxDestroyBuffer(gfx, buf_.direct_illumination_ray_contribution);
+    gfxDestroyBuffer(gfx, buf_.direct_illumination_ray_probe_update_ray_index);
 
     gfxDestroyBuffer(gfx, buf_.card_sets);
     gfxDestroyBuffer(gfx, buf_.cards);
@@ -267,6 +413,28 @@ void Renderer::DestroyResources() {
 
     gfxDestroyTexture(gfx, tex_.debug);
 
+    gfxDestroyTexture(gfx, tex_.probe_screen_coords[0]);
+    gfxDestroyTexture(gfx, tex_.probe_screen_coords[1]);
+    gfxDestroyTexture(gfx, tex_.probe_linear_depth[0]);
+    gfxDestroyTexture(gfx, tex_.probe_linear_depth[1]);
+    gfxDestroyTexture(gfx, tex_.probe_world_position[0]);
+    gfxDestroyTexture(gfx, tex_.probe_world_position[1]);
+    gfxDestroyTexture(gfx, tex_.probe_normal[0]);
+    gfxDestroyTexture(gfx, tex_.probe_normal[1]);
+
+    gfxDestroyTexture(gfx, tex_.probe_color[0]);
+    gfxDestroyTexture(gfx, tex_.probe_color[1]);
+    gfxDestroyTexture(gfx, tex_.probe_sample_color);
+    gfxDestroyTexture(gfx, tex_.probe_SH_coefficients_R);
+    gfxDestroyTexture(gfx, tex_.probe_SH_coefficients_G);
+    gfxDestroyTexture(gfx, tex_.probe_SH_coefficients_B);
+    gfxDestroyTexture(gfx, tex_.probe_irradiance);
+    gfxDestroyTexture(gfx, tex_.probe_history_trust);
+    gfxDestroyTexture(gfx, tex_.tile_adaptive_probe_count[0]);
+    gfxDestroyTexture(gfx, tex_.tile_adaptive_probe_count[1]);
+    gfxDestroyTexture(gfx, tex_.tile_adaptive_probe_index[0]);
+    gfxDestroyTexture(gfx, tex_.tile_adaptive_probe_index[1]);
+
     gfxDestroyTexture(gfx, tex_.direct_illumination[0]);
     gfxDestroyTexture(gfx, tex_.direct_illumination[1]);
     gfxDestroyTexture(gfx, tex_.filtered_direct_illumination);
@@ -291,6 +459,8 @@ void Renderer::DestroyResources() {
     gfxDestroyTexture(gfx, tex_.card_workspace_lighting[1]);
 
     gfxDestroyTexture(gfx, tex_.rasterization_depth);
+
+    gfxDestroyTexture(gfx, tex_.shading_LUT);
 }
 
 bool Renderer::CreateKernels () {
@@ -301,25 +471,7 @@ bool Renderer::CreateKernels () {
 
     std::vector<std::string> defines;
     {
-        auto dx_device = gfxGetDevice(gfx);
-        D3D12_FEATURE_DATA_D3D12_OPTIONS1 features = {};
-        if (FAILED(dx_device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS1, &features, sizeof(features))))
-        {
-            app_warning("Failed to check feature support");
-            return false;
-        }
-        if (!features.WaveOps)
-        {
-            app_warning("Wave operations are not supported");
-            return false;
-        }
-        if (features.WaveLaneCountMin != 32)
-        {
-            app_warning("only 32 wave lanes are supported");
-            return false;
-        }
-        cfg_.wave_lane_count = 32;
-        defines.push_back("WAVE_SIZE=32");
+        defines.push_back("WAVE_SIZE=" + std::to_string(cfg_.wave_lane_count));
 
         if (!options_.no_G_buffers) {
             defines.push_back("OUTPUT_PBR_G_BUFFER");
@@ -371,8 +523,35 @@ bool Renderer::CreateKernels () {
         defines_c.push_back("FILTER_PASS=1");
         kernel_.SpatialFilterDirectIllumination[1] = gfxCreateComputeKernel(gfx, program_, "SpatialFilterDirectIllumination", defines_c.data(), defines_c.size());
         defines_c.pop_back();
-        asdf
-
+        kernel_.SSRC_ReInsertHashGridTiles = gfxCreateComputeKernel(gfx, program_, "SSRC_ReInsertHashGridTiles", defines_c.data(), defines_c.size());
+        kernel_.SSRC_AllocateUniformProbes = gfxCreateComputeKernel(gfx, program_, "SSRC_AllocateUniformProbes", defines_c.data(), defines_c.size());
+        for (int i = 0; i < SSRC_MAX_ADAPTIVE_PROBE_LAYERS; i++) {
+            std::string macro = "SSRC_ADAPTIVE_PROBE_LAYER=" + std::to_string(i);
+            defines_c.push_back(macro.c_str());
+            kernel_.SSRC_AllocateAdaptiveProbes[i] = gfxCreateComputeKernel(gfx, program_, "SSRC_AllocateAdaptiveProbes", defines_c.data(), defines_c.size());
+            defines_c.pop_back();
+        }
+        kernel_.SSRC_PrepareProbeProcessing = gfxCreateComputeKernel(gfx, program_, "SSRC_PrepareProbeProcessing", defines_c.data(), defines_c.size());
+        kernel_.SSRC_ReprojectProbeHistory = gfxCreateComputeKernel(gfx, program_, "SSRC_ReprojectProbeHistory", defines_c.data(), defines_c.size());
+        kernel_.SSRC_AllocateProbeUpdateRays = gfxCreateComputeKernel(gfx, program_, "SSRC_AllocateProbeUpdateRays", defines_c.data(), defines_c.size());
+        kernel_.SSRC_SetRayCounts = gfxCreateComputeKernel(gfx, program_, "SSRC_SetRayCounts", defines_c.data(), defines_c.size());
+        kernel_.SSRC_SampleProbeUpdateRay = gfxCreateComputeKernel(gfx, program_, "SSRC_SampleProbeUpdateRay", defines_c.data(), defines_c.size());
+        defines_c.push_back("SSRC_PROBE_UPDATE_RAY_TRACING");
+        kernel_.TraceRaysInScreenSpaceForSSRC = gfxCreateComputeKernel(gfx, program_, "TraceRaysInScreenSpace", defines_c.data(), defines_c.size());
+        defines_c.pop_back();
+        kernel_.SSRC_ResolveRayDepths = gfxCreateComputeKernel(gfx, program_, "SSRC_ResolveRayDepths", defines_c.data(), defines_c.size());
+        kernel_.SSRC_ResolveHitLightingFromScreenHistory = gfxCreateComputeKernel(gfx, program_, "SSRC_ResolveHitLightingFromScreenHistory", defines_c.data(), defines_c.size());
+        kernel_.SSRC_SampleLightRays = gfxCreateComputeKernel(gfx, program_, "SSRC_SampleLightRays", defines_c.data(), defines_c.size());
+        kernel_.SSRC_PrepareClearNewHashGridTileCells = gfxCreateComputeKernel(gfx, program_, "SSRC_PrepareClearNewHashGridTileCells", defines_c.data(), defines_c.size());
+        kernel_.SSRC_ClearNewHashGridTileCells = gfxCreateComputeKernel(gfx, program_, "SSRC_ClearNewHashGridTileCells", defines_c.data(), defines_c.size());
+        kernel_.SSRC_ResolveHitDirectLightingFromTraceResult = gfxCreateComputeKernel(gfx, program_, "SSRC_ResolveHitDirectLightingFromTraceResult", defines_c.data(), defines_c.size());
+        kernel_.SSRC_FilterHashGrids = gfxCreateComputeKernel(gfx, program_, "SSRC_FilterHashGrids", defines_c.data(), defines_c.size());
+        kernel_.SSRC_ResolveProbeUpdateRayRadianceFromCells = gfxCreateComputeKernel(gfx, program_, "SSRC_ResolveProbeUpdateRayRadianceFromCells", defines_c.data(), defines_c.size());
+        kernel_.SSRC_UpdateProbes = gfxCreateComputeKernel(gfx, program_, "SSRC_UpdateProbes", defines_c.data(), defines_c.size());
+        kernel_.SSRC_FilterProbes = gfxCreateComputeKernel(gfx, program_, "SSRC_FilterProbes", defines_c.data(), defines_c.size());
+        kernel_.SSRC_PadProbeTextureEdges = gfxCreateComputeKernel(gfx, program_, "SSRC_PadProbeTextureEdges", defines_c.data(), defines_c.size());
+        kernel_.SSRC_Integrate = gfxCreateComputeKernel(gfx, program_, "SSRC_Integrate", defines_c.data(), defines_c.size());
+        kernel_.TemporalDenoiseLighting = gfxCreateComputeKernel(gfx, program_, "TemporalDenoiseLighting", defines_c.data(), defines_c.size());
         kernel_.FinalComposition = gfxCreateComputeKernel(gfx, program_, "FinalComposition", defines_c.data(), defines_c.size());
 
         defines_c.push_back("CARD_SHADERS");
@@ -409,6 +588,7 @@ bool Renderer::CreateKernels () {
                Trace3DGS_kernel_exports.data(), (uint32_t)Trace3DGS_kernel_exports.size(),
                Trace3DGS_kernel_subobjects.data(), (uint32_t)Trace3DGS_kernel_subobjects.size(),
                defines_c.data(), defines_c.size());
+
         std::vector<char const *> Trace3DGSShadow_kernel_exports;
         Trace3DGSShadow_kernel_exports.push_back("Trace3DGSShadowRaygen");
         Trace3DGSShadow_kernel_exports.push_back("Trace3DGSShadowAnyHit");
@@ -422,6 +602,20 @@ bool Renderer::CreateKernels () {
             defines_c.data(), defines_c.size()
         );
 
+        std::vector<char const *> Trace3DGSShadowRaysWithoutIndirectionList_kernel_exports;
+        Trace3DGSShadowRaysWithoutIndirectionList_kernel_exports.push_back("Trace3DGSShadowRaygen");
+        Trace3DGSShadowRaysWithoutIndirectionList_kernel_exports.push_back("Trace3DGSShadowAnyHit");
+        Trace3DGSShadowRaysWithoutIndirectionList_kernel_exports.push_back("Trace3DGSShadowMiss");
+        std::vector<char const *> Trace3DGSShadowRaysWithoutIndirectionList_kernel_subobjects = base_subobjects;
+        Trace3DGSShadowRaysWithoutIndirectionList_kernel_subobjects.push_back("Trace3DGSShadowHitGroup");
+        Trace3DGSShadowRaysWithoutIndirectionList_kernel_subobjects.push_back("Trace3DGSShadowShaderConfig");
+        defines_c.push_back("NO_RAY_INDIRECTION_LIST");
+        kernel_.Trace3DGSShadowRays = gfxCreateRaytracingKernel(gfx, program_, nullptr, 0,
+            Trace3DGSShadowRaysWithoutIndirectionList_kernel_exports.data(), (uint32_t)Trace3DGSShadowRaysWithoutIndirectionList_kernel_exports.size(),
+            Trace3DGSShadowRaysWithoutIndirectionList_kernel_subobjects.data(), (uint32_t)Trace3DGSShadowRaysWithoutIndirectionList_kernel_subobjects.size(),
+            defines_c.data(), defines_c.size()
+        );
+        defines_c.pop_back();
 
         std::vector<char const *> DirectIlluminationTrace3DGSShadow_kernel_exports;
         DirectIlluminationTrace3DGSShadow_kernel_exports.push_back("DirectIlluminationTrace3DGSShadowRaygen");
@@ -438,13 +632,32 @@ bool Renderer::CreateKernels () {
         );
         defines_c.pop_back();
 
+        std::vector<char const *> Trace3DGSProbeUppdateRays_kernel_exports;
+        Trace3DGSProbeUppdateRays_kernel_exports.push_back("Trace3DGSProbeUppdateRaysRaygen");
+        Trace3DGSProbeUppdateRays_kernel_exports.push_back("Trace3DGSShadowAnyHit");
+        Trace3DGSProbeUppdateRays_kernel_exports.push_back("Trace3DGSShadowMiss");
+        std::vector<char const *> Trace3DGSProbeUppdateRays_kernel_subobjects = base_subobjects;
+        Trace3DGSProbeUppdateRays_kernel_subobjects.push_back("Trace3DGSShadowHitGroup");
+        Trace3DGSProbeUppdateRays_kernel_subobjects.push_back("Trace3DGSShadowShaderConfig");
+        defines_c.push_back("PROBE_UPDATE_STOCHASTIC_RAY_TRACING");
+        kernel_.Trace3DGSProbeUpdateRays = gfxCreateRaytracingKernel(gfx, program_, nullptr, 0,
+            Trace3DGSProbeUppdateRays_kernel_exports.data(), (uint32_t)Trace3DGSProbeUppdateRays_kernel_exports.size(),
+            Trace3DGSProbeUppdateRays_kernel_subobjects.data(), (uint32_t)Trace3DGSProbeUppdateRays_kernel_subobjects.size(),
+            defines_c.data(), defines_c.size()
+        );
+        defines_c.pop_back();
+
         uint32_t entry_count[kGfxShaderGroupType_Count] {
                 1, // 1 raygen record
                 1, // 1 hitgroups
                 1, // 1 miss
                 1 // Actually we have no callables... but leave 1 here.
         };
-        GfxKernel sbt_kernels[] {kernel_.Trace3DGSRays, kernel_.Trace3DGSShadowRays, kernel_.DirectIlluminationTrace3DGSShadowRays};
+        GfxKernel sbt_kernels[] {
+            kernel_.Trace3DGSRays, kernel_.Trace3DGSShadowRays, kernel_.Trace3DGSShadowRaysWithoutIndirectionList,
+            kernel_.DirectIlluminationTrace3DGSShadowRays,
+            kernel_.Trace3DGSProbeUpdateRays
+        };
         sbt_ = gfxCreateSbt(gfx, sbt_kernels, ARRAYSIZE(sbt_kernels), entry_count);
     }
 
@@ -545,9 +758,10 @@ void Renderer::DestroyKernels () {
     gfxDestroyKernel(gfx, kernel_.SpatialFilterDirectIllumination[1]);
     gfxDestroyKernel(gfx, kernel_.SSRC_ReInsertHashGridTiles);
     gfxDestroyKernel(gfx, kernel_.SSRC_AllocateUniformProbes);
-    gfxDestroyKernel(gfx, kernel_.SSRC_AllocateAdaptiveProbes);
+    for (int i = 0; i < SSRC_MAX_ADAPTIVE_PROBE_LAYERS; i ++) {
+        gfxDestroyKernel(gfx, kernel_.SSRC_AllocateAdaptiveProbes[i]);
+    }
     gfxDestroyKernel(gfx, kernel_.SSRC_PrepareProbeProcessing);
-    gfxDestroyKernel(gfx, kernel_.SSRC_ResetProbeTexels);
     gfxDestroyKernel(gfx, kernel_.SSRC_ReprojectProbeHistory);
     gfxDestroyKernel(gfx, kernel_.SSRC_AllocateProbeUpdateRays);
     gfxDestroyKernel(gfx, kernel_.SSRC_SetRayCounts);
@@ -564,7 +778,7 @@ void Renderer::DestroyKernels () {
     gfxDestroyKernel(gfx, kernel_.SSRC_UpdateProbes);
     gfxDestroyKernel(gfx, kernel_.SSRC_FilterProbes);
     gfxDestroyKernel(gfx, kernel_.SSRC_PadProbeTextureEdges);
-    gfxDestroyKernel(gfx, kernel_.SSRC_IntegrateASG);
+    gfxDestroyKernel(gfx, kernel_.SSRC_Integrate);
     gfxDestroyKernel(gfx, kernel_.TemporalDenoiseLighting);
     gfxDestroyKernel(gfx, kernel_.FinalComposition);
 
@@ -577,6 +791,7 @@ void Renderer::DestroyKernels () {
 
     gfxDestroyKernel(gfx, kernel_.Trace3DGSRays);
     gfxDestroyKernel(gfx, kernel_.Trace3DGSShadowRays);
+    gfxDestroyKernel(gfx, kernel_.Trace3DGSShadowRaysWithoutIndirectionList);
     gfxDestroyKernel(gfx, kernel_.DirectIlluminationTrace3DGSShadowRays);
     gfxDestroyKernel(gfx, kernel_.Trace3DGSProbeUpdateRays);
     gfxDestroyKernel(gfx, kernel_.SpawnCameraRays);
@@ -593,6 +808,27 @@ void Renderer::DestroyKernels () {
     gfxDestroyProgram(gfx, program_);
 }
 
+bool InitializeConfig () {
+    auto gfx = AppInternal::GetInstance().GetGfx();
+    auto dx_device = gfxGetDevice(gfx);
+    D3D12_FEATURE_DATA_D3D12_OPTIONS1 features = {};
+    if (FAILED(dx_device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS1, &features, sizeof(features))))
+    {
+        app_warning("Failed to check feature support");
+        return false;
+    }
+    if (!features.WaveOps)
+    {
+        app_warning("Wave operations are not supported");
+        return false;
+    }
+    if (features.WaveLaneCountMin != 32)
+    {
+        app_warning("only 32 wave lanes are supported");
+        return false;
+    }
+    cfg_.wave_lane_count = 32;
+}
 
 bool Renderer::Initialize () {
     // Reset flags and counters
@@ -600,6 +836,8 @@ bool Renderer::Initialize () {
     frame_index_ = 0;
 
     rng_ = std::mt19937(0);
+
+    if (!InitializeConfig()) return false;
 
     if (!blue_noise_sampler_.Initialize()) return false;
 

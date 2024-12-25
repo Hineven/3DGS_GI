@@ -39,9 +39,9 @@ RWTexture2D<float>  g_RWProbeHistoryTrustTexture;
 
 // Number of update rays allocated for each probe
 // Must be a multiple of WAVE_SIZE
-RWStructuredBuffer<uint>  g_RWProbeUpdateRayCountBuffer;
+RWStructuredBuffer<uint>  g_RWProbeUpdateRayCountsBuffer;
 // Offset of update ray indices for each probe
-RWStructuredBuffer<uint>  g_RWProbeUpdateRayOffsetBuffer;
+RWStructuredBuffer<uint>  g_RWProbeUpdateRayOffsetsBuffer;
 // Total number of allocated update rays
 RWStructuredBuffer<uint>  g_RWProbeAllUpdateRayCountBuffer;
 // Index probe index with ray index (index with RayIndex / WAVE_SIZE as rays are allocated in waves)
@@ -62,8 +62,8 @@ RWStructuredBuffer<uint>  g_RWProbeUpdateRayHitShadeListBuffer;
 RWStructuredBuffer<uint>  g_RWProbeUpdateRayResolveHashCellIndexBuffer;
 
 // Extra info for secondary vertex shading
-RWStructuredBuffer<float3>  g_RWProbeUpdateRayHitShadePositionBuffer;
-RWStructuredBuffer<uint>    g_RWProbeUpdateRayHitShadeViewDirectionBuffer;
+// RWStructuredBuffer<float3>  g_RWProbeUpdateRayHitShadePositionBuffer;
+// RWStructuredBuffer<uint>    g_RWProbeUpdateRayHitShadeViewDirectionBuffer;
 
 struct ProbeUpdateRayResult {
     // Whether we should bypass radiance cache for this ray.
@@ -98,7 +98,6 @@ void WriteProbeUpdateRayResult (int RayIndex, ProbeUpdateRayResult Result) {
 // Number of adaptive probes within each tile
 RWTexture2D<uint>          g_RWTileAdaptiveProbeCountTexture;
 RWTexture2D<uint>          g_RWPreviousTileAdaptiveProbeCountTexture;
-RWTexture2D<uint>          g_RWNextTileAdaptiveProbeCountTexture;
 // Adaptive probe indices for each tile. The indexing rules are the same as Lumen.
 RWTexture2D<uint>          g_RWTileAdaptiveProbeIndexTexture;
 RWTexture2D<uint>          g_RWPreviousTileAdaptiveProbeIndexTexture;

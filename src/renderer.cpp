@@ -429,6 +429,41 @@ void Renderer::Render() {
         REGISTER_CVAR(UB.DI_NoSpatialDenoising, "Disable spatial denoising for direct illumination.", false);
         REGISTER_CVAR(UB.DI_Denoiser_TargetNumSamples, "The target number of samples to achieve for direct illumination denoising.", 48, 1, 100);
 
+        REGISTER_CVAR(UB.II_NoTemporalDenoising, "Disable temporal denoising for indirect illumination.", false);
+        REGISTER_CVAR(UB.II_Denoiser_TargetNumSamples, "The target number of samples to achieve for indirect illumination denoising.", 12, 1, 100);
+        REGISTER_CVAR(UB.II_SecondaryVertexNormalOffset, "Offset along the normal of the secondary vertex when spawning shadow rays for direct illumination.", 2e-2f, 0.f, 0.5f);
+        REGISTER_CVAR(UB.SSRC_ProbeFiltering, "Enable probe filtering for SSRC.", true);
+
+        REGISTER_CVAR(UB.SSRC_NoImportanceSampling, "Disable importance sampling for SSRC.", false);
+        UB.SSRC_NumUniformScreenProbes = UB.TileDimensions.x * UB.TileDimensions.y;
+        REGISTER_CVAR(UB.SSRC_BaseUpdateRayWaves, "Number of probe update rays allocated for each probe, in waves.", 1, 1, SSRC_MAX_NUM_UPDATE_RAY_PER_PROBE / cfg_.wave_lane_count);
+        REGISTER_CVAR(UB.SSRC_ResetCache, "Reset SSRC probes at the begging of each frame.", false);
+
+        UB.SSRC_MaxNumAdaptiveProbes = options_.SSRC_max_num_probes - UB.SSRC_NumUniformScreenProbes;
+        REGISTER_CVAR(UB.SSRC_NoAdaptiveProbes, "Do not allocate adaptive probes for SSRC.", false);
+        REGISTER_CVAR(CB.SSRC_freeze_tile_jitter, "Freeze the tile jitter for SSRC.", false);
+        REGISTER_CVAR(CB.SSRC_tile_jitter, "Tile jitter for SSRC (frozen).", 0, 0, 7);
+        if (CB.SSRC_freeze_tile_jitter) {
+            UB.SSRC_TileJitterFrameSeed = CB.SSRC_tile_jitter;
+        } else UB.SSRC_TileJitterFrameSeed = frame_index_ % 8;
+        UB.SSRC_PreviousTileJitterFrameSeed = history_UB_.SSRC_TileJitterFrameSeed;
+
+        UB.TAAJitterUV = glm::vec2(0);
+        REGISTER_CVAR(UB.LightingSkyRadianceLOD, "LOD when sampling lighting from the sky.", 0, 0, 5);
+        REGISTER_CVAR(UB.HashGrids_MaxNumSamples, "Maximum number of samples kept in each hash grid cell.", 64, 0, 128);
+        UB.HashGrids_Center = camera.position;
+        REGISTER_CVAR(CB.HashGrids_cascade_radius, "Radius of the base cascade in the hash grid", 2.f, 1.f, 10.f);
+        UB.HashGrids_InvCascadeRadius = 1.f / CB.HashGrids_cascade_radius;
+
+        REGISTER_CVAR(UB.HashGrids_CellSize, "Size of base level cell in hash grids.", 0.04f, 0.01f, 0.2f);
+        UB.HashGrids_NumBuckets = options_.HashGrids_max_num_buckets;
+        UB.HashGrids_NumInterleavedEntriesPerBucket = options_.HashGrids_num_slots_per_bucket;
+        REGISTER_CVAR(UB.HashGrids_TargetSampleCount, "Target number of samples to achieve for hash grid sampling.", 16, 1, 128);
+        REGISTER_CVAR(UB.HashGrids_TileLifespan, "Tile lifespan in hash grids (max number of frames unvisited).", 30, 1, 60);
+        REGISTER_CVAR(UB.HashGrids_MaxNumEntriesSearchedPerBucket, "Maximum number of entries to search when query hash table for a tile.", 8, 1, HASHGRIDS_MAX_NUM_ENTRIES_SEARCHED_PER_BUCKET);
+        UB.PreviousTAAJitterUV = history_UB_.TAAJitterUV;
+
+
         REGISTER_CVAR(UB.DepthFilterRadius, "Filter radius for depth reconstruction.", 1, 0, 3);
         REGISTER_CVAR(UB.GaussianClampingScale, "Magic number for clamping the gaussian 2D eigen value to a minimum value.",
             1e-3f);
@@ -527,6 +562,52 @@ void Renderer::Render() {
     gfxProgramSetBuffer(gfx, program_, "g_LightGrid_GridLightListOffsetBuffer", buf_.LightGrid_grid_light_list_offset);
     gfxProgramSetBuffer(gfx, program_, "g_LightGrid_GridLightListBuffer", buf_.LightGrid_grid_light_list);
 
+    // Hash grids
+    gfxProgramSetBuffer(gfx, program_, "g_HashGrids_FreeTileCountBuffer", buf_.HashGrids_free_tile_count);
+    gfxProgramSetBuffer(gfx, program_, "g_HashGrids_FreeTileListBuffer", buf_.HashGrids_free_tile_list);
+    gfxProgramSetBuffer(gfx, program_, "g_HashGrids_BucketHashBuffer", buf_.HashGrids_bucket_hash);
+    gfxProgramSetBuffer(gfx, program_, "g_HashGrids_BucketTileIndexBuffer", buf_.HashGrids_bucket_tile_index);
+    gfxProgramSetBuffer(gfx, program_, "g_HashGrids_TileTimestampBuffer", buf_.HashGrids_tile_timestamp);
+    gfxProgramSetBuffer(gfx, program_, "g_HashGrids_TileBucketHashBuffer", buf_.HashGrids_tile_bucket_hash);
+    gfxProgramSetBuffer(gfx, program_, "g_HashGrids_CellValueBuffer", buf_.HashGrids_cell_value);
+    gfxProgramSetBuffer(gfx, program_, "g_HashGrids_UpdateCellValueXBuffer", buf_.HashGrids_update_cell_value_X);
+    gfxProgramSetBuffer(gfx, program_, "g_HashGrids_UpdateTileCountBuffer", buf_.HashGrids_update_tile_count);
+    gfxProgramSetBuffer(gfx, program_, "g_HashGrids_UpdateTileListBuffer", buf_.HashGrids_update_tile_list);
+    gfxProgramSetBuffer(gfx, program_, "g_HashGrids_ActiveTileCountBeforeAllocationBuffer", buf_.HashGrids_active_tile_count_before_allocation);
+    gfxProgramSetBuffer(gfx, program_, "g_HashGrids_ActiveTileCountBuffer", buf_.HashGrids_active_tile_count[frame_index_ & 1]);
+    gfxProgramSetBuffer(gfx, program_, "g_HashGrids_ActiveTileListBuffer", buf_.HashGrids_active_tile_list[frame_index_ & 1]);
+    gfxProgramSetBuffer(gfx, program_, "g_HashGrids_HistoryActiveTileCountBuffer", buf_.HashGrids_active_tile_count[!(frame_index_ & 1)]);
+    gfxProgramSetBuffer(gfx, program_, "g_HashGrids_HistoryActiveTileListBuffer", buf_.HashGrids_active_tile_list[!(frame_index_ & 1)]);
+
+    // SSRC// SSRC
+    gfxProgramSetParameter(gfx, program_, "g_RWProbeScreenCoordsTexture", tex_.probe_screen_coords[frame_index_ & 1]);
+    gfxProgramSetParameter(gfx, program_, "g_RWProbeLinearDepthTexture", tex_.probe_linear_depth[frame_index_ & 1]);
+    gfxProgramSetParameter(gfx, program_, "g_RWProbeWorldPositionTexture", tex_.probe_world_position[frame_index_ & 1]);
+    gfxProgramSetParameter(gfx, program_, "g_RWProbeNormalTexture", tex_.probe_normal[frame_index_ & 1]);
+    gfxProgramSetParameter(gfx, program_, "g_RWPreviousProbeScreenCoordsTexture", tex_.probe_screen_coords[!(frame_index_ & 1)]);
+    gfxProgramSetParameter(gfx, program_, "g_RWPreviousProbeLinearDepthTexture", tex_.probe_linear_depth[!(frame_index_ & 1)]);
+    gfxProgramSetParameter(gfx, program_, "g_RWPreviousProbeWorldPositionTexture", tex_.probe_world_position[!(frame_index_ & 1)]);
+    gfxProgramSetParameter(gfx, program_, "g_RWPreviousProbeNormalTexture", tex_.probe_normal[!(frame_index_ & 1)]);
+    gfxProgramSetParameter(gfx, program_, "g_RWProbeColorTexture", tex_.probe_color[frame_index_ & 1]);
+    gfxProgramSetParameter(gfx, program_, "g_RWPreviousProbeColorTexture", tex_.probe_color[!(frame_index_ & 1)]);
+    gfxProgramSetParameter(gfx, program_, "g_RWProbeSampleColorTexture", tex_.probe_sample_color);
+    gfxProgramSetParameter(gfx, program_, "g_ProbeSampleColorTexture", tex_.probe_sample_color);
+    gfxProgramSetParameter(gfx, program_, "g_RWProbeSHCoefficientsRTexture", tex_.probe_SH_coefficients_R);
+    gfxProgramSetParameter(gfx, program_, "g_RWProbeSHCoefficientsGTexture", tex_.probe_SH_coefficients_G);
+    gfxProgramSetParameter(gfx, program_, "g_RWProbeSHCoefficientsBTexture", tex_.probe_SH_coefficients_B);
+    gfxProgramSetParameter(gfx, program_, "g_RWProbeIrradianceTexture", tex_.probe_irradiance);
+    gfxProgramSetParameter(gfx, program_, "g_RWProbeHistoryTrustTexture", tex_.probe_history_trust);
+    gfxProgramSetParameter(gfx, program_, "g_RWProbeUpdateRayCountsBuffer", buf_.probe_update_ray_counts);
+    gfxProgramSetParameter(gfx, program_, "g_RWProbeUpdateRayOffsetsBuffer", buf_.probe_update_ray_offsets);
+    gfxProgramSetParameter(gfx, program_, "g_RWProbeAllUpdateRayCountBuffer", buf_.probe_all_update_ray_count);
+    gfxProgramSetParameter(gfx, program_, "g_RWProbeUpdateRayProbeBuffer", buf_.probe_update_ray_probe);
+    gfxProgramSetParameter(gfx, program_, "g_RWProbeUpdateRayDirectionBuffer", buf_.probe_update_ray_direction);
+    gfxProgramSetParameter(gfx, program_, "g_RWProbeUpdateRayResultBuffer", buf_.probe_update_ray_result);
+    gfxProgramSetParameter(gfx, program_, "g_RWProbeUpdateRayDepthBuffer", buf_.probe_update_ray_depth);
+    gfxProgramSetParameter(gfx, program_, "g_RWProbeUpdateRayHitShadeCountBuffer", buf_.probe_update_ray_hit_shade_count);
+    gfxProgramSetParameter(gfx, program_, "g_RWProbeUpdateRayHitShadeListBuffer", buf_.probe_update_ray_hit_shade_list);
+    gfxProgramSetParameter(gfx, program_, "g_RWProbeUpdateRayResolveHashCellIndexBuffer", buf_.probe_update_ray_resolve_hash_cell_index);
+
     // Common
     gfxProgramSetParameter(gfx, program_, "g_RWDispatchIndirectCommandBuffer", buf_.dispatch_indirect_command);
     gfxProgramSetParameter(gfx, program_, "g_RWDispatchRaysIndirectCommandBuffer", buf_.dispatch_rays_indirect_command);
@@ -557,6 +638,7 @@ void Renderer::Render() {
 
     gfxProgramSetParameter(gfx, program_, "g_RWDirectIlluminationRayOcclusionThresholdBuffer", buf_.direct_illumination_ray_occlusion_threshold);
     gfxProgramSetParameter(gfx, program_, "g_RWDirectIlluminationRayContributionBuffer", buf_.direct_illumination_ray_contribution);
+    gfxProgramSetParameter(gfx, program_, "g_RWDirectIlluminationRayProbeUpdateRayIndexBuffer", buf_.direct_illumination_ray_probe_update_ray_index);
 
     gfxProgramSetParameter(gfx, program_, "g_RW_GColorTexture", tex_.G_albedo_alpha);
     gfxProgramSetParameter(gfx, program_, "g_GColorTexture", tex_.G_albedo_alpha);
@@ -625,6 +707,8 @@ void Renderer::Render() {
     gfxProgramSetParameter(gfx, program_, "g_CardWorkspace_HistoryLightingTexture", tex_.card_workspace_lighting[(frame_index_ + 1) & 1]);
 
     gfxProgramSetParameter(gfx, program_, "g_RasterizationDepthTexture", tex_.rasterization_depth);
+
+    gfxProgramSetParameter(gfx, program_, "g_ShadingLUTTexture", tex_.shading_LUT);
 
     auto & samplers = AppInternal::GetInstance().GetSamplers();
     gfxProgramSetParameter(gfx, program_, "g_LinearClampSampler", samplers.linear_clamp);
@@ -1318,12 +1402,232 @@ void Renderer::Render() {
             }
         }
 
+        // Indirect lighting phase!
+
+        // Temporal reuse and drop outdated entries for hash grid radiance cache
         {
-            auto section = TimedSection(*this, "TemporalFilterDirectIllumination");
-            gfxCommandBindKernel(gfx, kernel_.TemporalFilterDirectIllumination);
+            auto section = TimedSection(*this, "SSRC_ReInsertHashGridTiles");
+            // Clear hash table
+            gfxCommandClearBuffer(gfx, buf_.HashGrids_bucket_hash);
+            // Re-insert (and filter outdated) hash grid tiles from the last frame
+            GenerateDispatchIndirect(buf_.HashGrids_active_tile_count[!(frame_index_ & 1)]);
+            gfxCommandBindKernel(gfx, kernel_.SSRC_ReInsertHashGridTiles);
+            gfxCommandDispatchIndirect(gfx, buf_.dispatch_indirect_command);
+        }
+
+        // Allocate SSRC uniform screen probes
+        {
+            auto section = TimedSection(*this, "SSRC_AllocateUniformProbes");
+            gfxCommandBindKernel(gfx, kernel_.SSRC_AllocateUniformProbes);
+            auto threads = gfxKernelGetNumThreads(gfx, kernel_.SSRC_AllocateUniformProbes);
+            gfxCommandDispatch(gfx, divideAndRoundUp(UB.SSRC_NumUniformScreenProbes, threads[0]), 1, 1);
+        }
+
+        // Allocate SSRC adaptive screen probes in regions with complex geometries
+        {
+            for(int layer = 0; layer < SSRC_MAX_ADAPTIVE_PROBE_LAYERS; layer ++)
+            {
+                auto name = std::string("SSRC_AllocateAdaptiveProbes, Layer: ") + std::to_string(layer);
+                auto section = TimedSection(*this, name.c_str());
+
+                gfxCommandBindKernel(gfx, kernel_.SSRC_AllocateAdaptiveProbes[layer]);
+                auto     threads         = gfxKernelGetNumThreads(gfx, kernel_.SSRC_AllocateAdaptiveProbes[layer]);
+                uint32_t tile_count = (2 << layer) * UB.SSRC_NumUniformScreenProbes;
+                gfxCommandDispatch(gfx, divideAndRoundUp(tile_count, threads[0]), 1, 1);
+            }
+        }
+
+        // Initialize indirect dispatch commands for probe processing, as well as finalize some counters.
+        {
+            auto section = TimedSection(*this, "SSRC_PrepareProbeProcessing");
+            gfxCommandBindKernel(gfx, kernel_.SSRC_PrepareProbeProcessing);
+            gfxCommandDispatch(gfx, 1, 1, 1);
+        }
+
+        // Probe history reuse from previous frame.
+        // Probes are initialized with reprojected radiances
+        {
+            auto section = TimedSection(*this, "SSRC_ReprojectProbeHistory");
+            gfxCommandBindKernel(gfx, kernel_.SSRC_ReprojectProbeHistory);
+            gfxCommandDispatchIndirect(gfx, buf_.probe_dispatch_command);
+        }
+
+        // Allocate update rays for each probe. Ray count is proportional to probe reprojection trust
+        {
+            auto section = TimedSection(*this, "SSRC_AllocateProbeUpdateRays");
+            gfxCommandBindKernel(gfx, kernel_.SSRC_AllocateProbeUpdateRays);
+            gfxCommandDispatchIndirect(gfx, buf_.probe_per_lane_dispatch_command);
+        }
+
+        // Scan sum the ray counts to allocate indices for each probe update ray
+        {
+            auto section = TimedSection(*this, "ScanSumProbeUpdateRayCounts");
+            gfxCommandScanSum(gfx, kGfxDataType_Uint, buf_.probe_update_ray_offsets, buf_.probe_update_ray_counts, &buf_.probe_update_ray_reduce_count);
+        }
+
+        // Finalize counters
+        {
+            auto section = TimedSection(*this, "SSRC_SetRayCounts");
+            gfxCommandBindKernel(gfx, kernel_.SSRC_SetRayCounts);
+            gfxCommandDispatch(gfx, 1, 1, 1);
+        }
+
+        // Importance sample probe update rays using the reprojected radiance distribution on each probe
+        {
+            auto section = TimedSection(*this, "SSRC_SampleProbeUpdateRay");
+            gfxCommandBindKernel(gfx, kernel_.SSRC_SampleProbeUpdateRay);
+            gfxCommandDispatchIndirect(gfx, buf_.probe_dispatch_command);
+        }
+
+        // Trace sampled rays (stochastic shading rays)
+        // Screen tracing
+        {
+            auto section = TimedSection(*this, "TraceRaysInScreenSpaceForSSRC");
+            GenerateDispatchIndirect(buf_.probe_all_update_ray_count);
+            gfxCommandBindKernel(gfx, kernel_.TraceRaysInScreenSpaceForSSRC);
+            gfxCommandDispatchIndirect(gfx, buf_.dispatch_indirect_command);
+        }
+
+        CompactRayTraces();
+
+        // World space HWRT
+        {
+            auto section = TimedSection(*this, "Trace3DGSProbeUpdateRays");
+            GenerateDispatchRaysIndirect(buf_.ray_to_trace_count[ray_compact_count & 1]);
+            gfxCommandBindKernel(gfx, kernel_.Trace3DGSProbeUpdateRays);
+            gfxSbtSetShaderGroup(gfx, sbt_, kGfxShaderGroupType_Raygen, 0, "Trace3DGSProbeUpdateRaysRaygen");
+            gfxSbtSetShaderGroup(gfx, sbt_, kGfxShaderGroupType_Hit, 0, "Trace3DGSShadowHitGroup");
+            gfxSbtSetShaderGroup(gfx, sbt_, kGfxShaderGroupType_Miss, 0, "Trace3DGSShadowMiss");
+
+#if !(defined(NO_INDIRECT_DISPATCH) || defined(NO_RAYTRACING_INDIRECT_DISPATCH))
+            gfxCommandDispatchRaysIndirect(gfx, sbt_, buf_.dispatch_rays_indirect_command);
+#endif
+        }
+
+        // Resolve ray depth values from probe update ray hits
+        {
+            auto section = TimedSection(*this, "SSRC_ResolveRayDepths");
+            // All rays shall be resolved
+            GenerateDispatchIndirect(buf_.probe_all_update_ray_count);
+            gfxCommandBindKernel(gfx, kernel_.SSRC_ResolveRayDepths);
+            gfxCommandDispatchIndirect(gfx, buf_.dispatch_indirect_command);
+        }
+
+        // Try to resolve hit lighting from previous frame's film and skip shading if possible
+        {
+            auto section = TimedSection(*this, "SSRC_ResolveHitLightingFromScreenHistory");
+            // Only resolve the hits that are not found by screen tracing
+            GenerateDispatchIndirect(buf_.ray_to_trace_count[ray_compact_count & 1]);
+            gfxCommandBindKernel(gfx, kernel_.SSRC_ResolveHitLightingFromScreenHistory);
+            gfxCommandDispatchIndirect(gfx, buf_.dispatch_indirect_command);
+        }
+
+        // Shade hits that failed to resolve lighting from screen history
+        // Spawn light rays for their shading
+        {
+            auto section = TimedSection(*this, "SSRC_SampleLightRays");
+            // Keep a record of the hash grid tile count before allocating new ones
+            gfxCommandCopyBuffer(gfx, buf_.HashGrids_active_tile_count_before_allocation, buf_.HashGrids_active_tile_count[frame_index_ & 1]);
+            // Clear ray to trace count buffer for allocation
+            gfxCommandClearBuffer(gfx, buf_.ray_to_trace_count[ray_compact_count & 1]);
+            // Spawn 1 shadow ray for each hit that failed to resolve lighting from screen history
+            GenerateDispatchIndirect(buf_.probe_update_ray_hit_shade_count);
+            gfxCommandBindKernel(gfx, kernel_.SSRC_SampleLightRays);
+            gfxCommandDispatchIndirect(gfx, buf_.dispatch_indirect_command);
+        }
+
+        {
+            auto section = TimedSection(*this, "SSRC_PrepareClearNewHashGridTileCells");
+            gfxCommandBindKernel(gfx, kernel_.SSRC_PrepareClearNewHashGridTileCells);
+            gfxCommandDispatch(gfx, 1, 1, 1);
+        }
+
+        // Clear cells and update buffers for the newly allocated hash grids (in SSRC_SampleLightRays)
+        {
+            auto section = TimedSection(*this, "SSRC_ClearNewHashGridTileCells");
+            gfxCommandBindKernel(gfx, kernel_.SSRC_ClearNewHashGridTileCells);
+            gfxCommandDispatchIndirect(gfx, buf_.dispatch_indirect_command);
+        }
+
+        // Trace shadow rays (HWRT
+        {
+            auto section = TimedSection(*this, "Trace3DGSShadowRaysWithoutIndirectionList");
+            GenerateDispatchRaysIndirect(buf_.ray_to_trace_count[ray_compact_count & 1]);
+            gfxCommandBindKernel(gfx, kernel_.Trace3DGSShadowRaysWithoutIndirectionList);
+            gfxSbtSetShaderGroup(gfx, sbt_, kGfxShaderGroupType_Raygen, 0, "Trace3DGSShadowRaygen");
+            gfxSbtSetShaderGroup(gfx, sbt_, kGfxShaderGroupType_Hit, 0, "Trace3DGSShadowHitGroup");
+            gfxSbtSetShaderGroup(gfx, sbt_, kGfxShaderGroupType_Miss, 0, "Trace3DGSShadowMiss");
+#if !(defined(NO_INDIRECT_DISPATCH) || defined(NO_RAYTRACING_INDIRECT_DISPATCH))
+            gfxCommandDispatchRaysIndirect(gfx, sbt_, buf_.dispatch_rays_indirect_command);
+#endif
+        }
+
+        // Use light samples and trace results to resolve direct lighting and accumulate them into hash grids
+        {
+            auto section = TimedSection(*this, "SSRC_ResolveHitDirectLightingFromTraceResult");
+            GenerateDispatchIndirect(buf_.ray_to_trace_count[ray_compact_count & 1]);
+            gfxCommandBindKernel(gfx, kernel_.SSRC_ResolveHitDirectLightingFromTraceResult);
+            gfxCommandDispatchIndirect(gfx, buf_.dispatch_indirect_command);
+        }
+
+        // Update and filter modified tiles in the hash grid cache
+        {
+            auto section = TimedSection(*this, "SSRC_FilterHashGrids");
+            // Dispatch a thread group for each tile to update
+            gfxCommandCopyBuffer(gfx, buf_.dispatch_indirect_command,
+                offsetof(DispatchIndirectCommand, ThreadGroupCountX),
+                buf_.HashGrids_update_tile_count, 0, sizeof(uint32_t)
+            );
+            gfxCommandBindKernel(gfx, kernel_.SSRC_FilterHashGrids);
+            gfxCommandDispatchIndirect(gfx, buf_.dispatch_indirect_command);
+        }
+
+        // Finally, resolve shading results from the cache for probe update rays
+        {
+            auto section = TimedSection(*this, "SSRC_ResolveProbeUpdateRayRadianceFromCells");
+            // Each hit outside the screen history potentially requires a resolve
+            GenerateDispatchIndirect(buf_.probe_update_ray_hit_shade_count);
+            gfxCommandBindKernel(gfx, kernel_.SSRC_ResolveProbeUpdateRayRadianceFromCells);
+            gfxCommandDispatchIndirect(gfx, buf_.dispatch_indirect_command);
+        }
+
+        // Use probe update ray trace results to update SSRC probes
+        {
+            auto section = TimedSection(*this, "SSRC_UpdateProbes");
+            gfxCommandBindKernel(gfx, kernel_.SSRC_UpdateProbes);
+            gfxCommandDispatchIndirect(gfx, buf_.probe_dispatch_command);
+        }
+
+        // Filter probes as well as calculate SH projection
+        {
+            auto section = TimedSection(*this, "SSRC_FilterProbes");
+            gfxCommandBindKernel(gfx, kernel_.SSRC_FilterProbes);
+            // Only filter uniform screen probes
+            gfxCommandDispatch(gfx, UB.SSRC_NumUniformScreenProbes, 1, 1);
+        }
+
+        // Make a padded probe atlas for hardware accelerated interpolation in later stages
+        {
+            auto section = TimedSection(*this, "SSRC_PadProbeTextureEdges");
+            gfxCommandBindKernel(gfx, kernel_.SSRC_PadProbeTextureEdges);
+            gfxCommandDispatchIndirect(gfx, buf_.probe_dispatch_command);
+        }
+
+        // Integrate indirect illumination for diffuse BRDF from SSRC
+        {
+            auto section = TimedSection(*this, "SSRC_Integrate");
+            gfxCommandBindKernel(gfx, kernel_.SSRC_Integrate);
+            gfxCommandDispatch(gfx, UB.TileDimensions.x, UB.TileDimensions.y, 1);
+        }
+
+        // Temporal denoising for direct and indirect illumination
+        {
+            auto section = TimedSection(*this, "TemporalDenoiseLighting");
+            gfxCommandBindKernel(gfx, kernel_.TemporalDenoiseLighting);
             gfxCommandDispatch(gfx, UB.TileDimensions.x, UB.TileDimensions.y, 1);
 
             gfxCommandCopyTexture(gfx, tex_.direct_illumination[frame_index_ & 1], tex_.filtered_direct_illumination);
+            gfxCommandCopyTexture(gfx, tex_.indirect_illumination[frame_index_ & 1], tex_.filtered_indirect_illumination);
         }
 
         if (UB.Debug_VisualizeMeshCardScene) {

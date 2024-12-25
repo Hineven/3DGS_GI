@@ -28,6 +28,7 @@ public:
     void RenderUI();
 
 protected:
+    bool InitializeConfig ();
     bool CreateResources ();
     bool CreateKernels ();
     void DestroyResources ();
@@ -56,11 +57,46 @@ protected:
         GfxBuffer dispatch_rays_indirect_command;
         GfxBuffer draw_indirect_command;
 
+        GfxBuffer probe_dispatch_command;
+        GfxBuffer probe_per_lane_dispatch_command;
+        GfxBuffer probe_update_ray_reduce_count;
+
         // Light grid
         GfxBuffer LightGrid_grid_light_list_allocator;
         GfxBuffer LightGrid_grid_light_count;
         GfxBuffer LightGrid_grid_light_list_offset;
         GfxBuffer LightGrid_grid_light_list;
+
+        // Hash grids
+        GfxBuffer HashGrids_free_tile_count;
+        GfxBuffer HashGrids_free_tile_list;
+        GfxBuffer HashGrids_bucket_hash;
+        GfxBuffer HashGrids_bucket_tile_index;
+        GfxBuffer HashGrids_tile_timestamp;
+        GfxBuffer HashGrids_tile_bucket_hash;
+        GfxBuffer HashGrids_cell_value;
+        GfxBuffer HashGrids_update_cell_value_X;
+        GfxBuffer HashGrids_update_tile_count;
+        GfxBuffer HashGrids_update_tile_list;
+        GfxBuffer HashGrids_active_tile_count_before_allocation;
+        GfxBuffer HashGrids_active_tile_count[2];
+        GfxBuffer HashGrids_active_tile_list[2];
+
+        // SSRC (update rays)
+        GfxBuffer probe_update_ray_counts;
+        GfxBuffer probe_update_ray_offsets;
+        GfxBuffer probe_all_update_ray_count;
+        GfxBuffer probe_update_ray_probe;
+        GfxBuffer probe_update_ray_direction;
+        GfxBuffer probe_update_ray_result;
+        GfxBuffer probe_update_ray_depth;
+
+        GfxBuffer probe_update_ray_hit_shade_count;
+        GfxBuffer probe_update_ray_hit_shade_list;
+
+        GfxBuffer probe_update_ray_resolve_hash_cell_index;
+
+        GfxBuffer adaptive_probe_count;
 
         // Rasterization
         GfxBuffer active_gaussian_count;
@@ -91,6 +127,7 @@ protected:
         // Direct illumintion
         GfxBuffer direct_illumination_ray_occlusion_threshold;
         GfxBuffer direct_illumination_ray_contribution;
+        GfxBuffer direct_illumination_ray_probe_update_ray_index;
 
         // Mesh cards
         GfxBuffer card_sets;
@@ -109,7 +146,6 @@ protected:
     } buf_ {};
 
     struct {
-
         // fpXx2 (LinearDepth, depth normalization weight)
         // note: depth normalization weight is different from opacity.
         // opacity is stored in w component of G_albedo_alpha
@@ -132,6 +168,31 @@ protected:
 
         // fp16x4
         GfxTexture debug;
+
+        // SSRC
+        // Probe screen position, 2xuint16 packed in uint32
+        GfxTexture   probe_screen_coords[2];
+        // Probe linear depth   1xfloat32
+        GfxTexture   probe_linear_depth [2];
+        // Probe world position 4xfloat32 because 3xfloat32 is not supported in most hardware
+        GfxTexture   probe_world_position [2];
+        // Probe world normal   2xunorm16
+        GfxTexture   probe_normal [2];
+
+        // Octahedral encoded color + depth fp16x4
+        GfxTexture   probe_color[2];
+        GfxTexture   probe_sample_color;
+        // Probe SH coefficients 4xfloat16, 8 coefficients packed in one texture
+        GfxTexture   probe_SH_coefficients_R;
+        GfxTexture   probe_SH_coefficients_G;
+        GfxTexture   probe_SH_coefficients_B;
+        GfxTexture   probe_irradiance;
+        // Used to measure the trust of reprojected result from last frame [0, 1]
+        GfxTexture   probe_history_trust;
+        // Tile adaptive probe count  uint32 (Don't use R16, there are silent bugs)
+        GfxTexture   tile_adaptive_probe_count [2];
+        // Tile adaptive probe index  uint16
+        GfxTexture   tile_adaptive_probe_index [2];
 
         // fp16x4
         GfxTexture direct_illumination[2];
@@ -166,10 +227,12 @@ protected:
         GfxTexture card_workspace_indirect_illumination[2];
         GfxTexture card_workspace_lighting[2];
 
-
         // The depth buffer used for rasterization
         // Cull gaussian fragments falling behind regular geometries.
         GfxTexture rasterization_depth;
+
+        // LUT for shading
+        GfxTexture shading_LUT;
     } tex_ {};
 
     struct {
@@ -200,9 +263,8 @@ protected:
         GfxKernel SpatialFilterDirectIllumination[2];
         GfxKernel SSRC_ReInsertHashGridTiles;
         GfxKernel SSRC_AllocateUniformProbes;
-        GfxKernel SSRC_AllocateAdaptiveProbes;
+        GfxKernel SSRC_AllocateAdaptiveProbes[SSRC_MAX_ADAPTIVE_PROBE_LAYERS];
         GfxKernel SSRC_PrepareProbeProcessing;
-        GfxKernel SSRC_ResetProbeTexels;
         GfxKernel SSRC_ReprojectProbeHistory;
         GfxKernel SSRC_AllocateProbeUpdateRays;
         GfxKernel SSRC_SetRayCounts;
@@ -221,7 +283,7 @@ protected:
         GfxKernel SSRC_UpdateProbes;
         GfxKernel SSRC_FilterProbes;
         GfxKernel SSRC_PadProbeTextureEdges;
-        GfxKernel SSRC_IntegrateASG;
+        GfxKernel SSRC_Integrate;
         GfxKernel TemporalDenoiseLighting;
         GfxKernel FinalComposition;
 
@@ -236,6 +298,7 @@ protected:
         GfxKernel Trace3DGSRays;
         // Trace shadow rays
         GfxKernel Trace3DGSShadowRays;
+        GfxKernel Trace3DGSShadowRaysWithoutIndirectionList;
         GfxKernel DirectIlluminationTrace3DGSShadowRays;
         GfxKernel Trace3DGSProbeUpdateRays;
         GfxKernel SpawnCameraRays;
@@ -266,6 +329,17 @@ protected:
 
         // Number of cascades of the light grid, should not exceed LIGHT_GRID_MAX_NUM_CASCADES
         int light_grid_num_cascades {3};
+
+        // Maximum number of tiles in the hash grid
+        // 1KB per tile, 64MB total memory
+        int HashGrids_max_num_tiles {64 * 1024};
+
+        int HashGrids_max_num_buckets {64 * 1024};
+        int HashGrids_num_slots_per_bucket {2};
+
+        int SSRC_max_num_probes {16384};
+        // This should be no greater than max_num_rays
+        int SSRC_max_num_probe_update_rays {2 * 1024 * 1024};
 
         // Spatial radius for all denoising. Defined as a shader macro for loop unrolling.
         int filter_radius {2};
@@ -328,6 +402,9 @@ protected:
         glm::vec3 area_light_positions[10];
         glm::vec3 area_light_local_vertices[30];
         glm::vec3 area_light_colors [10];
+        uint SSRC_freeze_tile_jitter{false};
+        uint SSRC_tile_jitter {};
+        float HashGrids_cascade_radius {};
     } CB {};
 
     UniformBlock UB {};

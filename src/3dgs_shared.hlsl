@@ -130,11 +130,11 @@ struct UniformBlock {
     uint   SSRC_ProbeFiltering;
 
     uint   SSRC_NoImportanceSampling;
-    uint   SSRC_UniformScreenProbeCount;
+    uint   SSRC_NumUniformScreenProbes;
     uint   SSRC_BaseUpdateRayWaves;
     uint   SSRC_ResetCache;
 
-    uint   SSRC_MaxAdaptiveProbeCount;
+    uint   SSRC_MaxNumAdaptiveProbes;
     uint   SSRC_NoAdaptiveProbes;
     uint   SSRC_TileJitterFrameSeed;
     uint   SSRC_PreviousTileJitterFrameSeed;
@@ -312,5 +312,15 @@ struct Card {
 #define SSRC_PROBE_NORMAL_OFFSET (2e-4f)
 
 #define SSRC_MAX_NUM_UPDATE_RAY_PER_PROBE 128
+
+#define SSRC_MAX_ADAPTIVE_PROBE_LAYERS 2
+
+#define HASHGRIDS_TILE_CELL_WIDTH 8
+#define HASHGRIDS_MAX_NUM_ENTRIES_SEARCHED_PER_BUCKET 8
+#define HASHGRIDS_TILE_CELL_MIP_OFFSET_0 0
+#define HASHGRIDS_TILE_CELL_MIP_OFFSET_1 (HASHGRIDS_TILE_CELL_WIDTH * HASHGRIDS_TILE_CELL_WIDTH)
+#define HASHGRIDS_TILE_CELL_MIP_OFFSET_2 (HASHGRIDS_TILE_CELL_MIP_OFFSET_1 + (HASHGRIDS_TILE_CELL_MIP_OFFSET_1 / 4))
+#define HASHGRIDS_TILE_CELL_MIP_OFFSET_3 (HASHGRIDS_TILE_CELL_MIP_OFFSET_2 + (HASHGRIDS_TILE_CELL_MIP_OFFSET_1 / 16))
+#define HASHGRIDS_NUM_CELLS_PER_TILE (HASHGRIDS_TILE_CELL_MIP_OFFSET_3 + 1)
 
 #endif // INC_3DGS_SHARED_HLSL
