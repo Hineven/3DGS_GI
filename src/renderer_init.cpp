@@ -216,9 +216,9 @@ bool Renderer::CreateResources () {
     tex_.probe_linear_depth[0].setName("ProbeLinearDepth0");
     tex_.probe_linear_depth[1] = gfxCreateTexture2D(gfx, probe_width, probe_height, DXGI_FORMAT_R32_FLOAT);
     tex_.probe_linear_depth[1].setName("ProbeLinearDepth1");
-    tex_.probe_world_position[0] = gfxCreateTexture2D(gfx, probe_width, probe_height, DXGI_FORMAT_R32G32B32_FLOAT);
+    tex_.probe_world_position[0] = gfxCreateTexture2D(gfx, probe_width, probe_height, DXGI_FORMAT_R32G32B32A32_FLOAT);
     tex_.probe_world_position[0].setName("ProbeWorldPosition0");
-    tex_.probe_world_position[1] = gfxCreateTexture2D(gfx, probe_width, probe_height, DXGI_FORMAT_R32G32B32_FLOAT);
+    tex_.probe_world_position[1] = gfxCreateTexture2D(gfx, probe_width, probe_height, DXGI_FORMAT_R32G32B32A32_FLOAT);
     tex_.probe_world_position[1].setName("ProbeWorldPosition1");
     tex_.probe_normal[0] = gfxCreateTexture2D(gfx, probe_width, probe_height, DXGI_FORMAT_R32_UINT);
     tex_.probe_normal[0].setName("ProbeNormal0");
@@ -610,7 +610,7 @@ bool Renderer::CreateKernels () {
         Trace3DGSShadowRaysWithoutIndirectionList_kernel_subobjects.push_back("Trace3DGSShadowHitGroup");
         Trace3DGSShadowRaysWithoutIndirectionList_kernel_subobjects.push_back("Trace3DGSShadowShaderConfig");
         defines_c.push_back("NO_RAY_INDIRECTION_LIST");
-        kernel_.Trace3DGSShadowRays = gfxCreateRaytracingKernel(gfx, program_, nullptr, 0,
+        kernel_.Trace3DGSShadowRaysWithoutIndirectionList = gfxCreateRaytracingKernel(gfx, program_, nullptr, 0,
             Trace3DGSShadowRaysWithoutIndirectionList_kernel_exports.data(), (uint32_t)Trace3DGSShadowRaysWithoutIndirectionList_kernel_exports.size(),
             Trace3DGSShadowRaysWithoutIndirectionList_kernel_subobjects.data(), (uint32_t)Trace3DGSShadowRaysWithoutIndirectionList_kernel_subobjects.size(),
             defines_c.data(), defines_c.size()
@@ -808,7 +808,7 @@ void Renderer::DestroyKernels () {
     gfxDestroyProgram(gfx, program_);
 }
 
-bool InitializeConfig () {
+bool Renderer::InitializeConfig () {
     auto gfx = AppInternal::GetInstance().GetGfx();
     auto dx_device = gfxGetDevice(gfx);
     D3D12_FEATURE_DATA_D3D12_OPTIONS1 features = {};

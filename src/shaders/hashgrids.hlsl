@@ -104,7 +104,7 @@ uint HashGrids_GetCellIndex (uint TileIndex, uint2 CellOffset, uint MipLevel = 0
         HASHGRIDS_TILE_CELL_MIP_OFFSET_2,
         HASHGRIDS_TILE_CELL_MIP_OFFSET_3
     };
-    return TileIndex * HASHGRIDS_NUM_CELLS_PER_TILE + Offsets[MipLevel] + CellOffset.x + CellOffset.y * (HASHGRIDS_TILE_CELL_WIDTH >> MipLevel);
+    return TileIndex * HASHGRIDS_NUM_CELLS_PER_TILE + Offsets[MipLevel] + CellOffset.x + CellOffset.y * (uint(HASHGRIDS_TILE_CELL_WIDTH) >> MipLevel);
 }
 
 // Find and (if not found) allocate a slot in the hash table

@@ -173,8 +173,8 @@ RWTexture2D<float2>       g_RW_GDepthTexture;
 Texture2D<float2>         g_GDepthTexture;
 
 // Roughness, nx, ny, unused
-RWTexture2D<float4>      g_RW_GMaterialTexture;
-Texture2D<float4>        g_GMaterialTexture;
+RWTexture2D<float>       g_RW_GMaterialTexture;
+Texture2D<float>         g_GMaterialTexture;
 RWTexture2D<float4>      g_RW_GNormalTexture;
 Texture2D<float4>        g_GNormalTexture;
 RWTexture2D<float>       g_RW_GFilteredDepthTexture;

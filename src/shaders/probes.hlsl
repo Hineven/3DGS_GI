@@ -13,7 +13,7 @@
 // RWTexture2D<uint>   g_RWProbeHeaderPackedTexture;
 RWTexture2D<uint>   g_RWProbeScreenCoordsTexture;
 RWTexture2D<float>  g_RWProbeLinearDepthTexture;
-RWTexture2D<float3> g_RWProbeWorldPositionTexture; 
+RWTexture2D<float4> g_RWProbeWorldPositionTexture; 
 RWTexture2D<uint>   g_RWProbeNormalTexture;
 // RWTexture2D<uint>   g_RWPreviousProbeHeaderPackedTexture;
 RWTexture2D<uint>   g_RWPreviousProbeScreenCoordsTexture;
@@ -231,12 +231,12 @@ void WriteScreenProbeOctahedronRadianceDepth (int2 ProbeIndex, int2 TexelCoords,
 }
 
 int SSRC_GetTotalProbeCount () {
-    int ProbeCount = UB.SSRC_UniformScreenProbeCount + g_RWAdaptiveProbeCountBuffer[0];
+    int ProbeCount = UB.SSRC_NumUniformScreenProbes + g_RWAdaptiveProbeCountBuffer[0];
     return ProbeCount;
 }
 
 int SSRC_GetTotalUpdateRayCount () {
-    return g_RWProbeUpdateRayOffsetBuffer[SSRC_GetTotalProbeCount()];
+    return g_RWProbeUpdateRayOffsetsBuffer[SSRC_GetTotalProbeCount()];
 }
 
 #endif // PROBES_HLSL

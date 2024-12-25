@@ -135,6 +135,10 @@ uint hadd (uint2 Value) {
     return Value.x + Value.y;
 }
 
+uint hadd (uint3 Value) {
+    return Value.x + Value.y + Value.z;
+}
+
 uint hadd (uint4 Value) {
     return Value.x + Value.y + Value.z + Value.w;
 }

@@ -1703,7 +1703,7 @@ void SSRC_SampleProbeUpdateRays (int LocalID : SV_GroupThreadID, int GroupID : S
 			Ray.Seed = rng.rand() * UB.HWRT_StochasticRayTracingQuality;
 			WriteRayToTrace(RayIndex, Ray, false);
 			g_RWRayToTraceResultBuffer[RayIndex] = PackFp16x4Safe(0.f.xxxx);
-			g_RWRayToTraceUVPositionBuffer[RayIndex] = ScreenToUV(Header.ScreenCoords + 0.5f);
+			g_RWRayToTraceUVPositionBuffer[RayIndex] = PackUnorm16x2(ScreenToUV(Header.ScreenCoords + 0.5f));
 			// Keep extra data for later probe update
 			g_RWProbeUpdateRayDirectionBuffer[RayIndex] = PackNormal(RayDirection);
 			ProbeUpdateRayResult Result = (ProbeUpdateRayResult)0;
@@ -2020,7 +2020,7 @@ void SSRC_ResolveHitDirectLightingFromTraceResult (uint DispatchID : SV_Dispatch
 	}
 }
 
-float4 LocalHashGridTileRadiance[HASHGRIDS_TILE_CELL_WIDTH][HASHGRIDS_TILE_CELL_WIDTH];
+groupshared float4 LocalHashGridTileRadiance[HASHGRIDS_TILE_CELL_WIDTH][HASHGRIDS_TILE_CELL_WIDTH];
 // Filter hash grids
 [numthreads(HASHGRIDS_TILE_CELL_WIDTH, HASHGRIDS_TILE_CELL_WIDTH, 1)]
 void SSRC_FilterHashGrids (uint GroupID : SV_GroupID, uint2 LocalID : SV_GroupThreadID) {
@@ -2045,7 +2045,9 @@ void SSRC_FilterHashGrids (uint GroupID : SV_GroupID, uint2 LocalID : SV_GroupTh
 		);
         
         LocalHashGridTileRadiance[CellOffset.y][CellOffset.x] = float4(Radiance.rgb * SampleCount, SampleCount);
-        g_HashGrids_CellValueBuffer[CellIndex] = PackFp16x4Safe(Radiance);
+        uint2 PackedValue = PackFp16x4Safe(Radiance);
+		g_HashGrids_CellValueBuffer[CellIndex * 2 + 0] = PackedValue.x;
+		g_HashGrids_CellValueBuffer[CellIndex * 2 + 1] = PackedValue.y;
 
         // Clear scratch
         g_HashGrids_UpdateCellValueXBuffer[4 * Mip0CellIndex + 0] = 0;
@@ -2069,7 +2071,9 @@ void SSRC_FilterHashGrids (uint GroupID : SV_GroupID, uint2 LocalID : SV_GroupTh
         float4 Radiance = (Radiance00 + Radiance01 + Radiance10 + Radiance11);
 
         LocalHashGridTileRadiance[2 * LocalID.y][2 * LocalID.x] = Radiance;
-        g_HashGrids_CellValueBuffer[CellIndex] = PackFp16x4Safe(float4(Radiance.rgb / max(Radiance.w, 1), Radiance.w));
+		uint2 PackedValue = PackFp16x4Safe(float4(Radiance.rgb / max(Radiance.w, 1), Radiance.w));
+        g_HashGrids_CellValueBuffer[CellIndex * 2 + 0] = PackedValue.x;
+		g_HashGrids_CellValueBuffer[CellIndex * 2 + 1] = PackedValue.y;
     }
 
     // MIP 2
@@ -2087,7 +2091,9 @@ void SSRC_FilterHashGrids (uint GroupID : SV_GroupID, uint2 LocalID : SV_GroupTh
 		float4 Radiance = (Radiance00 + Radiance01 + Radiance10 + Radiance11);
 
 		LocalHashGridTileRadiance[4 * LocalID.y][4 * LocalID.x] = Radiance;
-		g_HashGrids_CellValueBuffer[CellIndex] = PackFp16x4Safe(float4(Radiance.rgb / max(Radiance.w, 1), Radiance.w));
+		uint2 PackedValue = PackFp16x4Safe(float4(Radiance.rgb / max(Radiance.w, 1), Radiance.w));
+		g_HashGrids_CellValueBuffer[CellIndex * 2 + 0] = PackedValue.x;
+		g_HashGrids_CellValueBuffer[CellIndex * 2 + 1] = PackedValue.y;
 	}
 
 	// MIP 3
@@ -2105,7 +2111,9 @@ void SSRC_FilterHashGrids (uint GroupID : SV_GroupID, uint2 LocalID : SV_GroupTh
 		float4 Radiance = (Radiance00 + Radiance01 + Radiance10 + Radiance11);
 
 		// LocalHashGridTileRadiance[8 * LocalID.y][8 * LocalID.x] = Radiance;
-		g_HashGrids_CellValueBuffer[CellIndex] = PackFp16x4Safe(float4(Radiance.rgb / max(Radiance.w, 1), Radiance.w));
+		uint2 PackedValue = PackFp16x4Safe(float4(Radiance.rgb / max(Radiance.w, 1), Radiance.w));
+		g_HashGrids_CellValueBuffer[CellIndex * 2 + 0] = PackedValue.x;
+		g_HashGrids_CellValueBuffer[CellIndex * 2 + 1] = PackedValue.y;
 	}
 }
 
