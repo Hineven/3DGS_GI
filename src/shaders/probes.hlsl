@@ -5,6 +5,10 @@
 #include "conventions.hlsl"
 #include "sampling.hlsl"
 
+RWStructuredBuffer<DispatchIndirectCommand> g_RWProbeDispatchCommandBuffer;
+RWStructuredBuffer<DispatchIndirectCommand> g_RWProbePerLaneDispatchCommandBuffer;
+RWStructuredBuffer<uint> g_RWProbeUpdateRayReduceCountBuffer;
+
 // Probe headers
 // Use textures for better texture cache utilization (2x2)
 // BasisOffset : 24 bits

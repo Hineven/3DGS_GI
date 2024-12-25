@@ -94,10 +94,6 @@ StructuredBuffer<uint> g_ThreadsToDispatchCountBuffer;
 RWStructuredBuffer<DrawIndirectCommand> g_RWDrawIndirectCommandBuffer;
 StructuredBuffer<uint> g_VertexToDrawCountBuffer;
 
-RWStructuredBuffer<DispatchIndirectCommand> g_RWProbeDispatchCommandBuffer;
-RWStructuredBuffer<DispatchIndirectCommand> g_RWProbePerLaneDispatchCommandBuffer;
-RWStructuredBuffer<uint> g_RWProbeUpdateRayReduceCountBuffer;
-
 // Number of active gaussians. Updated every frame.
 RWStructuredBuffer<uint>  g_RWActiveGaussianCountBuffer;
 // Depths of the active gaussians (used for sorting keys)
