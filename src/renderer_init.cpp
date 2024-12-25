@@ -188,8 +188,10 @@ bool Renderer::CreateResources () {
     tex_.G_albedo_alpha.setName("G_albedo_alpha");
     tex_.G_material = gfxCreateTexture2D(gfx, width, height, DXGI_FORMAT_R8_UNORM, 1, zero_clear_value);
     tex_.G_material.setName("G_material");
-    tex_.G_normal = gfxCreateTexture2D(gfx, width, height, DXGI_FORMAT_R8G8B8A8_UNORM, 1, zero_clear_value);
-    tex_.G_normal.setName("G_normal");
+    tex_.G_normal[0] = gfxCreateTexture2D(gfx, width, height, DXGI_FORMAT_R8G8B8A8_UNORM, 1, zero_clear_value);
+    tex_.G_normal[0].setName("G_normal0");
+    tex_.G_normal[1] = gfxCreateTexture2D(gfx, width, height, DXGI_FORMAT_R8G8B8A8_UNORM, 1, zero_clear_value);
+    tex_.G_normal[1].setName("G_normal1");
     tex_.G_emission_alpha = gfxCreateTexture2D(gfx, width, height, DXGI_FORMAT_R16G16B16A16_FLOAT, 1, zero_clear_value);
     tex_.G_emission_alpha.setName("G_emission_alpha");
     tex_.G_zdepth[0] = gfxCreateTexture2D(gfx, width, height, DXGI_FORMAT_R32_FLOAT, 1, zero_clear_value);
@@ -404,7 +406,8 @@ void Renderer::DestroyResources() {
     gfxDestroyTexture(gfx, tex_.G_depth);
     gfxDestroyTexture(gfx, tex_.G_albedo_alpha);
     gfxDestroyTexture(gfx, tex_.G_material);
-    gfxDestroyTexture(gfx, tex_.G_normal);
+    gfxDestroyTexture(gfx, tex_.G_normal[0]);
+    gfxDestroyTexture(gfx, tex_.G_normal[1]);
 
     gfxDestroyTexture(gfx, tex_.G_filtered_depth);
     gfxDestroyTexture(gfx, tex_.G_zdepth[0]);
@@ -535,7 +538,7 @@ bool Renderer::CreateKernels () {
         kernel_.SSRC_ReprojectProbeHistory = gfxCreateComputeKernel(gfx, program_, "SSRC_ReprojectProbeHistory", defines_c.data(), defines_c.size());
         kernel_.SSRC_AllocateProbeUpdateRays = gfxCreateComputeKernel(gfx, program_, "SSRC_AllocateProbeUpdateRays", defines_c.data(), defines_c.size());
         kernel_.SSRC_SetRayCounts = gfxCreateComputeKernel(gfx, program_, "SSRC_SetRayCounts", defines_c.data(), defines_c.size());
-        kernel_.SSRC_SampleProbeUpdateRay = gfxCreateComputeKernel(gfx, program_, "SSRC_SampleProbeUpdateRay", defines_c.data(), defines_c.size());
+        kernel_.SSRC_SampleProbeUpdateRays = gfxCreateComputeKernel(gfx, program_, "SSRC_SampleProbeUpdateRays", defines_c.data(), defines_c.size());
         defines_c.push_back("SSRC_PROBE_UPDATE_RAY_TRACING");
         kernel_.TraceRaysInScreenSpaceForSSRC = gfxCreateComputeKernel(gfx, program_, "TraceRaysInScreenSpace", defines_c.data(), defines_c.size());
         defines_c.pop_back();
@@ -632,17 +635,17 @@ bool Renderer::CreateKernels () {
         );
         defines_c.pop_back();
 
-        std::vector<char const *> Trace3DGSProbeUppdateRays_kernel_exports;
-        Trace3DGSProbeUppdateRays_kernel_exports.push_back("Trace3DGSProbeUppdateRaysRaygen");
-        Trace3DGSProbeUppdateRays_kernel_exports.push_back("Trace3DGSShadowAnyHit");
-        Trace3DGSProbeUppdateRays_kernel_exports.push_back("Trace3DGSShadowMiss");
-        std::vector<char const *> Trace3DGSProbeUppdateRays_kernel_subobjects = base_subobjects;
-        Trace3DGSProbeUppdateRays_kernel_subobjects.push_back("Trace3DGSShadowHitGroup");
-        Trace3DGSProbeUppdateRays_kernel_subobjects.push_back("Trace3DGSShadowShaderConfig");
+        std::vector<char const *> Trace3DGSProbeUpdateRays_kernel_exports;
+        Trace3DGSProbeUpdateRays_kernel_exports.push_back("Trace3DGSProbeUpdateRaysRaygen");
+        Trace3DGSProbeUpdateRays_kernel_exports.push_back("Trace3DGSShadowAnyHit");
+        Trace3DGSProbeUpdateRays_kernel_exports.push_back("Trace3DGSShadowMiss");
+        std::vector<char const *> Trace3DGSProbeUpdateRays_kernel_subobjects = base_subobjects;
+        Trace3DGSProbeUpdateRays_kernel_subobjects.push_back("Trace3DGSShadowHitGroup");
+        Trace3DGSProbeUpdateRays_kernel_subobjects.push_back("Trace3DGSShadowShaderConfig");
         defines_c.push_back("PROBE_UPDATE_STOCHASTIC_RAY_TRACING");
         kernel_.Trace3DGSProbeUpdateRays = gfxCreateRaytracingKernel(gfx, program_, nullptr, 0,
-            Trace3DGSProbeUppdateRays_kernel_exports.data(), (uint32_t)Trace3DGSProbeUppdateRays_kernel_exports.size(),
-            Trace3DGSProbeUppdateRays_kernel_subobjects.data(), (uint32_t)Trace3DGSProbeUppdateRays_kernel_subobjects.size(),
+            Trace3DGSProbeUpdateRays_kernel_exports.data(), (uint32_t)Trace3DGSProbeUpdateRays_kernel_exports.size(),
+            Trace3DGSProbeUpdateRays_kernel_subobjects.data(), (uint32_t)Trace3DGSProbeUpdateRays_kernel_subobjects.size(),
             defines_c.data(), defines_c.size()
         );
         defines_c.pop_back();
@@ -679,7 +682,7 @@ bool Renderer::CreateKernels () {
             gfxDrawStateSetColorTarget(draw_state, 1, tex_.G_material.getFormat());
             gfxDrawStateSetColorTarget(draw_state, 2, tex_.G_depth.getFormat());
             if (!options_.reconstruct_normals) {
-                gfxDrawStateSetColorTarget(draw_state, 3, tex_.G_normal.getFormat());
+                gfxDrawStateSetColorTarget(draw_state, 3, tex_.G_normal[0].getFormat());
             }
         }
         gfxDrawStateSetPrimitiveTopologyType(draw_state, D3D12_PRIMITIVE_TOPOLOGY_TYPE_POINT);
@@ -716,7 +719,7 @@ bool Renderer::CreateKernels () {
         gfxDrawStateSetColorTarget(draw_state, 0, tex_.G_albedo_alpha.getFormat());
         gfxDrawStateSetColorTarget(draw_state, 1, tex_.G_emission_alpha.getFormat());
         gfxDrawStateSetColorTarget(draw_state, 2, tex_.G_material.getFormat());
-        gfxDrawStateSetColorTarget(draw_state, 3, tex_.G_normal.getFormat());
+        gfxDrawStateSetColorTarget(draw_state, 3, tex_.G_normal[0].getFormat());
         kernel_.DrawAreaLights = gfxCreateGraphicsKernel(
                 gfx, program_, draw_state, "DrawAreaLights", defines_c.data(), defines_c.size()
         );
@@ -765,7 +768,7 @@ void Renderer::DestroyKernels () {
     gfxDestroyKernel(gfx, kernel_.SSRC_ReprojectProbeHistory);
     gfxDestroyKernel(gfx, kernel_.SSRC_AllocateProbeUpdateRays);
     gfxDestroyKernel(gfx, kernel_.SSRC_SetRayCounts);
-    gfxDestroyKernel(gfx, kernel_.SSRC_SampleProbeUpdateRay);
+    gfxDestroyKernel(gfx, kernel_.SSRC_SampleProbeUpdateRays);
     gfxDestroyKernel(gfx, kernel_.TraceRaysInScreenSpaceForSSRC);
     gfxDestroyKernel(gfx, kernel_.SSRC_ResolveRayDepths);
     gfxDestroyKernel(gfx, kernel_.SSRC_ResolveHitLightingFromScreenHistory);

@@ -153,7 +153,7 @@ ProbeHeader GetScreenProbeHeader (int2 ProbeIndex, bool bPrevious = false) {
 void WriteScreenProbeHeader (int2 ProbeIndex, ProbeHeader Header) {
     g_RWProbeScreenCoordsTexture[ProbeIndex] = PackUint16x2(Header.ScreenCoords);
     g_RWProbeLinearDepthTexture[ProbeIndex] = Header.LinearDepth;
-    g_RWProbeWorldPositionTexture[ProbeIndex] = Header.Position;
+    g_RWProbeWorldPositionTexture[ProbeIndex] = float4(Header.Position, 0);
     g_RWProbeNormalTexture[ProbeIndex] = PackUnorm16x2(UnitVectorToOctahedron(Header.Normal) * 0.5f + 0.5f);
 }
 

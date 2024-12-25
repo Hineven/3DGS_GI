@@ -853,8 +853,10 @@ void TraceRaysInScreenSpace (uint DispatchID : SV_DispatchThreadID) {
 				Result.Radiance = Radiance;
 				Result.bBypass  = true;
 				WriteProbeUpdateRayResult(RayIndex, Result);
-				float3 Normal = normalize(GetHistoryNormalTexture(C).SampleLevel(g_PointClampSampler, PreviousUVW.xy, 0) * 2 - 1);
-				g_RWRayToTraceResultNormalBuffer[RayIndex] = PackNormal(Normal);
+				// float3 Normal = normalize(
+				// 	GetHistoryNormalTexture(C).SampleLevel(g_PointClampSampler, PreviousUVW.xy, 0).xyz * 2 - 1
+				// );
+				// g_RWRayToTraceResultNormalBuffer[RayIndex] = PackNormal(Normal);
 			}
 		}
 #endif
@@ -1760,7 +1762,7 @@ void SSRC_ResolveHitLightingFromScreenHistory (uint DispatchID : SV_DispatchThre
 		&& PreviousHomogeneous.z >= 0 && PreviousHomogeneous.z <= 1) {
 			float2 HistoryScreenPosition = UB.ScreenDimensions * NDC2ToUV(PreviousHomogeneous.xy);
 			int2 HistoryScreenCoords = int2(HistoryScreenPosition + 0.5f);
-			float3 HistoryNormal = normalize(GetNormalTexture(C).Load(int3(HistoryScreenCoords, 0)).xyz * 2.f - 1.f);
+			float3 HistoryNormal = normalize(GetHistoryNormalTexture(C).Load(int3(HistoryScreenCoords, 0)).xyz * 2.f - 1.f);
 			uint2  PackedHitResult = g_RWRayToTraceResultBuffer[RayIndex];
 			float3 HitNormal     = UnpackNormal(PackedHitResult.y);
 			float  HistoryDepth  = ZDepthToLinear(C, GetHistoryZDepthTexture(C).Load(int3(HistoryScreenCoords, 0)));
@@ -1984,6 +1986,7 @@ void SSRC_ClearNewHashGridTileCells (uint GroupID : SV_GroupID, uint LocalID : S
 // HWRT trace shadow rays (without indirection ray index list)
 
 // Resolve direct lighting, accumulate their contributions to hash grids
+[numthreads(WAVE_SIZE, 1, 1)]
 void SSRC_ResolveHitDirectLightingFromTraceResult (uint DispatchID : SV_DispatchThreadID) {
 	if(DispatchID >= g_RWRayToTraceCountBuffer[0]) return ;
 	int RayIndex = DispatchID; // No indirection

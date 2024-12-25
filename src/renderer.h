@@ -155,7 +155,7 @@ protected:
         // unorm8, roughness
         GfxTexture G_material;
         // unorm8x4
-        GfxTexture G_normal;
+        GfxTexture G_normal[2];
         // fp16x4
         GfxTexture G_emission_alpha;
         // Full precision R32 depth (filtered from R16 linear depth)
@@ -268,7 +268,7 @@ protected:
         GfxKernel SSRC_ReprojectProbeHistory;
         GfxKernel SSRC_AllocateProbeUpdateRays;
         GfxKernel SSRC_SetRayCounts;
-        GfxKernel SSRC_SampleProbeUpdateRay;
+        GfxKernel SSRC_SampleProbeUpdateRays;
         GfxKernel TraceRaysInScreenSpaceForSSRC;
         // Trace3DGSProbeUpdateRays
         GfxKernel SSRC_ResolveRayDepths;

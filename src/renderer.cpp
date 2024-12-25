@@ -17,7 +17,7 @@
 // Flag for debugging. Sometimes incorrect indirect dispatches will let my system panic.
 // This flag disables all the indirect shader dispatches so i can safely check for
 // shader compilation errors.
-// #define NO_INDIRECT_DISPATCH
+#define NO_INDIRECT_DISPATCH
 // #define NO_RAYTRACING_INDIRECT_DISPATCH
 
 Renderer::Renderer () : Timed("Renderer"), blue_noise_sampler_(AppInternal::GetInstance().GetGfx()) {
@@ -649,8 +649,9 @@ void Renderer::Render() {
     gfxProgramSetParameter(gfx, program_, "g_RW_GMaterialTexture", tex_.G_material);
     gfxProgramSetParameter(gfx, program_, "g_GMaterialTexture", tex_.G_material);
     // Not rasterized, but derived from depth buffer (overdraw is too severe for 3dgs)
-    gfxProgramSetParameter(gfx, program_, "g_RW_GNormalTexture", tex_.G_normal);
-    gfxProgramSetParameter(gfx, program_, "g_GNormalTexture", tex_.G_normal);
+    gfxProgramSetParameter(gfx, program_, "g_RW_GNormalTexture", tex_.G_normal[frame_index_ & 1]);
+    gfxProgramSetParameter(gfx, program_, "g_GNormalTexture", tex_.G_normal[frame_index_ & 1]);
+    gfxProgramSetParameter(gfx, program_, "g_HistoryNormalTexture", tex_.G_normal[!(frame_index_ & 1)]);
     gfxProgramSetParameter(gfx, program_, "g_RW_GFilteredDepthTexture", tex_.G_filtered_depth);
     gfxProgramSetParameter(gfx, program_, "g_GFilteredDepthTexture", tex_.G_filtered_depth);
     gfxProgramSetParameter(gfx, program_, "g_RW_GZDepthTexture", tex_.G_zdepth[frame_index_ & 1]);
@@ -1178,7 +1179,7 @@ void Renderer::Render() {
             gfxCommandClearTexture(gfx, tex_.G_albedo_alpha);
             gfxCommandClearTexture(gfx, tex_.G_emission_alpha);
             gfxCommandClearTexture(gfx, tex_.G_material);
-            gfxCommandClearTexture(gfx, tex_.G_normal);
+            gfxCommandClearTexture(gfx, tex_.G_normal[frame_index_ & 1]);
             gfxCommandClearTexture(gfx, tex_.rasterization_depth);
             gfxCommandBindKernel(gfx, kernel_.DrawAreaLights);
             // Alpha channel is not used in this draw
@@ -1186,7 +1187,7 @@ void Renderer::Render() {
             // Alpha is drawn to this texture (0 or 1)
             gfxCommandBindColorTarget(gfx, 1, tex_.G_emission_alpha);
             gfxCommandBindColorTarget(gfx, 2, tex_.G_material);
-            gfxCommandBindColorTarget(gfx, 3, tex_.G_normal);
+            gfxCommandBindColorTarget(gfx, 3, tex_.G_normal[frame_index_ & 1]);
             gfxCommandBindDepthStencilTarget(gfx, tex_.rasterization_depth);
             gfxCommandBindKernel(gfx, kernel_.DrawAreaLights);
             gfxCommandDraw(gfx, 3, CB.area_light_count);
@@ -1230,7 +1231,7 @@ void Renderer::Render() {
             gfxCommandBindColorTarget(gfx, 2, tex_.G_depth);
             gfxCommandBindDepthStencilTarget(gfx, tex_.rasterization_depth);
             if (!options_.reconstruct_normals) {
-                gfxCommandBindColorTarget(gfx, 3, tex_.G_normal);
+                gfxCommandBindColorTarget(gfx, 3, tex_.G_normal[frame_index_ & 1]);
             }
 #ifndef NO_INDIRECT_DISPATCH
             gfxCommandMultiDrawIndirect(gfx, buf_.draw_indirect_command, 1);
@@ -1480,8 +1481,8 @@ void Renderer::Render() {
 
         // Importance sample probe update rays using the reprojected radiance distribution on each probe
         {
-            auto section = TimedSection(*this, "SSRC_SampleProbeUpdateRay");
-            gfxCommandBindKernel(gfx, kernel_.SSRC_SampleProbeUpdateRay);
+            auto section = TimedSection(*this, "SSRC_SampleProbeUpdateRays");
+            gfxCommandBindKernel(gfx, kernel_.SSRC_SampleProbeUpdateRays);
 #ifndef NO_INDIRECT_DISPATCH
             gfxCommandDispatchIndirect(gfx, buf_.probe_dispatch_command);
 #endif

@@ -177,6 +177,7 @@ RWTexture2D<float>       g_RW_GMaterialTexture;
 Texture2D<float>         g_GMaterialTexture;
 RWTexture2D<float4>      g_RW_GNormalTexture;
 Texture2D<float4>        g_GNormalTexture;
+Texture2D<float4>        g_HistoryNormalTexture;
 RWTexture2D<float>       g_RW_GFilteredDepthTexture;
 Texture2D<float>         g_GFilteredDepthTexture;
 

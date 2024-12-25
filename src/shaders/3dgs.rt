@@ -170,11 +170,12 @@ void Trace3DGSAnyHit (inout Trace3DGSPayload Payload, in BuiltInTriangleIntersec
 #ifdef DIRECT_ILLUMINATION_SHADOW_RAY_TRACING
 void DirectIlluminationTrace3DGSShadowRaygen ()
 #elif defined(PROBE_UPDATE_STOCHASTIC_RAY_TRACING)
-void Trace3DGSProbeUpdateRaysRaygen
+void Trace3DGSProbeUpdateRaysRaygen ()
 #else
 void Trace3DGSShadowRaygen ()
 #endif
 {
+    CameraDescription C = GetCameraDescription();
 #ifndef NO_RAY_INDIRECTION_LIST
     int RayRank = DispatchRaysIndex().x;
     if(RayRank >= g_RWRayToTraceCountBuffer[0]) return ;

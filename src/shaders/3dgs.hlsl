@@ -525,6 +525,10 @@ Texture2D<float4>  GetNormalTexture (CameraDescription C) {
 #endif
 }
 
+Texture2D<float4> GetHistoryNormalTexture (CameraDescription C) {
+    return g_HistoryNormalTexture;
+}
+
 float3 GetTexelNormalFromTextureUV (Texture2D<float4> NormalTexture, float2 UV) {
     return normalize(NormalTexture.SampleLevel(g_PointClampSampler, UV, 0.0f).xyz * 2.0f - 1.0f);
 }
