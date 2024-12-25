@@ -1412,7 +1412,9 @@ void Renderer::Render() {
             // Re-insert (and filter outdated) hash grid tiles from the last frame
             GenerateDispatchIndirect(buf_.HashGrids_active_tile_count[!(frame_index_ & 1)]);
             gfxCommandBindKernel(gfx, kernel_.SSRC_ReInsertHashGridTiles);
+#ifndef NO_INDIRECT_DISPATCH
             gfxCommandDispatchIndirect(gfx, buf_.dispatch_indirect_command);
+#endif
         }
 
         // Allocate SSRC uniform screen probes
@@ -1449,14 +1451,18 @@ void Renderer::Render() {
         {
             auto section = TimedSection(*this, "SSRC_ReprojectProbeHistory");
             gfxCommandBindKernel(gfx, kernel_.SSRC_ReprojectProbeHistory);
+#ifndef NO_INDIRECT_DISPATCH
             gfxCommandDispatchIndirect(gfx, buf_.probe_dispatch_command);
+#endif
         }
 
         // Allocate update rays for each probe. Ray count is proportional to probe reprojection trust
         {
             auto section = TimedSection(*this, "SSRC_AllocateProbeUpdateRays");
             gfxCommandBindKernel(gfx, kernel_.SSRC_AllocateProbeUpdateRays);
+#ifndef NO_INDIRECT_DISPATCH
             gfxCommandDispatchIndirect(gfx, buf_.probe_per_lane_dispatch_command);
+#endif
         }
 
         // Scan sum the ray counts to allocate indices for each probe update ray
@@ -1476,7 +1482,9 @@ void Renderer::Render() {
         {
             auto section = TimedSection(*this, "SSRC_SampleProbeUpdateRay");
             gfxCommandBindKernel(gfx, kernel_.SSRC_SampleProbeUpdateRay);
+#ifndef NO_INDIRECT_DISPATCH
             gfxCommandDispatchIndirect(gfx, buf_.probe_dispatch_command);
+#endif
         }
 
         // Trace sampled rays (stochastic shading rays)
@@ -1485,7 +1493,9 @@ void Renderer::Render() {
             auto section = TimedSection(*this, "TraceRaysInScreenSpaceForSSRC");
             GenerateDispatchIndirect(buf_.probe_all_update_ray_count);
             gfxCommandBindKernel(gfx, kernel_.TraceRaysInScreenSpaceForSSRC);
+#ifndef NO_INDIRECT_DISPATCH
             gfxCommandDispatchIndirect(gfx, buf_.dispatch_indirect_command);
+#endif
         }
 
         CompactRayTraces();
@@ -1510,7 +1520,9 @@ void Renderer::Render() {
             // All rays shall be resolved
             GenerateDispatchIndirect(buf_.probe_all_update_ray_count);
             gfxCommandBindKernel(gfx, kernel_.SSRC_ResolveRayDepths);
+#ifndef NO_INDIRECT_DISPATCH
             gfxCommandDispatchIndirect(gfx, buf_.dispatch_indirect_command);
+#endif
         }
 
         // Try to resolve hit lighting from previous frame's film and skip shading if possible
@@ -1519,7 +1531,9 @@ void Renderer::Render() {
             // Only resolve the hits that are not found by screen tracing
             GenerateDispatchIndirect(buf_.ray_to_trace_count[ray_compact_count & 1]);
             gfxCommandBindKernel(gfx, kernel_.SSRC_ResolveHitLightingFromScreenHistory);
+#ifndef NO_INDIRECT_DISPATCH
             gfxCommandDispatchIndirect(gfx, buf_.dispatch_indirect_command);
+#endif
         }
 
         // Shade hits that failed to resolve lighting from screen history
@@ -1533,7 +1547,9 @@ void Renderer::Render() {
             // Spawn 1 shadow ray for each hit that failed to resolve lighting from screen history
             GenerateDispatchIndirect(buf_.probe_update_ray_hit_shade_count);
             gfxCommandBindKernel(gfx, kernel_.SSRC_SampleLightRays);
+#ifndef NO_INDIRECT_DISPATCH
             gfxCommandDispatchIndirect(gfx, buf_.dispatch_indirect_command);
+#endif
         }
 
         {
@@ -1546,7 +1562,9 @@ void Renderer::Render() {
         {
             auto section = TimedSection(*this, "SSRC_ClearNewHashGridTileCells");
             gfxCommandBindKernel(gfx, kernel_.SSRC_ClearNewHashGridTileCells);
+#ifndef NO_INDIRECT_DISPATCH
             gfxCommandDispatchIndirect(gfx, buf_.dispatch_indirect_command);
+#endif
         }
 
         // Trace shadow rays (HWRT
@@ -1567,7 +1585,9 @@ void Renderer::Render() {
             auto section = TimedSection(*this, "SSRC_ResolveHitDirectLightingFromTraceResult");
             GenerateDispatchIndirect(buf_.ray_to_trace_count[ray_compact_count & 1]);
             gfxCommandBindKernel(gfx, kernel_.SSRC_ResolveHitDirectLightingFromTraceResult);
+#ifndef NO_INDIRECT_DISPATCH
             gfxCommandDispatchIndirect(gfx, buf_.dispatch_indirect_command);
+#endif
         }
 
         // Update and filter modified tiles in the hash grid cache
@@ -1579,7 +1599,9 @@ void Renderer::Render() {
                 buf_.HashGrids_update_tile_count, 0, sizeof(uint32_t)
             );
             gfxCommandBindKernel(gfx, kernel_.SSRC_FilterHashGrids);
+#ifndef NO_INDIRECT_DISPATCH
             gfxCommandDispatchIndirect(gfx, buf_.dispatch_indirect_command);
+#endif
         }
 
         // Finally, resolve shading results from the cache for probe update rays
@@ -1588,14 +1610,18 @@ void Renderer::Render() {
             // Each hit outside the screen history potentially requires a resolve
             GenerateDispatchIndirect(buf_.probe_update_ray_hit_shade_count);
             gfxCommandBindKernel(gfx, kernel_.SSRC_ResolveProbeUpdateRayRadianceFromCells);
+#ifndef NO_INDIRECT_DISPATCH
             gfxCommandDispatchIndirect(gfx, buf_.dispatch_indirect_command);
+#endif
         }
 
         // Use probe update ray trace results to update SSRC probes
         {
             auto section = TimedSection(*this, "SSRC_UpdateProbes");
             gfxCommandBindKernel(gfx, kernel_.SSRC_UpdateProbes);
+#ifndef NO_INDIRECT_DISPATCH
             gfxCommandDispatchIndirect(gfx, buf_.probe_dispatch_command);
+#endif
         }
 
         // Filter probes as well as calculate SH projection
@@ -1610,7 +1636,9 @@ void Renderer::Render() {
         {
             auto section = TimedSection(*this, "SSRC_PadProbeTextureEdges");
             gfxCommandBindKernel(gfx, kernel_.SSRC_PadProbeTextureEdges);
+#ifndef NO_INDIRECT_DISPATCH
             gfxCommandDispatchIndirect(gfx, buf_.probe_dispatch_command);
+#endif
         }
 
         // Integrate indirect illumination for diffuse BRDF from SSRC
