@@ -173,7 +173,22 @@ void Renderer::RenderUI () {
         if (ImGui::Button("Rest HashGrids")) {
             should_reset_hash_grids_ = true;
         }
-
+        auto & scene = AppInternal::GetInstance().GetScene();
+        auto & device_scene = scene.GetDeviceScene();
+        auto gfx = AppInternal::GetInstance().GetGfx();
+        is_instance_active_.resize(scene.GetNumInstances());
+        if (ImGui::CollapsingHeader("Instances", ImGuiTreeNodeFlags_DefaultOpen)) {
+            for (int i = 0; i < is_instance_active_.size(); i++) {
+                std::string id = "Instance " + std::to_string(i);
+                bool bv = is_instance_active_[i];
+                ImGui::Checkbox(id.c_str(), &bv);
+                if (is_instance_active_[i] != bv) {
+                    gfxSetRaytracingPrimitiveActive(gfx, device_scene.rt_primitives_[i], bv);
+                    should_update_TLAS_ = true;
+                }
+                is_instance_active_[i] = bv;
+            }
+        }
         if (ImGui::CollapsingHeader("Area Lights", ImGuiTreeNodeFlags_DefaultOpen)) {
             ImGui::Text("Count: %d", CB.area_light_count);
             int index_to_remove = -1;
@@ -825,12 +840,17 @@ void Renderer::Render() {
             gfxDestroyBuffer(gfx, index_range);
             gfxDestroyBuffer(gfx, vertex_range);
         }
-        gfxAccelerationStructureUpdate(gfx, device_scene.acceleration_structure_);
+        should_update_TLAS_ = true;
 
         gfxDestroyBuffer(gfx, vertex_buffer);
         gfxDestroyBuffer(gfx, index_buffer);
 
         should_build_acceleration_structure_ = false;
+    }
+
+    if (should_update_TLAS_) {
+        gfxAccelerationStructureUpdate(gfx, device_scene.acceleration_structure_);
+        should_update_TLAS_ = false;
     }
 
     // Bind the acceleration structure if present
@@ -1245,10 +1265,12 @@ void Renderer::Render() {
         {
             // Filter active gaussians, crop gaussians outside the view frustrum
             auto section = TimedSection(*this, "FilterActiveGaussians");
+            is_instance_active_.resize(scene.GetNumInstances());
             gfxCommandBindKernel(gfx, kernel_.FilterActiveGaussians);
             for (int i = 0; i < scene.GetNumInstances(); i++) {
                 auto instance = scene.GetInstance(i);
-                if (instance.type == InstanceType::eGaussians) {
+                bool should_draw = is_instance_active_[i];
+                if (instance.type == InstanceType::eGaussians && should_draw) {
                     gfxProgramSetParameter(gfx, program_, "g_CurrentInstanceIndex", i);
                     gfxCommandDispatch(gfx, divideAndRoundUp(instance.num_vertices, cfg_.wave_lane_count), 1, 1);
                 }

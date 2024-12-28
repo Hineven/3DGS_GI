@@ -244,6 +244,27 @@ SymmetricMatrix ComputeCovarianceMatrix (float3 Scale, float4 Rotation) {
     return Ret;
 }
 
+SymmetricMatrix ComputeCovarianceMatrix (float3 Scale, float4 Rotation, float3x3 InstanceRotationScale) {
+    float3x3 M = mul(InstanceRotationScale, GetRotationScaleTransform(Rotation, Scale));
+    // Covariance matrix
+    float3x3 Covariance = mul(M, transpose(M));
+
+    float3 Diagonal = float3(
+        Covariance[0][0],
+        Covariance[1][1],
+        Covariance[2][2]
+    );
+    float3 OffDiagonal = float3(
+        Covariance[0][1],
+        Covariance[0][2],
+        Covariance[1][2]
+    );
+    SymmetricMatrix Ret = (SymmetricMatrix)0;
+    Ret.Diagonal = Diagonal;
+    Ret.OffDiagonal = OffDiagonal;
+    return Ret;
+}
+
 // Project the covariance matrix to 2D
 // @return The screen space 2D covariance matrix (m00, m01, m11)
 float3 ProjectCovarianceMatrixToScreen(float3 mean, float2 focal, float2 tan_fov, SymmetricMatrix Covariance3D, float4x4 View)
@@ -776,12 +797,12 @@ float3 SH3Evaluate(float3 ViewDirection, SHCoefficents3 SH3, int Degree)
 }
 
 uint PackActiveGaussianIndex (int InstanceIndex, int GaussianIndex) {
-	return (uint(InstanceIndex) << 24) | (GaussianIndex & (0x3FFFFFFu));
+	return (uint(InstanceIndex) << 24) | (GaussianIndex & (0xFFFFFFu));
 }
 
 void UnpackActiveGaussianIndex (uint PackedIndex, out int InstanceIndex, out int GaussianIndex) {
 	InstanceIndex = int(PackedIndex >> 24);
-	GaussianIndex = int(PackedIndex & 0x3FFFFFFu);
+	GaussianIndex = int(PackedIndex & 0xFFFFFFu);
 }
 
 uint PackCachedMaterial (float3 Albedo, float Roughness) {

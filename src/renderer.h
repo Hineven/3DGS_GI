@@ -399,6 +399,7 @@ protected:
     // Frame flags and states
     int frame_index_ {};
     bool should_build_acceleration_structure_ {true};
+    bool should_update_TLAS_ {true};
     bool should_reset_hash_grids_ {true};
     bool need_reload_shaders_ {false};
 
@@ -469,6 +470,8 @@ protected:
 
     // UI related persistent flags
     bool auto_switch_debug_ = false;
+    // Specify which instance is visible
+    std::vector<bool> is_instance_active_;
 };
 
 #endif //INC_3DGS_ADVGI_RENDERER_H

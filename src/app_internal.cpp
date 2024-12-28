@@ -102,7 +102,7 @@ int AppInternal::Run () {
         // scene_.LoadGaussians(root_path + "data/counter/point_cloud/iteration_7000/point_cloud.ply", true);
 
         {
-            glm::vec3 position = glm::vec3(-2, 0, 0);
+            glm::vec3 position = glm::vec3(-5, 0, 0);
             glm::vec3 rotation = glm::vec3(0, 0, 0);
             glm::vec3 scale = glm::vec3(1, 1, 1);
 
@@ -115,7 +115,7 @@ int AppInternal::Run () {
         }
 
         {
-            glm::vec3 position = glm::vec3(2, 0, 0);
+            glm::vec3 position = glm::vec3(5, 0, 0);
             glm::vec3 rotation = glm::vec3(glm::radians(45.f), glm::radians(30.f), glm::radians(8.f));
             glm::vec3 scale = glm::vec3(1.3, 0.6, 0.8);
 

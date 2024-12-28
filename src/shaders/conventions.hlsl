@@ -3,6 +3,14 @@
 
 #include "math.hlsl"
 
+float3x3 ClipMatrix (float3x4 M) {
+    return float3x3(
+        M[0][0], M[0][1], M[0][2],
+        M[1][0], M[1][1], M[1][2],
+        M[2][0], M[2][1], M[2][2]
+    );
+}
+
 float3x4 ClipMatrix (float4x4 M) {
     return float3x4(
         M[0][0], M[0][1], M[0][2], M[0][3],
@@ -17,6 +25,14 @@ float4x4 ExpandMatrixWithIdentities (float3x4 M) {
         M[1][0], M[1][1], M[1][2], M[1][3],
         M[2][0], M[2][1], M[2][2], M[2][3],
         0, 0, 0, 1
+    );
+}
+
+float3x4 Identity3x4 () {
+    return float3x4(
+        1, 0, 0, 0,
+        0, 1, 0, 0,
+        0, 0, 1, 0
     );
 }
 

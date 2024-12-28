@@ -108,13 +108,13 @@ void FilterActiveGaussians (uint DispatchID : SV_DispatchThreadID) {
 	)) {
 		int GaussianCount = WaveActiveCountBits(1);
 		int GaussianRank  = WavePrefixCountBits(1);
-		int GaussianBaseIndex = 0;
+		int ActiveListBaseIndex = 0;
 		if(WaveIsFirstLane()) {
-			InterlockedAdd(g_RWActiveGaussianCountBuffer[0], GaussianCount, GaussianBaseIndex);
+			InterlockedAdd(g_RWActiveGaussianCountBuffer[0], GaussianCount, ActiveListBaseIndex);
 		}
-		GaussianBaseIndex = WaveReadLaneFirst(GaussianBaseIndex);
+		ActiveListBaseIndex = WaveReadLaneFirst(ActiveListBaseIndex);
 		// Store the indices of active gaussians into a list.
-		int ActiveListIndex = GaussianBaseIndex + GaussianRank;
+		int ActiveListIndex = ActiveListBaseIndex + GaussianRank;
 
 		g_RWActiveGaussianListBuffer[ActiveListIndex] = PackActiveGaussianIndex(InstanceIndex, GaussianIndex);
 		g_RWActiveGaussianIndirectSrcBuffer[ActiveListIndex] = ActiveListIndex;
@@ -133,12 +133,16 @@ void ProjectActiveGaussians (uint DispatchID : SV_DispatchThreadID) {
     
     CameraDescription C = GetCameraDescription();
     Gaussian G = FetchGaussian(GaussianIndex);
-    SymmetricMatrix Cov3D = ComputeCovarianceMatrix(G.Scale, G.Rotation);
+    SymmetricMatrix LocalCov3D = ComputeCovarianceMatrix(G.Scale, G.Rotation);;
     // Project to 2D covariance
 #ifndef CARD_SHADERS
+	float3x4 InstanceTransform = g_InstanceTransformBuffer[InstanceIndex];
+	float3 GaussianWorldPosition = TransformPoint(InstanceTransform, G.Position);
 	// Employ EWA jacobian if the camera is perspective.
-    float3x3 J = EWAJacobian2(G.Position, C.FieldOfView, C.View);
+    float3x3 J = EWAJacobian2(GaussianWorldPosition, C.FieldOfView, C.View);
 #else
+	float3x4 InstanceTransform = Identity3x4();
+	float3 GaussianWorldPosition = G.Position;
 	// Orthographic projection jacobian
 	// It's the inverse of the scales of the object (in object space)
 	float2 InvScales = abs(float2(C.Projection[0][0], C.Projection[1][1])); 
@@ -149,15 +153,13 @@ void ProjectActiveGaussians (uint DispatchID : SV_DispatchThreadID) {
     );
 #endif
 
-	float4x4 InstanceTransform4x4 = ExpandMatrixWithIdentities(g_InstanceTransformBuffer[InstanceIndex]);
-	float4x4 ToViewTransform = mul(C.View, InstanceTransform4x4);
-	float4x4 ToNDCTransform = mul(C.ProjectionView, InstanceTransform4x4);
-    float4 HomogeneousW = mul(C.ProjectionView, float4(G.Position, 1.f));
+    float4x4 LocalToView = mul(C.View, ExpandMatrixWithIdentities(InstanceTransform));
+	float4 HomogeneousW = mul(C.ProjectionView, float4(GaussianWorldPosition, 1));
     float3 Homogeneous = HomogeneousW.xyz / HomogeneousW.w;
 
     // Get the covariance matrix in NDC space ([-1, 1] ^ 2)
     float3 Cov2D = ProjectCovarianceMatrixToNDC(
-        J, Cov3D, ToViewTransform
+        J, LocalCov3D, LocalToView
     );
 
 	{
@@ -181,7 +183,8 @@ void ProjectActiveGaussians (uint DispatchID : SV_DispatchThreadID) {
 
 #ifndef OUTPUT_PBR_G_BUFFER
 	SHCoefficents3 SH3 = FetchGaussianSHCoefficients(GaussianIndex, 2);
-	float3 ViewDirection = normalize(C.Position - G.Position);
+	float3 WorldGaussianPosition = TransformPoint(g_InstanceTransformBuffer[InstanceIndex], G.Position);
+	float3 ViewDirection = normalize(C.Position - WorldGaussianPosition);
 	float3 Color = SH3Evaluate(ViewDirection, SH3, 2);
 	g_RWActiveGaussianColorBuffer[ActiveIndex] = Color;
 #endif
