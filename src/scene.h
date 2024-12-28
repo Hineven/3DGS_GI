@@ -63,6 +63,27 @@ public:
     float far   {50.f};
 };
 
+enum class InstanceType {
+    eGaussians,
+    eMesh
+};
+
+struct SceneInstance {
+    InstanceType type;
+    // Number of vertices or number of gaussians
+    int num_vertices;
+    int num_indices;
+    // Index into the scene's gs_ / vertex_ arrays
+    int vertex_offset;
+    // index into the scene's instance arrays (only makes sense for meshes)
+    int index_offset;
+    AABB local_bounds;
+    glm::mat4x3 to_world_transform;
+    glm::mat4x3 to_local_transform;
+    glm::mat3x3 to_world_normal_transform;
+    glm::mat3x3 to_local_normal_transform;
+};
+
 class Scene {
 public:
     Scene();
@@ -71,8 +92,14 @@ public:
     bool LoadEnvironmentMap (std::filesystem::path);
 
     // Clear and load gaussians from some .ply file.
-    // If the gaussians are PBR ready, we won't load the SH coeffs and colors.
-    bool LoadGaussians (std::filesystem::path path, bool always_load_sh = false) ;
+    // If the gaussians are PBR ready, we won't load the SH coeffs and colors (by default)
+    // returns -1 if failed, otherwise the instance index of the loaded gaussians
+    int LoadGaussians (std::filesystem::path path, bool always_load_sh = false) ;
+
+    // Returns the starting index of loaded instances
+    int LoadGltf (std::filesystem::path path);
+
+    int DuplicateInstance (int src_instance);
 
     // Synchronize the data on host to device.
     void UpdateDeviceScene () ;
@@ -99,9 +126,9 @@ public:
 
     inline int GetNumInstances () const { return num_instances_; }
 
-    inline glm::vec3 GetBoundsMin () const { return bounds_min_; }
+    inline glm::vec3 GetBoundsMin () const { return scene_bounds_min_; }
 
-    inline glm::vec3 GetBoundsMax () const { return bounds_max_; }
+    inline glm::vec3 GetBoundsMax () const { return scene_bounds_max_; }
 
     inline int GetNumLights () const { return light_data_.size(); }
 
@@ -128,23 +155,41 @@ public:
         return gsi_normal_transforms_[id];
     }
 
+    inline SceneInstance GetInstance (int index) {
+        return SceneInstance {
+            .type = gsi_types_[index],
+            .num_vertices = gsi_gs_counts_[index],
+            .num_indices = gsi_mesh_num_indices_[index],
+            .vertex_offset = gsi_gs_index_offsets_[index],
+            .index_offset = gsi_gs_mesh_index_offsets_[index],
+            .local_bounds = {gsi_bounds_min[index], gsi_bounds_max[index]},
+            .to_world_transform = gsi_transforms_[index],
+            .to_local_transform = gsi_inv_transforms_[index],
+            .to_world_normal_transform = gsi_normal_transforms_[index],
+            .to_local_normal_transform = gsi_inv_normal_transforms_[index]
+        };
+    }
+
+    void SetInstanceTransform (int instance, glm::mat4x3 to_world_transform) ;
+
+    void UpdateBoundsForInstance (int instance);
+
+    void UpdateSceneBounds ();
+
     ~Scene();
 
     friend class DeviceScene;
     friend class Renderer;
 protected:
 
-    void InitializeLights ();
-
-    // Update the bounds of all instances and the entire scene
-    void UpdateBounds ();
+    void InitializeLights();
 
     Camera camera_ {};
 
-    glm::vec3 bounds_min_;
-    glm::vec3 bounds_max_;
+    glm::vec3 scene_bounds_min_ {};
+    glm::vec3 scene_bounds_max_ {};
 
-    int num_gaussians_;
+    int num_gaussians_ {};
     std::vector<glm::vec3> gs_positions_;
     std::vector<glm::vec3> gs_colors_;
     std::vector<float>     gs_alphas_;
@@ -159,8 +204,9 @@ protected:
     std::vector<glm::vec3> gs_albedos_;
     std::vector<float>     gs_roughnesses_;
 
-    int num_instances_;
-    // GS instances
+    int num_instances_ {};
+    // instances (gs / mesn)
+    std::vector<InstanceType> gsi_types_;
     std::vector<glm::vec3> gsi_bounds_min; // instance local bounds
     std::vector<glm::vec3> gsi_bounds_max; // instance local bounds
     std::vector<glm::mat4x3> gsi_transforms_;
@@ -169,6 +215,10 @@ protected:
     std::vector<glm::mat3> gsi_inv_normal_transforms_;
     // GS instance GS index offsets
     std::vector<int> gsi_gs_index_offsets_;
+    // Index offsets for mesh instances
+    std::vector<int> gsi_gs_mesh_index_offsets_;
+    // Num indices for mesh instances
+    std::vector<int> gsi_mesh_num_indices_;
     // GS instances GS count
     std::vector<int> gsi_gs_counts_;
 

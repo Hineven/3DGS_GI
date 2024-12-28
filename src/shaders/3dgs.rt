@@ -1,5 +1,6 @@
 #define USING_3DGS_RT
 #include "3dgs.hlsl"
+#include "probes.hlsl"
 #include "radiometry.hlsl"
 
 TriangleHitGroup Trace3DGSHitGroup =
@@ -189,9 +190,11 @@ void Trace3DGSShadowRaygen ()
         bool bFetchOrigin = true;
         float TraceDistance = UB.RT_MaxTraceDistance; 
 #ifdef DIRECT_ILLUMINATION_SHADOW_RAY_TRACING
+        // The origin lies witin the screen. So no need to fetch it from memory.
+        bFetchOrigin = false;
         // Clamp to the distance to the light source for direct illumination shadow rays
         TraceDistance = g_RWDirectIlluminationRayOcclusionThresholdBuffer[RayIndex];
-        // The origin lies witin the screen. So no need to fetch it from memory.
+#elif defined(PROBE_UPDATE_STOCHASTIC_RAY_TRACING)
         bFetchOrigin = false;
 #endif
         RayToTrace RayData = FetchRayToTrace(RayIndex, TraceDistance, bFetchOrigin);
@@ -199,6 +202,11 @@ void Trace3DGSShadowRaygen ()
         float2 FilmPosition = UnpackUnorm16x2(g_RWRayToTraceUVPositionBuffer[RayIndex]) * C.FilmDimensions;
         float  LinearDepth  = GetFilteredDepthTexture(C).Load(int3(FilmPosition, 0)).x;
         RayData.Origin = RecoverWorldSpacePosition(C, FilmPosition, LinearDepth);
+#elif defined(PROBE_UPDATE_STOCHASTIC_RAY_TRACING)
+        // Recover probe update ray origin from probe position
+        int2 ProbeIndex = GetProbeUpdateRayProbeIndex(RayIndex);
+		float3 ProbeWorldPosition = GetScreenProbePosition(ProbeIndex);
+		RayData.Origin = ProbeWorldPosition;
 #endif
         // Early out if the ray is invalid
         if(!RayData.IsValid()) return;

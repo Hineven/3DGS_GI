@@ -10,6 +10,7 @@
 #include "gfx_imgui.h"
 #include "glm/detail/type_quat.hpp"
 #include "glm/ext/quaternion_trigonometric.hpp"
+#include "glm/gtx/quaternion.hpp"
 
 AppInternal::AppInternal() {}
 
@@ -90,11 +91,42 @@ int AppInternal::Run () {
     {
         scene_.LoadEnvironmentMap(root_path + "data/environment_maps/rogland_overcast_4k.exr");
         // scene_.LoadGaussians(root_path + "data/barn/point_cloud/iteration_50000/point_cloud.ply", true);
+        // scene_.LoadGaussians(root_path + "data/hotdog/point_cloud/iteration_50000/point_cloud.ply", true);
+        auto inst_x = scene_.LoadGaussians(root_path + "data/family/point_cloud/iteration_50000/point_cloud.ply", true);
+        auto inst_y = scene_.DuplicateInstance(inst_x);
+        auto inst_z = scene_.LoadGaussians(root_path + "data/chair/point_cloud/iteration_50000/point_cloud.ply", true);
+        // scene_.LoadGaussians(root_path + "data/single_truck/point_cloud/iteration_50000/point_cloud.ply", true);
+        // scene_.LoadGaussians(root_path + "data/caterpillar/point_cloud/iteration_50000/point_cloud.ply", true);
         // scene_.LoadGaussians(root_path + "data/chair/point_cloud/iteration_50000/point_cloud.ply", true);
-        scene_.LoadGaussians(root_path + "data/chair/point_cloud/iteration_50000/point_cloud.ply", true);
         // scene_.LoadGaussians(root_path + "data/garden/point_cloud/iteration_7000/point_cloud.ply", true);
         // scene_.LoadGaussians(root_path + "data/counter/point_cloud/iteration_7000/point_cloud.ply", true);
 
+        {
+            glm::vec3 position = glm::vec3(-2, 0, 0);
+            glm::vec3 rotation = glm::vec3(0, 0, 0);
+            glm::vec3 scale = glm::vec3(1, 1, 1);
+
+            glm::mat4x3 transform = glm::mat4x3(
+                glm::translate(glm::mat4(1.f), position)
+                * glm::toMat4(glm::quat(rotation))
+                * glm::scale(glm::mat4(1.f), scale)
+            );
+            scene_.SetInstanceTransform(inst_x, transform);
+        }
+
+        {
+            glm::vec3 position = glm::vec3(2, 0, 0);
+            glm::vec3 rotation = glm::vec3(glm::radians(45.f), glm::radians(30.f), glm::radians(8.f));
+            glm::vec3 scale = glm::vec3(1.3, 0.6, 0.8);
+
+            glm::mat4x3 transform = glm::mat4x3(
+                glm::translate(glm::mat4(1.f), position)
+                * glm::toMat4(glm::quat(rotation))
+                * glm::scale(glm::mat4(1.f), scale)
+            );
+            scene_.SetInstanceTransform(inst_y, transform);
+        }
+        scene_.UpdateSceneBounds();
         scene_.UpdateDeviceScene();
     }
 

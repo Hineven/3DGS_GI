@@ -124,6 +124,23 @@ float4 TonemapAndDraw (float4 InPosition : SV_Position) : SV_Target {
     float4 Color = g_Radiance.Sample(g_LinearClampSampler, UV);
     // Color.rgb = ACESToneMapping(Color.rgb, UB.TonemapExposure);
     Color.rgb = RadianceToColor(Color.rgb * UB.TonemapExposure);
+	// Debugging
+	if(UB.DebugMode == 1) {
+		Color.rgb = ColorToRadiance(g_GColorTexture.Sample(g_LinearClampSampler, UV).rgb);
+    } else if(UB.DebugMode == 2) {
+        Color.rgb = g_GMaterialTexture.Sample(g_LinearClampSampler, UV).rrr;
+    } else if(UB.DebugMode == 3) {
+        Color.rgb = g_GNormalTexture.Sample(g_LinearClampSampler, UV).xyz;
+    } else if(UB.DebugMode == 4) {
+		float Depth = g_GDepthTexture.Sample(g_LinearClampSampler, UV).r * 0.2f;
+        Color = float4(Depth.xxx, 1);
+    } else if(UB.DebugMode == 5) {
+        float Alpha = g_GColorTexture.Sample(g_LinearClampSampler, UV).a;
+        Color = float4(Alpha.xxx, 1);
+    } else if(UB.DebugMode == 6) {
+		float3 VColor = g_DebugTexture.Sample(g_LinearClampSampler, UV).rgb;
+		Color = float4(VColor, 1);
+	}
     return Color;
 }
 
@@ -135,5 +152,17 @@ struct Debug_VisualizeRays_FSInput {
 float4 Debug_VisualizeRays (
     Debug_VisualizeRays_FSInput Input
 ) : SV_Target0 {
+    return Input.Color;
+}
+
+struct Debug_SSRC_VisualizeProbeUpdateRays_FSInput {
+    float4 Position : SV_Position;
+    float4 Color    : COLOR;
+};
+
+float4 Debug_SSRC_VisualizeProbeUpdateRays (
+    in Debug_SSRC_VisualizeProbeUpdateRays_FSInput Input
+) : SV_Target {
+    if(Input.Color.w == 0) discard;
     return Input.Color;
 }

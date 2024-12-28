@@ -203,6 +203,8 @@ Texture2D<float4>        g_FilteredIndirectIllumination;
 RWTexture2D<float4>      g_RW_Radiance;
 Texture2D<float4>        g_Radiance;
 Texture2D<float4>        g_HistoryRadiance;
+RWTexture2D<float4>      g_RW_HistoryRadianceWithoutEmission;
+Texture2D<float4>        g_HistoryRadianceWithoutEmission;
 
 // ZDepth for regular meshes
 Texture2D<float>         g_RasterizationDepthTexture;
@@ -223,8 +225,8 @@ SamplerState g_PointWrapSampler;
 RWStructuredBuffer<float3> g_RW_RTVertexBuffer;
 RWStructuredBuffer<uint>   g_RW_RTIndexBuffer;
 
-
 #ifndef NDEBUG
+RWStructuredBuffer<int2> g_Debug_SSRC_ProbeIndexBuffer;
 // Buffers for debugging purposes
 // Mapping from pixel index to ray index for direct illumination occlusion tests
 RWStructuredBuffer<uint> g_Debug_DirectIlluminationPixelRayIndexBuffer;

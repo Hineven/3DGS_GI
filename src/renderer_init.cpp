@@ -164,6 +164,8 @@ bool Renderer::CreateResources () {
     buf_.cards.setName("Cards");
 
 #ifndef _NDEBUG
+    buf_.Debug_SSRC_probe_index = gfxCreateBuffer<uint2>(gfx, 1);
+
     buf_.Debug_direct_illumination_pixel_ray_index = gfxCreateBuffer<uint>(gfx, max_num_pixels);
     buf_.Debug_direct_illumination_pixel_ray_index.setName("Debug_DirectIlluminationPixelRayIndex");
     buf_.Debug_visualize_ray_count = gfxCreateBuffer<int>(gfx, 1);
@@ -273,6 +275,9 @@ bool Renderer::CreateResources () {
     tex_.radiance[0].setName("Radiance0");
     tex_.radiance[1] = gfxCreateTexture2D(gfx, width, height, DXGI_FORMAT_R16G16B16A16_FLOAT, 1, zero_clear_value);
     tex_.radiance[1].setName("Radiance1");
+
+    tex_.history_radiance_without_emission = gfxCreateTexture2D(gfx, width, height, DXGI_FORMAT_R16G16B16A16_FLOAT, 1, zero_clear_value);
+    tex_.history_radiance_without_emission.setName("HistoryRadianceWithoutEmission");
 
     tex_.card_workspace_color_alpha = gfxCreateTexture2D(gfx, MAX_CARD_RESOLUTION, MAX_CARD_RESOLUTION, DXGI_FORMAT_R8G8B8A8_UNORM, 1, zero_clear_value);
     tex_.card_workspace_color_alpha.setName("CardWorkspaceColorAlpha");
@@ -395,6 +400,8 @@ void Renderer::DestroyResources() {
     gfxDestroyBuffer(gfx, buf_.UB_pool);
 
 #ifndef NDEBUG
+    gfxDestroyBuffer(gfx, buf_.Debug_SSRC_probe_index);
+
     gfxDestroyBuffer(gfx, buf_.Debug_direct_illumination_pixel_ray_index);
     gfxDestroyBuffer(gfx, buf_.Debug_visualize_ray_count);
     gfxDestroyBuffer(gfx, buf_.Debug_visualize_ray_vertex);
@@ -446,6 +453,7 @@ void Renderer::DestroyResources() {
     gfxDestroyTexture(gfx, tex_.filtered_indirect_illumination);
     gfxDestroyTexture(gfx, tex_.radiance[0]);
     gfxDestroyTexture(gfx, tex_.radiance[1]);
+    gfxDestroyTexture(gfx, tex_.history_radiance_without_emission);
 
     gfxDestroyTexture(gfx, tex_.card_atlas_color);
     gfxDestroyTexture(gfx, tex_.card_atlas_alpha);
@@ -574,6 +582,9 @@ bool Renderer::CreateKernels () {
                                                                 defines_c.size());
         kernel_.VisualizeMeshCardAtlas = gfxCreateComputeKernel(gfx, program_, "VisualizeMeshCardAtlas", defines_c.data(),
                                                                 defines_c.size());
+
+        kernel_.Debug_SSRC_VisualizeProbes = gfxCreateComputeKernel(gfx, program_, "Debug_SSRC_VisualizeProbes", defines_c.data(), defines_c.size());
+        kernel_.Debug_SSRC_PrepareVisualizeProbeUpdateRays = gfxCreateComputeKernel(gfx, program_, "Debug_SSRC_PrepareVisualizeProbeUpdateRays", defines_c.data(), defines_c.size());
     }
 
     // Raytracing kernels
@@ -732,6 +743,18 @@ bool Renderer::CreateKernels () {
                 gfx, program_, draw_state, "TonemapAndDraw", defines_c.data(), defines_c.size());
     }
 
+    {
+        GfxDrawState draw_state = {};
+        gfxDrawStateDisableGeometryShader(draw_state);
+        gfxDrawStateSetDepthStencilTarget(draw_state, DXGI_FORMAT_D32_FLOAT);
+        gfxDrawStateSetDepthFunction(draw_state, D3D12_COMPARISON_FUNC_LESS);
+        gfxDrawStateSetDepthWriteMask(draw_state, D3D12_DEPTH_WRITE_MASK_ZERO);
+        gfxDrawStateSetColorTarget(draw_state, 0, tex_.debug.getFormat());
+        gfxDrawStateSetPrimitiveTopologyType(draw_state, D3D12_PRIMITIVE_TOPOLOGY_TYPE_LINE);
+        kernel_.Debug_SSRC_VisualizeProbeUpdateRays = gfxCreateGraphicsKernel(
+                gfx, program_, draw_state, "Debug_SSRC_VisualizeProbeUpdateRays", defines_c.data(), defines_c.size());
+    }
+
     return true;
 }
 
@@ -807,6 +830,10 @@ void Renderer::DestroyKernels () {
     gfxDestroyKernel(gfx, kernel_.DrawAreaLights);
     gfxDestroyKernel(gfx, kernel_.DrawActiveGaussians);
     gfxDestroyKernel(gfx, kernel_.TonemapAndDraw);
+
+    gfxDestroyKernel(gfx, kernel_.Debug_SSRC_VisualizeProbes);
+    gfxDestroyKernel(gfx, kernel_.Debug_SSRC_PrepareVisualizeProbeUpdateRays);
+    gfxDestroyKernel(gfx, kernel_.Debug_SSRC_VisualizeProbeUpdateRays);
 
     gfxDestroySbt(gfx, sbt_);
 

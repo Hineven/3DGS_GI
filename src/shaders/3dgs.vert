@@ -1,5 +1,6 @@
 #include "3dgs.hlsl"
 #include "lightgrid.hlsl"
+#include "probes.hlsl"
 struct DrawActiveGaussians_GSInput
 {
     uint PrimitiveIndex : TEXCOORD0;
@@ -59,5 +60,40 @@ Debug_VisualizeRays_FSInput Debug_VisualizeRays (
     float4 Position = float4(g_Debug_VisualizeRayVertexBuffer[VertexIndex], 1.f);
     Output.Position = mul(UB.MainCamera.ProjectionView, Position);
     Output.Color = float4(g_Debug_VisualizeRayColorBuffer[VertexIndex / 2], 1);
+    return Output;
+}
+
+struct Debug_SSRC_VisualizeProbeUpdateRays_FSInput {
+    float4 Position : SV_Position;
+    float4 Color    : COLOR;
+};
+
+Debug_SSRC_VisualizeProbeUpdateRays_FSInput Debug_SSRC_VisualizeProbeUpdateRays (
+    uint VertexIndex : SV_VertexID,
+    uint InstanceIndex : SV_InstanceID
+) {
+    CameraDescription C = GetCameraDescription();
+    int2 ProbeIndex = g_Debug_SSRC_ProbeIndexBuffer[0];
+    int  ProbeIndex1 = ProbeIndex.x + ProbeIndex.y * UB.TileDimensions.x;
+    ProbeHeader Header = GetScreenProbeHeader(ProbeIndex);
+    int RayRank   = InstanceIndex;
+    int RayIndex  = g_RWProbeUpdateRayOffsetsBuffer[ProbeIndex1] + RayRank;
+    float3 RayOrigin         = Header.Position;
+    float3 RayDirection      = OctahedronToUnitVector(UnpackUnorm16x2(g_RWProbeUpdateRayDirectionBuffer[RayIndex]) * 2.f - 1.f);
+    ProbeUpdateRayResult Result = FetchProbeUpdateRayResult(RayIndex);
+    float3 RayRadiance       = Result.Radiance;
+    float  InvPdf            = Result.InvPdf;
+    // Negative depth indicate backface hits
+    float  RayLinearDepth    = abs(g_RWProbeUpdateRayDepthBuffer[RayIndex]);
+    float3 World;
+    if(VertexIndex == 0) {
+        World = RayOrigin;
+    } else {
+        World = RayOrigin + RayDirection * RayLinearDepth;
+    }
+    Debug_SSRC_VisualizeProbeUpdateRays_FSInput Output;
+    Output.Position  = mul(C.ProjectionView, float4(World, 1.f));
+    float3 Color     = RayRadiance;
+    Output.Color     = float4(Color, 1.f);//UB.DebugOption_SSRC_VisualizeInvalidRays ? 1.f : (InvPdf > 0 ? 1.f : 0.f));
     return Output;
 }

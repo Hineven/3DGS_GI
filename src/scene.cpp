@@ -14,7 +14,9 @@
 #include "glm/ext/matrix_clip_space.hpp"
 #include "app_internal.h"
 
-Scene::Scene () {}
+Scene::Scene () {
+    InitializeLights();
+}
 
 bool Scene::LoadEnvironmentMap(std::filesystem::path path) {
     if (path.extension() != ".hdr" && path.extension() != ".exr") {
@@ -26,29 +28,31 @@ bool Scene::LoadEnvironmentMap(std::filesystem::path path) {
         return false;
     }
     environment_map_path_ = path;
+
     return true;
 }
 
-
-bool Scene::LoadGaussians (std::filesystem::path path, bool always_load_sh) {
+int Scene::LoadGaussians (std::filesystem::path path, bool always_load_sh) {
     if(path.extension() != ".ply") {
         app_warning("only .ply files are supported.");
-        return false;
+        return -1;
     }
 
     happly::PLYData plyIn(path.string());
     auto & element = plyIn.getElement("vertex");
     // We reserved 24 bits for the count of gaussians for each instance.
     assert(element.count < (1 << 24));
+    int old_num_gaussians = num_gaussians_;
+    int inst_num_gaussians = element.count;
+    num_gaussians_ += inst_num_gaussians;
     // Positions
     {
         auto x = element.getProperty<float>("x");
         auto y = element.getProperty<float>("y");
         auto z = element.getProperty<float>("z");
-        num_gaussians_ = (int)x.size();
         gs_positions_.resize(num_gaussians_);
         for(int i = 0; i < x.size(); i++) {
-            gs_positions_[i] = glm::vec3(x[i], y[i], z[i]);
+            gs_positions_[old_num_gaussians + i] = glm::vec3(x[i], y[i], z[i]);
         }
     }
     bool load_sh = true;
@@ -67,7 +71,7 @@ bool Scene::LoadGaussians (std::filesystem::path path, bool always_load_sh) {
             for (int i = 0; i < r.size(); i++) {
                 auto raw = glm::vec3(r[i], g[i], b[i]);
                 // activation: scaled sigmoid
-                gs_albedos_[i] = 0.03f + 0.77f / (1.f + exp(-raw));
+                gs_albedos_[old_num_gaussians + i] = 0.03f + 0.77f / (1.f + exp(-raw));
             }
         }
         // Roughness
@@ -76,7 +80,7 @@ bool Scene::LoadGaussians (std::filesystem::path path, bool always_load_sh) {
             gs_roughnesses_.resize(num_gaussians_);
             for (int i = 0; i < r.size(); i++) {
                 // activation: sigmoid
-                gs_roughnesses_[i] = 0.09f + 0.9f / (1.f + exp(-r[i]));
+                gs_roughnesses_[old_num_gaussians + i] = 0.09f + 0.9f / (1.f + exp(-r[i]));
             }
         }
 
@@ -90,7 +94,7 @@ bool Scene::LoadGaussians (std::filesystem::path path, bool always_load_sh) {
             auto b = element.getProperty<float>("f_dc_2");
             gs_colors_.resize(num_gaussians_);
             for(int i = 0; i < r.size(); i++) {
-                gs_colors_[i] = glm::vec3(r[i], g[i], b[i]);
+                gs_colors_[old_num_gaussians + i] = glm::vec3(r[i], g[i], b[i]);
             }
         }
         // SH
@@ -108,7 +112,7 @@ bool Scene::LoadGaussians (std::filesystem::path path, bool always_load_sh) {
                         auto data = element.getProperty<float>(name);
                         for(int i = 0; i < data.size(); i++) {
                             auto & v = arr[degree - 1];
-                            v.get()[i * num_coeff + coeff][ch] = data[i];
+                            v.get()[(old_num_gaussians + i) * num_coeff + coeff][ch] = data[i];
                         }
                         coeff_top++;
                     }
@@ -123,7 +127,7 @@ bool Scene::LoadGaussians (std::filesystem::path path, bool always_load_sh) {
         for(int i = 0; i < alphas.size(); i++) {
             // activation: sigmoid
             alphas[i] = 1.f / (1.f + exp(-alphas[i]));
-            gs_alphas_[i] = alphas[i];
+            gs_alphas_[old_num_gaussians + i] = alphas[i];
         }
     }
     // Scales
@@ -139,7 +143,7 @@ bool Scene::LoadGaussians (std::filesystem::path path, bool always_load_sh) {
         }
         gs_scales_.resize(num_gaussians_);
         for(int i = 0; i < scale_x.size(); i++) {
-            gs_scales_[i] = glm::vec3(scale_x[i], scale_y[i], scale_z[i]);
+            gs_scales_[old_num_gaussians + i] = glm::vec3(scale_x[i], scale_y[i], scale_z[i]);
         }
     }
     // Rotations
@@ -151,9 +155,9 @@ bool Scene::LoadGaussians (std::filesystem::path path, bool always_load_sh) {
         auto rotation_z = element.getProperty<float>("rot_3");
         gs_rotations_.resize(num_gaussians_);
         for(int i = 0; i < rotation_x.size(); i++) {
-            gs_rotations_[i] = glm::vec4(rotation_x[i], rotation_y[i], rotation_z[i], rotation_w[i]);
+            gs_rotations_[old_num_gaussians + i] = glm::vec4(rotation_x[i], rotation_y[i], rotation_z[i], rotation_w[i]);
             // activation: normalize
-            auto & q = gs_rotations_[i];
+            auto & q = gs_rotations_[old_num_gaussians + i];
             float len = sqrt(q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w);
             q /= len;
         }
@@ -166,51 +170,88 @@ bool Scene::LoadGaussians (std::filesystem::path path, bool always_load_sh) {
         gs_normals_.resize(num_gaussians_);
         for(int i = 0; i < nx.size(); i++) {
             // activation: normalize
-            gs_normals_[i] = normalize(glm::vec3(nx[i], ny[i], nz[i]));
+            gs_normals_[old_num_gaussians + i] = normalize(glm::vec3(nx[i], ny[i], nz[i]));
         }
     }
 
-    // Limit the number to 10 for now
-    // num_gaussians_ = 50;
+    num_instances_ ++;
+    gsi_transforms_.resize(num_instances_);
+    gsi_inv_transforms_.resize(num_instances_);
+    gsi_normal_transforms_.resize(num_instances_);
+    gsi_inv_normal_transforms_.resize(num_instances_);
 
-    // We assume that there is only 1 instance for now
-    num_instances_ = 1;
-    gsi_transforms_.resize(1);
-    gsi_transforms_[0] = glm::mat4x3(1.f);
+    gsi_bounds_min.resize(num_instances_);
+    gsi_bounds_max.resize(num_instances_);
 
-    gsi_inv_transforms_.resize(gsi_transforms_.size());
+    int curr_instance = num_instances_ - 1;
+    gsi_types_.resize(num_instances_);
+    gsi_types_[curr_instance] = InstanceType::eGaussians;
+    gsi_gs_index_offsets_.resize(num_instances_);
+    gsi_gs_index_offsets_[curr_instance] = old_num_gaussians;
+    gsi_gs_mesh_index_offsets_.resize(num_instances_);
+    gsi_gs_mesh_index_offsets_[curr_instance] = 0;
+    gsi_mesh_num_indices_.resize(num_instances_);
+    gsi_mesh_num_indices_[curr_instance] = 0;
+    gsi_gs_counts_.resize(num_instances_);
+    gsi_gs_counts_[curr_instance] = inst_num_gaussians;
 
-    for (int i = 0; i < (int)gsi_transforms_.size(); i++) {
-        glm::mat3 inner = gsi_transforms_[i];
-        glm::mat3 inv_inner = glm::inverse(inner);
-        gsi_inv_transforms_[i] = glm::mat4x3(inv_inner);
-        gsi_inv_transforms_[i][3][0] = -gsi_transforms_[i][3][0];
-        gsi_inv_transforms_[i][3][1] = -gsi_transforms_[i][3][1];
-        gsi_inv_transforms_[i][3][2] = -gsi_transforms_[i][3][2];
-    }
+    SetInstanceTransform(curr_instance, glm::mat4x3(1.f));
 
-    gsi_inv_transforms_.resize(1);
-    gsi_inv_transforms_[0] = glm::mat4x3(1.f);
+    UpdateBoundsForInstance(curr_instance);
 
-    gsi_normal_transforms_.resize(1);
-    gsi_normal_transforms_[0] = glm::mat3x3(1.f);
-    gsi_inv_normal_transforms_.resize(gsi_normal_transforms_.size());
-    for (int i = 0; i < (int)gsi_normal_transforms_.size(); i++) {
-        gsi_inv_normal_transforms_[i] = glm::inverse(gsi_normal_transforms_[i]);
-    }
+    UpdateSceneBounds ();
 
-    gsi_gs_index_offsets_.resize(1);
-    gsi_gs_index_offsets_[0] = 0;
-
-    gsi_gs_counts_.resize(1);
-    gsi_gs_counts_[0] = num_gaussians_;
-
-    UpdateBounds ();
-
-    InitializeLights ();
-
-    return true;
+    return curr_instance;
 }
+
+int Scene::DuplicateInstance (int src_instance) {
+    num_instances_ ++;
+    int curr_instance = num_instances_ - 1;
+    gsi_types_.resize(num_instances_);
+    gsi_transforms_.resize(num_instances_);
+    gsi_inv_transforms_.resize(num_instances_);
+    gsi_normal_transforms_.resize(num_instances_);
+    gsi_inv_normal_transforms_.resize(num_instances_);
+    gsi_bounds_min.resize(num_instances_);
+    gsi_bounds_max.resize(num_instances_);
+    gsi_gs_index_offsets_.resize(num_instances_);
+    gsi_gs_mesh_index_offsets_.resize(num_instances_);
+    gsi_mesh_num_indices_.resize(num_instances_);
+    gsi_gs_counts_.resize(num_instances_);
+
+    // Copy data
+    gsi_types_[curr_instance] = gsi_types_[src_instance];
+    gsi_gs_index_offsets_[curr_instance] = gsi_gs_index_offsets_[src_instance];
+    gsi_gs_mesh_index_offsets_[curr_instance] = gsi_gs_mesh_index_offsets_[src_instance];
+    gsi_mesh_num_indices_[curr_instance] = gsi_mesh_num_indices_[src_instance];
+    gsi_gs_counts_[curr_instance] = gsi_gs_counts_[src_instance];
+    gsi_bounds_min[curr_instance] = gsi_bounds_min[src_instance];
+    gsi_bounds_max[curr_instance] = gsi_bounds_max[src_instance];
+
+    SetInstanceTransform(curr_instance, glm::mat4x3(1.f));
+    // UpdateBoundsForInstance(curr_instance);
+    UpdateSceneBounds ();
+
+    return curr_instance;
+}
+
+
+
+void Scene::SetInstanceTransform(int instance, glm::mat4x3 to_world_transform) {
+    gsi_transforms_[instance] = to_world_transform;
+    {
+        glm::mat3 inner = gsi_transforms_[instance];
+        glm::mat3 inv_inner = glm::inverse(inner);
+        gsi_inv_transforms_[instance] = glm::mat4x3(inv_inner);
+        gsi_inv_transforms_[instance][3][0] = -gsi_transforms_[instance][3][0];
+        gsi_inv_transforms_[instance][3][1] = -gsi_transforms_[instance][3][1];
+        gsi_inv_transforms_[instance][3][2] = -gsi_transforms_[instance][3][2];
+    }
+
+    gsi_normal_transforms_[instance] = glm::transpose(glm::inverse(glm::mat3x3(to_world_transform)));
+    gsi_inv_normal_transforms_[instance] = glm::inverse(gsi_normal_transforms_[instance]);
+}
+
 
 void Scene::SetLight (LightType type, const LightData & LD, int index) {
     if (type == LightType::eDirectional && index) {
@@ -253,7 +294,7 @@ LightData Scene::GetSkyLight() {
 void Scene::InitializeLights () {
     // Manually insert lights
     // only 1 directional light & 1 sky light for now.
-    glm::vec3 di_radiance = {1.f, 0.62f, 0.5f};
+    glm::vec3 di_radiance = {3.f, 2.3f, 2.f};
 
     light_data_.resize(2);
     light_data_[0].Radiance = di_radiance;
@@ -266,36 +307,36 @@ struct Bounds {
     glm::vec3 mx;
 };
 
-void Scene::UpdateBounds() {
-    std::map<std::pair<int, int> , Bounds> cached_bounds;
-    float scale_multiplier = 3.f;
-    gsi_bounds_min.clear();
-    gsi_bounds_max.clear();
-    bounds_min_ = glm::vec3(FLT_MAX);
-    bounds_max_ = glm::vec3(-FLT_MAX);
-    for (int i = 0; i < (int)gsi_transforms_.size(); i++) {
-        auto key = std::make_pair(gsi_gs_index_offsets_[i], gsi_gs_counts_[i]);
-        auto it = cached_bounds.find(key);
+void Scene::UpdateBoundsForInstance (int instance) {
+    if (gsi_types_[instance] == InstanceType::eGaussians) {
+        float scale_multiplier = 3.f;
         Bounds bounds;
-        if (it != cached_bounds.end()) {
-            bounds = it->second;
-        } else {
-            bounds.mn = glm::vec3(FLT_MAX);
-            bounds.mx = glm::vec3(-FLT_MAX);
-            for (int j = gsi_gs_index_offsets_[i]; j < gsi_gs_index_offsets_[i] + gsi_gs_counts_[i]; j++) {
-                auto & pos = gs_positions_[j];
-                auto & scale = gs_scales_[j];
-                // TODO consider rotation
-                float mscale = glm::max(scale.x, glm::max(scale.y, scale.z));
-                auto mn = pos - mscale * scale_multiplier;
-                auto mx = pos + mscale * scale_multiplier;
-                bounds.mn = glm::min(bounds.mn, mn);
-                bounds.mx = glm::max(bounds.mx, mx);
-            }
-            cached_bounds[key] = bounds;
+
+        bounds.mn = glm::vec3(FLT_MAX);
+        bounds.mx = glm::vec3(-FLT_MAX);
+        for (int j = gsi_gs_index_offsets_[instance]; j < gsi_gs_index_offsets_[instance] + gsi_gs_counts_[instance]; j++) {
+            auto & pos = gs_positions_[j];
+            auto & scale = gs_scales_[j];
+            // TODO consider rotation
+            float mscale = glm::max(scale.x, glm::max(scale.y, scale.z));
+            auto mn = pos - mscale * scale_multiplier;
+            auto mx = pos + mscale * scale_multiplier;
+            bounds.mn = glm::min(bounds.mn, mn);
+            bounds.mx = glm::max(bounds.mx, mx);
         }
-        gsi_bounds_min.push_back(bounds.mn);
-        gsi_bounds_max.push_back(bounds.mx);
+        gsi_bounds_min[instance] = bounds.mn;
+        gsi_bounds_max[instance] = bounds.mx;
+    }
+}
+
+void Scene::UpdateSceneBounds () {
+    scene_bounds_min_ = glm::vec3(FLT_MAX);
+    scene_bounds_max_ = glm::vec3(-FLT_MAX);
+    for (int i = 0; i < num_instances_; i++) {
+        auto bounds = AABB{
+            gsi_bounds_min[i],
+            gsi_bounds_max[i]
+        };
         glm::vec3 points[8];
         points[0] = bounds.mn;
         points[1] = glm::vec3(bounds.mn.x, bounds.mn.y, bounds.mx.z);
@@ -308,12 +349,11 @@ void Scene::UpdateBounds() {
         // Transform to world space and update scene bounds
         for (int j = 0; j < 8; j++) {
             auto p = gsi_transforms_[i] * glm::vec4(points[j], 1.f);
-            bounds_min_ = glm::min(bounds_min_, p);
-            bounds_max_ = glm::max(bounds_max_, p);
+            scene_bounds_min_ = glm::min(scene_bounds_min_, p);
+            scene_bounds_max_ = glm::max(scene_bounds_max_, p);
         }
     }
 }
-
 
 void Scene::UpdateDeviceScene() {
     Scene & scene = *this;

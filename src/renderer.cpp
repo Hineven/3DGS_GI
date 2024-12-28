@@ -482,6 +482,9 @@ void Renderer::Render() {
             1e-3f);
         REGISTER_CVAR(UB.TonemapExposure, "Exposure", 1.0f, 0.1f, 10.0f);
 
+        REGISTER_CVAR(UB.NoDirectIllumination, "Disable direct illumination in final composition.", false);
+        REGISTER_CVAR(UB.NoIndirectIllumination, "Disable indirect illumination in final composition.", false);
+
         REGISTER_CVAR(UB.LightingSkyRadianceLOD, "LOD when sampling lighting from the sky.", 0, 0, 5);
         REGISTER_CVAR(UB.Debug_VisualizeLightGridCascade, "", false);
         auto im_mouse_pos = ImGui::GetMousePos();
@@ -493,6 +496,15 @@ void Renderer::Render() {
         REGISTER_CVAR(UB.Debug_VisualizeMeshCardAtlasLayer, "Layer of the atlas to visualize.", 0);
         REGISTER_CVAR(UB.Debug_VisualizeMeshCardAtlasChannel, "Channel", 0, 0, 3);
         REGISTER_CVAR(UB.Debug_VisualizeMeshCardAtlasScale, "Scale", 0.5, 0.01, 1);
+
+        REGISTER_CVAR(UB.Debug_SSRC_VisualizeProbeUpdateRays, "Visualize probe update rays for SSRC probes.", false);
+        REGISTER_CVAR(UB.Debug_SSRC_VisualizeProbes, "Visualize SSRC probe allocation.", false);
+
+        UB.SSRC_ProbeUpdateRaySampleSeed = UB.FrameIndex;
+        REGISTER_CVAR(UB.SSRC_FixedProbeUpdateRaySampleSeed, "Fix the probe update ray sample seed.", false);
+        if (UB.SSRC_FixedProbeUpdateRaySampleSeed) {
+            UB.SSRC_ProbeUpdateRaySampleSeed = 0;
+        }
 
         REGISTER_CVAR(UB.Debug_VisualizeMeshCardAtlasOffset, "Offset", glm::vec2(0, 0), 0, CARD_ATLAS_RESOLUTION);
 
@@ -694,6 +706,8 @@ void Renderer::Render() {
     gfxProgramSetParameter(gfx, program_, "g_RW_Radiance", tex_.radiance[frame_index_ & 1]);
     gfxProgramSetParameter(gfx, program_, "g_Radiance", tex_.radiance[frame_index_ & 1]);
     gfxProgramSetParameter(gfx, program_, "g_HistoryRadiance", tex_.radiance[(frame_index_ + 1) & 1]);
+    gfxProgramSetParameter(gfx, program_, "g_RW_HistoryRadianceWithoutEmission", tex_.history_radiance_without_emission);
+    gfxProgramSetParameter(gfx, program_, "g_HistoryRadianceWithoutEmission", tex_.history_radiance_without_emission);
 
     // Cards
     gfxProgramSetParameter(gfx, program_, "g_CardSets", buf_.card_sets);
@@ -741,6 +755,16 @@ void Renderer::Render() {
     gfxProgramSetParameter(gfx, program_, "g_PointWrapSampler", samplers.point_wrap);
 
     gfxProgramSetBuffer(gfx, program_, "UB", UB_range);
+
+    // Debugging...
+#ifndef NDEBUG
+    gfxProgramSetParameter(gfx, program_, "g_Debug_SSRC_ProbeIndexBuffer", buf_.Debug_SSRC_probe_index);
+    gfxProgramSetParameter(gfx, program_, "g_Debug_DirectIlluminationPixelRayIndexBuffer", buf_.Debug_direct_illumination_pixel_ray_index);
+    gfxProgramSetParameter(gfx, program_, "g_Debug_VisualizeRayCountBuffer", buf_.Debug_visualize_ray_count);
+    gfxProgramSetParameter(gfx, program_, "g_Debug_VisualizeRayVertexBuffer", buf_.Debug_visualize_ray_vertex);
+    gfxProgramSetParameter(gfx, program_, "g_Debug_VisualizeRayColorBuffer", buf_.Debug_visualize_ray_color);
+    gfxProgramSetParameter(gfx, program_, "g_Debug_VisualizeRayRayIndexBuffer", buf_.Debug_visualize_ray_ray_index);
+#endif
 
     // Rendering begins
 
@@ -1222,9 +1246,13 @@ void Renderer::Render() {
             // Filter active gaussians, crop gaussians outside the view frustrum
             auto section = TimedSection(*this, "FilterActiveGaussians");
             gfxCommandBindKernel(gfx, kernel_.FilterActiveGaussians);
-            auto num_threads = gfxKernelGetNumThreads(gfx, kernel_.FilterActiveGaussians);
-            uint num_groups = divideAndRoundUp((uint)scene.GetNumGaussians(), num_threads[0]);
-            gfxCommandDispatch(gfx, num_groups, 1, 1);
+            for (int i = 0; i < scene.GetNumInstances(); i++) {
+                auto instance = scene.GetInstance(i);
+                if (instance.type == InstanceType::eGaussians) {
+                    gfxProgramSetParameter(gfx, program_, "g_CurrentInstanceIndex", i);
+                    gfxCommandDispatch(gfx, divideAndRoundUp(instance.num_vertices, cfg_.wave_lane_count), 1, 1);
+                }
+            }
         }
         {
             // Project active gaussians, compute the 2-dimensional gaussian distribution
@@ -1707,8 +1735,28 @@ void Renderer::Render() {
         // Final radiance composition
         {
             auto section = TimedSection(*this, "FinalComposition");
+            gfxCommandClearTexture(gfx, tex_.history_radiance_without_emission);
             gfxCommandBindKernel(gfx, kernel_.FinalComposition);
             gfxCommandDispatch(gfx, UB.TileDimensions.x, UB.TileDimensions.y, 1);
+        }
+
+        if (UB.Debug_SSRC_VisualizeProbes) {
+            auto section = TimedSection(*this, "Debug_SSRC_VisualizeProbes");
+            gfxCommandCopyTexture(gfx, tex_.debug, tex_.radiance[frame_index_ & 1]);
+            gfxCommandBindKernel(gfx, kernel_.Debug_SSRC_VisualizeProbes);
+            auto threads = gfxKernelGetNumThreads(gfx, kernel_.Debug_SSRC_VisualizeProbes);
+            gfxCommandDispatch(gfx, divideAndRoundUp(UB.SSRC_NumUniformScreenProbes, threads[0]), 1, 1);
+        }
+
+        if (UB.Debug_SSRC_VisualizeProbeUpdateRays) {
+            auto section = TimedSection(*this, "Debug_SSRC_VisualizeProbeUpdateRays");
+            gfxCommandCopyTexture(gfx, tex_.debug, tex_.radiance[frame_index_ & 1]);
+            gfxCommandBindKernel(gfx, kernel_.Debug_SSRC_PrepareVisualizeProbeUpdateRays);
+            gfxCommandDispatch(gfx, 1, 1, 1);
+            gfxCommandBindKernel(gfx, kernel_.Debug_SSRC_VisualizeProbeUpdateRays);
+            gfxCommandBindColorTarget(gfx, 0, tex_.debug);
+            gfxCommandBindDepthStencilTarget(gfx, tex_.rasterization_depth);
+            gfxCommandMultiDrawIndirect(gfx, buf_.draw_indirect_command, 1); // draw to debug texture
         }
     }
 

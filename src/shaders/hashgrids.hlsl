@@ -173,13 +173,13 @@ float4 HashGrids_GetCellRadiance (uint CellIndex) {
                               g_HashGrids_CellValueBuffer[CellIndex * 2 + 1]));
 }
 
-float4 HashGrids_GetUpdateCellRadiance (uint Mip0CellIndex) {
+float4 HashGrids_GetUpdateCellRadiance (uint CompactCellIndex) {
     return 
         HashGrids_RecoverRadianceSampleCount(uint4(
-            g_HashGrids_UpdateCellValueXBuffer[Mip0CellIndex * 4 + 0],
-            g_HashGrids_UpdateCellValueXBuffer[Mip0CellIndex * 4 + 1],
-            g_HashGrids_UpdateCellValueXBuffer[Mip0CellIndex * 4 + 2],
-            g_HashGrids_UpdateCellValueXBuffer[Mip0CellIndex * 4 + 3]
+            g_HashGrids_UpdateCellValueXBuffer[CompactCellIndex * 4 + 0],
+            g_HashGrids_UpdateCellValueXBuffer[CompactCellIndex * 4 + 1],
+            g_HashGrids_UpdateCellValueXBuffer[CompactCellIndex * 4 + 2],
+            g_HashGrids_UpdateCellValueXBuffer[CompactCellIndex * 4 + 3]
         ));
 }
 
@@ -212,21 +212,21 @@ float4 HashGrids_GetFilteredRadiance(uint CellIndexMip0)
     return Radiance;
 }
 
-uint HashGrids_CellIndexToMip0CellIndex (uint CellIndex) {
+uint HashGrids_CellIndexToCompactCellIndex (uint CellIndex) {
     uint TileIndex = CellIndex / HASHGRIDS_NUM_CELLS_PER_TILE;
     uint CellRank  = CellIndex % HASHGRIDS_NUM_CELLS_PER_TILE;
     return TileIndex * HASHGRIDS_TILE_CELL_MIP_OFFSET_1 + CellRank;
 }
 
 
-void HashGrids_AccumulateSamplesToCell (uint Mip0CellIndex, float3 Radiance, uint SampleCount) {
+void HashGrids_AccumulateSamplesToCell (uint CompactCellIndex, float3 Radiance, uint SampleCount) {
     uint4 QuantilizedRadiance = HashGrids_QuantilizeRadianceSampleCount(float4(Radiance, SampleCount));
     if(dot(Radiance, 1.f.xxx) > 0) {
-        InterlockedAdd(g_HashGrids_UpdateCellValueXBuffer[Mip0CellIndex * 4 + 0], QuantilizedRadiance.x);
-        InterlockedAdd(g_HashGrids_UpdateCellValueXBuffer[Mip0CellIndex * 4 + 1], QuantilizedRadiance.y);
-        InterlockedAdd(g_HashGrids_UpdateCellValueXBuffer[Mip0CellIndex * 4 + 2], QuantilizedRadiance.z);
+        InterlockedAdd(g_HashGrids_UpdateCellValueXBuffer[CompactCellIndex * 4 + 0], QuantilizedRadiance.x);
+        InterlockedAdd(g_HashGrids_UpdateCellValueXBuffer[CompactCellIndex * 4 + 1], QuantilizedRadiance.y);
+        InterlockedAdd(g_HashGrids_UpdateCellValueXBuffer[CompactCellIndex * 4 + 2], QuantilizedRadiance.z);
     }
-    InterlockedAdd(g_HashGrids_UpdateCellValueXBuffer[Mip0CellIndex * 4 + 3], QuantilizedRadiance.w);
+    InterlockedAdd(g_HashGrids_UpdateCellValueXBuffer[CompactCellIndex * 4 + 3], QuantilizedRadiance.w);
 }
 
 

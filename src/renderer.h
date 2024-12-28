@@ -137,6 +137,8 @@ protected:
         GfxBuffer UB_pool;
 
 #ifndef NDEBUG
+        GfxBuffer Debug_SSRC_probe_index;
+
         GfxBuffer Debug_direct_illumination_pixel_ray_index;
         GfxBuffer Debug_visualize_ray_count;
         GfxBuffer Debug_visualize_ray_vertex;
@@ -201,6 +203,7 @@ protected:
         GfxTexture filtered_indirect_illumination;
         // fp16x4
         GfxTexture radiance[2];
+        GfxTexture history_radiance_without_emission;
 
         // RGBA8 (max card res)
         GfxTexture card_workspace_color_alpha;
@@ -308,6 +311,10 @@ protected:
         GfxKernel VisualizeMeshCardAtlas;
 
         GfxKernel TonemapAndDraw;
+
+        GfxKernel Debug_SSRC_VisualizeProbes;
+        GfxKernel Debug_SSRC_PrepareVisualizeProbeUpdateRays;
+        GfxKernel Debug_SSRC_VisualizeProbeUpdateRays;
     } kernel_ {};
 
     GfxProgram program_ {};

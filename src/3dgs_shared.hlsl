@@ -166,7 +166,10 @@ struct UniformBlock {
     float  Card_MinCardViewDirectionWeightToSample;
     float  Card_GaussianClampingScale;
     float  TonemapExposure;
-    
+
+    uint   NoDirectIllumination;
+    uint   NoIndirectIllumination;
+    uint2 Padding000;
     
     float  LightingSkyRadianceLOD;
     uint   Debug_VisualizeLightGridCascade;
@@ -179,7 +182,12 @@ struct UniformBlock {
 
     float2 Debug_VisualizeMeshCardAtlasOffset;
     float  Debug_VisualizeMeshCardAtlasScale;
-    uint   Padding222;
+    uint   Debug_SSRC_VisualizeProbeUpdateRays;
+    
+    uint   Debug_SSRC_VisualizeProbes;
+    uint   SSRC_ProbeUpdateRaySampleSeed;
+    uint   SSRC_FixedProbeUpdateRaySampleSeed;
+    uint Padding002;
 
     DeviceVirtualAddressRange RT_RayGenerationShaderRecord;
     

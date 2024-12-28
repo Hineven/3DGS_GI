@@ -71,11 +71,14 @@ void ClearCounters () {
 	g_RWAdaptiveProbeCountBuffer[0] = 0;
 }
 
+// Manually set by dispatches
+uint g_CurrentInstanceIndex;
+
 // Filter the active gaussians that are visible in the view frustrum
 [numthreads(WAVE_SIZE, 1, 1)]
 void FilterActiveGaussians (uint DispatchID : SV_DispatchThreadID) {
 
-	// TODO also filter out the gaussians that failed the visibility test
+	// OPTIMIZE: also filter out the gaussians that failed the visibility test
 	// for RasterizationDepth and history depth buffer.
 #ifdef CARD_SHADERS
 	uint InstanceIndex = MCUB.CardSetIndex;
@@ -85,8 +88,7 @@ void FilterActiveGaussians (uint DispatchID : SV_DispatchThreadID) {
 	uint GaussianIndex = InstanceBaseGaussianIndex + DispatchID;
 	float3x4 Transform = g_InstanceTransformBuffer[InstanceIndex];
 #else
-	// TODO support multi gs instance
-	uint InstanceIndex = 0;
+	uint InstanceIndex = g_CurrentInstanceIndex;
 	uint InstanceBaseGaussianIndex = g_InstanceGaussianIndexOffsetBuffer[InstanceIndex];
 	uint InstanceNumGaussians = g_InstanceGaussianCountBuffer[InstanceIndex];
 	if(DispatchID >= InstanceNumGaussians) return ;
@@ -147,13 +149,15 @@ void ProjectActiveGaussians (uint DispatchID : SV_DispatchThreadID) {
     );
 #endif
 
-	// TODO consider instance transforms
+	float4x4 InstanceTransform4x4 = ExpandMatrixWithIdentities(g_InstanceTransformBuffer[InstanceIndex]);
+	float4x4 ToViewTransform = mul(C.View, InstanceTransform4x4);
+	float4x4 ToNDCTransform = mul(C.ProjectionView, InstanceTransform4x4);
     float4 HomogeneousW = mul(C.ProjectionView, float4(G.Position, 1.f));
     float3 Homogeneous = HomogeneousW.xyz / HomogeneousW.w;
 
     // Get the covariance matrix in NDC space ([-1, 1] ^ 2)
     float3 Cov2D = ProjectCovarianceMatrixToNDC(
-        J, Cov3D, C.View
+        J, Cov3D, ToViewTransform
     );
 
 	{
@@ -205,6 +209,7 @@ void ProjectActiveGaussians (uint DispatchID : SV_DispatchThreadID) {
 	float LinearDepth = g_RWActiveGaussianLinearDepthSrcBuffer[ActiveIndex];
 	// Clamp the radius for gaussians (to fix holes for the dataset)
 	// TODO: this is totally a data-specific trick. But I found it useful.
+	// Otherwise my renderer is visually inconsistent with the original one intensively...
 #ifdef CARD_SHADERS
 	float Bias = UB.Card_GaussianClampingScale / InvScales.x;
 #else
@@ -221,7 +226,7 @@ void ProjectActiveGaussians (uint DispatchID : SV_DispatchThreadID) {
 	g_RWActiveGaussianQuadNDCVector1Buffer[ActiveIndex] = PackUnorm16x2(saturateDown(ClampedVector2 * 0.5 + 0.5));
 }
 
-// TODO fine-grain culling (using history HZB)
+// OPTIMIZE: fine-grain culling (using history HZB)
 
 
 // The active list indirection buffer is sorted according to their linear depth
@@ -665,9 +670,12 @@ void SampleLightRays (uint2 DispatchID : SV_DispatchThreadID) {
 				// Note: the returned sample is already cosine weighted
 				float2 u2 = rng.rand2();
 				LightSample Sample  = SampleLightWithCosineWeight(Origin, M, L.Type, Details, u2);
+				// Ignore sky light (we regard sky light as an indirect light source due to it's 
+				// low frequency nature)
+				if(L.Type == LIGHT_TYPE_SKY) Sample.Pdf = 0;
 				if(Sample.IsValid()) {
 					float LightGridWeight = EstimateLightGridContribution(L, GridMin, GridSize);
-					float LightCurrWeight = Luminance(Sample.Radiance / Sample.Pdf); 
+					float LightCurrWeight = Luminance(Sample.Radiance / Sample.Pdf);
 					// RIS
 					float ResampleWeight  = LightCurrWeight / max(LightGridWeight, 1e-7f);
 					if(ResampleWeight > UB.LightGrid_MinResampleWeightForDirectIllumiation) {
@@ -848,7 +856,7 @@ void TraceRaysInScreenSpace (uint DispatchID : SV_DispatchThreadID) {
 		{
 			float3 PreviousUVW = ReprojectToPreviousUVWFromUVW(C, HitUVW);
 			if(all(PreviousUVW.xy >= 0) && all(PreviousUVW.xy < 1)) {
-				float3 Radiance = GetHistoryRadianceTexture(C).SampleLevel(g_PointClampSampler, PreviousUVW.xy, 0).xyz;
+				float3 Radiance = g_HistoryRadianceWithoutEmission.SampleLevel(g_PointClampSampler, PreviousUVW.xy, 0).xyz;
 				ProbeUpdateRayResult Result = FetchProbeUpdateRayResult(RayIndex);
 				Result.Radiance = Radiance;
 				Result.bBypass  = true;
@@ -1211,7 +1219,7 @@ void CalculateSSRCSampleWeights (
                 [unroll(1 << (SSRC_MAX_ADAPTIVE_PROBE_LAYERS * 2))]
 				for (uint AdaptiveProbeListIndex = 0; AdaptiveProbeListIndex < NumAdaptiveProbes; AdaptiveProbeListIndex++)
 				{
-                    // TODO reconstruct probe data from G-Buffer to reduce VRAM bandwidth when shading
+                    // TODO: reconstruct probe data from G-Buffer to reduce VRAM bandwidth when shading
 					int  AdaptiveProbeIndex1 = GetAdaptiveProbeIndex(TileCoords, AdaptiveProbeListIndex, bPrevious);
 					int  ScreenProbeIndex1   = AdaptiveProbeIndex1 + UB.SSRC_NumUniformScreenProbes;
                     int2 ScreenProbeIndex    = int2(ScreenProbeIndex1 % UB.TileDimensions.x, ScreenProbeIndex1 / UB.TileDimensions.x);
@@ -1395,7 +1403,6 @@ bool SSRC_GetProbeReprojectionSample (float3 ProbeNormal, float3 ProbeTangent, f
         float2 PrevScreenPositionClamped = clamp(PrevScreenPosition, PrevProbeHistoryDimensionsMin, PrevProbeHistoryDimensionsMax);
         // ~~~Exclude screen space weight when doing reprojection (which UE told me to do so...)~~~
         // That will introduce too many bias (colors flowing in a fixed direction in screen space)
-        // TODO is it okay to use the clamped screen position? 
         CalculateSSRCSampleWeights(
             PrevScreenPositionClamped,
             ProbePosition,
@@ -1613,7 +1620,6 @@ void SSRC_SetRayCounts () {
 	g_RWRayCountBuffer[0] = g_RWProbeUpdateRayOffsetsBuffer[ProbeCount];
 }
 
-// TODO: Should we study from Lumen to use a large number? (Lumen: 0.1)
 #define MIN_PDF_TO_TRACE 1e-3f
 
 groupshared float  LocalOctahedronSampleWeight[SSRC_PROBE_TEXTURE_TEXEL_COUNT];
@@ -1662,7 +1668,7 @@ void SSRC_SampleProbeUpdateRays (int LocalID : SV_GroupThreadID, int GroupID : S
 
     float SumSize = SumSizeOctahedron;
     
-    Random rng = MakeRandom((GroupID * WAVE_SIZE + LocalID) ^ 0x718f3a21u, UB.FrameIndex);
+    Random rng = MakeRandom((GroupID * WAVE_SIZE + LocalID) ^ 0x718f3a21u, UB.SSRC_ProbeUpdateRaySampleSeed);
 #if SSRC_MAX_NUM_UPDATE_RAY_PER_PROBE % WAVE_SIZE != 0
 #error "SSRC_MAX_NUM_UPDATE_RAY_PER_PROBE must be a multiple of WAVE_SIZE"
 #endif
@@ -1676,6 +1682,7 @@ void SSRC_SampleProbeUpdateRays (int LocalID : SV_GroupThreadID, int GroupID : S
         int RayRank = RayRankBase + LocalID;
         float  u    = rng.rand();
         float2 u2   = rng.rand2();
+		float  u3   = rng.rand();
         float  U    = u * SumSizeOctahedronOriginal;
         int L = 0, R = SSRC_PROBE_TEXTURE_TEXEL_COUNT;
         for(int i = 0; i < SSRC_PROBE_TEXTURE_TEXEL_COUNT_L2; i++) {
@@ -1714,7 +1721,7 @@ void SSRC_SampleProbeUpdateRays (int LocalID : SV_GroupThreadID, int GroupID : S
 			// Queue up for a ray trace
 			RayToTrace Ray = InitRayToTrace(UB.RT_MaxTraceDistance);
 			Ray.Direction = RayDirection;
-			Ray.Seed = rng.rand() * UB.HWRT_StochasticRayTracingQuality;
+			Ray.Seed = u3 * UB.HWRT_StochasticRayTracingQuality;
 			WriteRayToTrace(RayIndex, Ray, false);
 			g_RWRayToTraceResultBuffer[RayIndex] = PackFp16x4Safe(0.f.xxxx);
 			g_RWRayToTraceUVPositionBuffer[RayIndex] = PackUnorm16x2(ScreenToUV(Header.ScreenCoords + 0.5f));
@@ -1785,8 +1792,8 @@ void SSRC_ResolveHitLightingFromScreenHistory (uint DispatchID : SV_DispatchThre
                         / max(PreviousDepth, HistoryDepth) < 5e-2f;
 			if(bNormalVisible && bDepthVisible) {
 				// The irradiance is directly attained from reprojected history radiance
-				// TODO exclude specular radiance
-				float3 HistoryRadiance = GetHistoryRadianceTexture(C).Load(int3(HistoryScreenCoords, 0)).xyz;
+				// TODO: exclude specular radiance
+				float3 HistoryRadiance = g_HistoryRadianceWithoutEmission.Load(int3(HistoryScreenCoords, 0)).xyz;
 				ProbeUpdateRayResult Result = FetchProbeUpdateRayResult(RayIndex);
 				Result.Radiance = HistoryRadiance;
 				Result.bBypass = true;
@@ -1831,7 +1838,7 @@ void SSRC_ResolveHitLightingFromScreenHistory (uint DispatchID : SV_DispatchThre
 			// Note: sky radiance is considered as an indirect lighting source
 			// due to it's low frequency and high coherence nature
 			ProbeUpdateRayResult Result = FetchProbeUpdateRayResult(RayIndex);
-			Result.Radiance = EvaluateSkyRadiance(Ray.Direction, UB.LightingSkyRadianceLOD);
+			Result.Radiance = EvaluateSkyRadiance(-Ray.Direction, UB.LightingSkyRadianceLOD);
 			Result.bBypass = true;
 			WriteProbeUpdateRayResult(RayIndex, Result);
 		}
@@ -1913,8 +1920,8 @@ void SSRC_SampleLightRays (uint DispatchID : SV_DispatchThreadID) {
 	
 	// Allocate an hash grid cache cell for the hit position
 	// (Only points outside of the screen are cached in the hash grid cache)
-	uint HashCellIndex = HashGrids_AllocateTile(HitPosition, HitViewDirection);
 	// Store indirections
+	uint HashCellIndex = HashGrids_AllocateTile(HitPosition, HitViewDirection);
 	// Probe update ray results should be resolved from this cell
 	g_RWProbeUpdateRayResolveHashCellIndexBuffer[ProbeUpdateRayIndex] = HashCellIndex;
 
@@ -2022,17 +2029,16 @@ void SSRC_ResolveHitDirectLightingFromTraceResult (uint DispatchID : SV_Dispatch
 
 	// Accumulate the radiance to the hash grid cell
 	uint HashCellIndex = g_RWProbeUpdateRayResolveHashCellIndexBuffer[ProbeUpdateRayIndex];
-	if(HashCellIndex != 0xffffffffu) {
-		uint Mip0CellIndex = HashGrids_CellIndexToMip0CellIndex(HashCellIndex);
-		HashGrids_AccumulateSamplesToCell(Mip0CellIndex, Radiance, 1);
+	if(!IsInvalid(HashCellIndex)) {
+		uint CompactCellIndex = HashGrids_CellIndexToCompactCellIndex(HashCellIndex);
+		HashGrids_AccumulateSamplesToCell(CompactCellIndex, Radiance, 1);
 
 		// Bypass the hash grid cache for the probe update ray if required
 		ProbeUpdateRayResult Result = FetchProbeUpdateRayResult(ProbeUpdateRayIndex);
 		// Bypass hash grid cache, directly transfer radiance from DI results
 		if(Result.bBypass) {
 			Result.Radiance = Radiance;
-			// FIXME
-			// WriteProbeUpdateRayResult(ProbeUpdateRayIndex, Result);
+			WriteProbeUpdateRayResult(ProbeUpdateRayIndex, Result);
 		}
 	}
 }
@@ -2046,18 +2052,16 @@ void SSRC_FilterHashGrids (uint GroupID : SV_GroupID, uint2 LocalID : SV_GroupTh
     // MIP 0
     {
         uint CellIndex     = HashGrids_GetCellIndex(TileIndex, CellOffset, 0);
-		uint Mip0CellIndex = HashGrids_CellIndexToMip0CellIndex(CellIndex);
+		uint CompactCellIndex = HashGrids_CellIndexToCompactCellIndex(CellIndex);
 
         // Temporal accumulation
         float4 OldRadiance = HashGrids_GetCellRadiance(CellIndex);
-        float4 NewRadiance = HashGrids_GetUpdateCellRadiance(Mip0CellIndex);
-        float  SampleCount = min(OldRadiance.w + NewRadiance.w, UB.HashGrids_MaxNumSamples);
-
-        NewRadiance.rgb  /= max(NewRadiance.w, 1.0f);
-
+        float4 NewRadiance = HashGrids_GetUpdateCellRadiance(CompactCellIndex);
+        NewRadiance.rgb /= max(NewRadiance.w, 1.0f);
+		float  SampleCount = min(OldRadiance.w + NewRadiance.w, UB.HashGrids_MaxNumSamples);
         
 		float4 Radiance = float4(
-			lerp(OldRadiance.rgb, NewRadiance.rgb, NewRadiance.w / SampleCount),
+			lerp(OldRadiance.rgb, NewRadiance.rgb, saturate(NewRadiance.w / SampleCount)),
 			SampleCount
 		);
         
@@ -2067,27 +2071,27 @@ void SSRC_FilterHashGrids (uint GroupID : SV_GroupID, uint2 LocalID : SV_GroupTh
 		g_HashGrids_CellValueBuffer[CellIndex * 2 + 1] = PackedValue.y;
 
         // Clear scratch
-        g_HashGrids_UpdateCellValueXBuffer[4 * Mip0CellIndex + 0] = 0;
-        g_HashGrids_UpdateCellValueXBuffer[4 * Mip0CellIndex + 1] = 0;
-        g_HashGrids_UpdateCellValueXBuffer[4 * Mip0CellIndex + 2] = 0;
-        g_HashGrids_UpdateCellValueXBuffer[4 * Mip0CellIndex + 3] = 0;
+        g_HashGrids_UpdateCellValueXBuffer[4 * CompactCellIndex + 0] = 0;
+        g_HashGrids_UpdateCellValueXBuffer[4 * CompactCellIndex + 1] = 0;
+        g_HashGrids_UpdateCellValueXBuffer[4 * CompactCellIndex + 2] = 0;
+        g_HashGrids_UpdateCellValueXBuffer[4 * CompactCellIndex + 3] = 0;
     }
 
     // MIP 1
     GroupMemoryBarrierWithGroupSync();
-    if(all(LocalID < HASHGRIDS_TILE_CELL_WIDTH / 2))
+    if(all(CellOffset < HASHGRIDS_TILE_CELL_WIDTH / 2))
     {
         uint CellIndex     = HashGrids_GetCellIndex(TileIndex, CellOffset, 1);
 
         // Box filter
-        float4 Radiance00 = LocalHashGridTileRadiance[2 * LocalID.y + 0][2 * LocalID.x + 0];
-        float4 Radiance01 = LocalHashGridTileRadiance[2 * LocalID.y + 0][2 * LocalID.x + 1];
-		float4 Radiance10 = LocalHashGridTileRadiance[2 * LocalID.y + 1][2 * LocalID.x + 0];
-		float4 Radiance11 = LocalHashGridTileRadiance[2 * LocalID.y + 1][2 * LocalID.x + 1];
+        float4 Radiance00 = LocalHashGridTileRadiance[2 * CellOffset.y + 0][2 * CellOffset.x + 0];
+        float4 Radiance01 = LocalHashGridTileRadiance[2 * CellOffset.y + 0][2 * CellOffset.x + 1];
+		float4 Radiance10 = LocalHashGridTileRadiance[2 * CellOffset.y + 1][2 * CellOffset.x + 0];
+		float4 Radiance11 = LocalHashGridTileRadiance[2 * CellOffset.y + 1][2 * CellOffset.x + 1];
 
         float4 Radiance = (Radiance00 + Radiance01 + Radiance10 + Radiance11);
 
-        LocalHashGridTileRadiance[2 * LocalID.y][2 * LocalID.x] = Radiance;
+        LocalHashGridTileRadiance[2 * CellOffset.y][2 * CellOffset.x] = Radiance;
 		uint2 PackedValue = PackFp16x4Safe(float4(Radiance.rgb / max(Radiance.w, 1), Radiance.w));
         g_HashGrids_CellValueBuffer[CellIndex * 2 + 0] = PackedValue.x;
 		g_HashGrids_CellValueBuffer[CellIndex * 2 + 1] = PackedValue.y;
@@ -2095,19 +2099,19 @@ void SSRC_FilterHashGrids (uint GroupID : SV_GroupID, uint2 LocalID : SV_GroupTh
 
     // MIP 2
     GroupMemoryBarrierWithGroupSync();
-	if(all(LocalID < HASHGRIDS_TILE_CELL_WIDTH / 4))
+	if(all(CellOffset < HASHGRIDS_TILE_CELL_WIDTH / 4))
 	{
 		uint CellIndex     = HashGrids_GetCellIndex(TileIndex, CellOffset, 2);
 
 		// Box filter
-		float4 Radiance00 = LocalHashGridTileRadiance[4 * LocalID.y + 0][4 * LocalID.x + 0];
-		float4 Radiance01 = LocalHashGridTileRadiance[4 * LocalID.y + 0][4 * LocalID.x + 2];
-		float4 Radiance10 = LocalHashGridTileRadiance[4 * LocalID.y + 2][4 * LocalID.x + 0];
-		float4 Radiance11 = LocalHashGridTileRadiance[4 * LocalID.y + 2][4 * LocalID.x + 2];
+		float4 Radiance00 = LocalHashGridTileRadiance[4 * CellOffset.y + 0][4 * CellOffset.x + 0];
+		float4 Radiance01 = LocalHashGridTileRadiance[4 * CellOffset.y + 0][4 * CellOffset.x + 2];
+		float4 Radiance10 = LocalHashGridTileRadiance[4 * CellOffset.y + 2][4 * CellOffset.x + 0];
+		float4 Radiance11 = LocalHashGridTileRadiance[4 * CellOffset.y + 2][4 * CellOffset.x + 2];
 
 		float4 Radiance = (Radiance00 + Radiance01 + Radiance10 + Radiance11);
 
-		LocalHashGridTileRadiance[4 * LocalID.y][4 * LocalID.x] = Radiance;
+		LocalHashGridTileRadiance[4 * CellOffset.y][4 * CellOffset.x] = Radiance;
 		uint2 PackedValue = PackFp16x4Safe(float4(Radiance.rgb / max(Radiance.w, 1), Radiance.w));
 		g_HashGrids_CellValueBuffer[CellIndex * 2 + 0] = PackedValue.x;
 		g_HashGrids_CellValueBuffer[CellIndex * 2 + 1] = PackedValue.y;
@@ -2115,19 +2119,19 @@ void SSRC_FilterHashGrids (uint GroupID : SV_GroupID, uint2 LocalID : SV_GroupTh
 
 	// MIP 3
 	GroupMemoryBarrierWithGroupSync();
-	if(all(LocalID < HASHGRIDS_TILE_CELL_WIDTH / 8))
+	if(all(CellOffset < HASHGRIDS_TILE_CELL_WIDTH / 8))
 	{
 		uint CellIndex     = HashGrids_GetCellIndex(TileIndex, CellOffset, 3);
 
 		// Box filter
-		float4 Radiance00 = LocalHashGridTileRadiance[8 * LocalID.y + 0][8 * LocalID.x + 0];
-		float4 Radiance01 = LocalHashGridTileRadiance[8 * LocalID.y + 0][8 * LocalID.x + 4];
-		float4 Radiance10 = LocalHashGridTileRadiance[8 * LocalID.y + 4][8 * LocalID.x + 0];
-		float4 Radiance11 = LocalHashGridTileRadiance[8 * LocalID.y + 4][8 * LocalID.x + 4];
+		float4 Radiance00 = LocalHashGridTileRadiance[8 * CellOffset.y + 0][8 * CellOffset.x + 0];
+		float4 Radiance01 = LocalHashGridTileRadiance[8 * CellOffset.y + 0][8 * CellOffset.x + 4];
+		float4 Radiance10 = LocalHashGridTileRadiance[8 * CellOffset.y + 4][8 * CellOffset.x + 0];
+		float4 Radiance11 = LocalHashGridTileRadiance[8 * CellOffset.y + 4][8 * CellOffset.x + 4];
 
 		float4 Radiance = (Radiance00 + Radiance01 + Radiance10 + Radiance11);
 
-		// LocalHashGridTileRadiance[8 * LocalID.y][8 * LocalID.x] = Radiance;
+		// LocalHashGridTileRadiance[8 * CellOffset.y][8 * CellOffset.x] = Radiance;
 		uint2 PackedValue = PackFp16x4Safe(float4(Radiance.rgb / max(Radiance.w, 1), Radiance.w));
 		g_HashGrids_CellValueBuffer[CellIndex * 2 + 0] = PackedValue.x;
 		g_HashGrids_CellValueBuffer[CellIndex * 2 + 1] = PackedValue.y;
@@ -2141,13 +2145,12 @@ void SSRC_ResolveProbeUpdateRayRadianceFromCells (uint DispatchID : SV_DispatchT
 	if(DispatchID >= g_RWProbeUpdateRayHitShadeCountBuffer[0]) return ;
 	int ProbeUpdateRayIndex = g_RWProbeUpdateRayHitShadeListBuffer[DispatchID];
     uint CellIndex          = g_RWProbeUpdateRayResolveHashCellIndexBuffer[ProbeUpdateRayIndex];
-	float4 Radiance         = HashGrids_GetCellRadiance(CellIndex);
+	float4 Radiance         = HashGrids_GetFilteredRadiance(CellIndex);
 	ProbeUpdateRayResult Result = FetchProbeUpdateRayResult(ProbeUpdateRayIndex);
 	if(!Result.bBypass) {
 		// Resolve radiance from hash grid cache if no bypass is specified
 		Result.Radiance = Radiance.xyz;
-		// FIXME
-		// WriteProbeUpdateRayResult(ProbeUpdateRayIndex, Result);
+		WriteProbeUpdateRayResult(ProbeUpdateRayIndex, Result);
 	}
 }
 
@@ -2205,6 +2208,88 @@ void AccumulateOctahedronRadiance (
 }
 
 [numthreads(WAVE_SIZE, 1, 1)]
+void Debug_SSRC_VisualizeProbes (int DispatchID : SV_DispatchThreadID) {
+    int2 ProbeIndex = int2(DispatchID % UB.TileDimensions.x, DispatchID / UB.TileDimensions.x);
+    if(ProbeIndex.x >= UB.TileDimensions.x || ProbeIndex.y >= UB.TileDimensions.y) {
+        return;
+    }
+    int2 UniformProbeScreenCoords = GetUniformScreenProbeScreenCoords(ProbeIndex);
+
+    if(all(UniformProbeScreenCoords >= 0) && all(UniformProbeScreenCoords < UB.ScreenDimensions)
+    && IsScreenProbeValid(ProbeIndex))
+        g_RW_DebugTexture[UniformProbeScreenCoords] = float4(10.f.xxx, 1.f);
+    // Visualize adaptive probes
+    int  AdaptiveProbeCount = g_RWTileAdaptiveProbeCountTexture[ProbeIndex];
+    for(int i = 0; i < AdaptiveProbeCount; i++) {
+        int  ScreenProbeIndex1 = GetAdaptiveProbeIndex(ProbeIndex, i) + UB.SSRC_NumUniformScreenProbes;
+        int2 AdaptiveProbeIndex = int2(ScreenProbeIndex1 % UB.TileDimensions.x, ScreenProbeIndex1 / UB.TileDimensions.x);
+        ProbeHeader Header = GetScreenProbeHeader(AdaptiveProbeIndex);
+        int2 AdaptiveProbeScreenCoords = Header.ScreenCoords;
+        g_RW_DebugTexture[AdaptiveProbeScreenCoords] = float4(10.f.xxx, 1.f);
+    }
+}
+
+[numthreads(WAVE_SIZE, 1, 1)]
+void Debug_SSRC_PrepareVisualizeProbeUpdateRays () {
+	int2   TexCoords      = UB.Debug_CursorPixelCoords;
+	CameraDescription C   = GetCameraDescription();
+    float  LinearDepth    = GetFilteredDepthTexture(C).Load(int3(TexCoords, 0)).x;
+    if(LinearDepth > 0) {
+		float3 DebugCursorWorldPos = RecoverWorldSpacePosition(C, TexCoords + 0.5f.xx, LinearDepth);
+        float3 GeometryNormal = normalize(2.f * GetNormalTexture(C).Load(int3(TexCoords, 0)).xyz - 1.f);
+        SSRC_SampleData Sample;
+        CalculateSSRCSampleWeights(
+            TexCoords + 0.5f,
+            DebugCursorWorldPos,
+            LinearDepth,
+            GeometryNormal,
+            true,
+            Sample
+        );
+        int MaxIndex;
+        if(Sample.Weights[0] > Sample.Weights[1]) {
+            MaxIndex = 0;
+        } else {
+            MaxIndex = 1;
+        }
+        if(Sample.Weights[2] > Sample.Weights[MaxIndex]) {
+            MaxIndex = 2;
+        }
+        if(Sample.Weights[3] > Sample.Weights[MaxIndex]) {
+            MaxIndex = 3;
+        }
+        if(Sample.Weights[MaxIndex] != 0) {
+            int2 ProbeIndex  = Sample.Index[MaxIndex];
+#ifndef NDEBUG
+            g_Debug_SSRC_ProbeIndexBuffer[0] = ProbeIndex;
+#endif
+			int  ProbeIndex1 = ProbeIndex.x + ProbeIndex.y * UB.TileDimensions.x;
+            int  ProbeRayCount = g_RWProbeUpdateRayCountsBuffer[ProbeIndex1];
+            DrawIndirectCommand Command = (DrawIndirectCommand)0;
+            Command.VertexCount = 2;
+            Command.InstanceCount  = ProbeRayCount;
+            Command.StartVertex   = 0;
+            Command.StartInstance = 0;
+            g_RWDrawIndirectCommandBuffer[0] = Command;
+        } else {
+            DrawIndirectCommand Command = (DrawIndirectCommand)0;
+            Command.VertexCount = 0;
+            Command.InstanceCount  = 0;
+            Command.StartVertex   = 0;
+            Command.StartInstance = 0;
+            g_RWDrawIndirectCommandBuffer[0] = Command;
+        }
+    } else {
+        DrawIndirectCommand Command = (DrawIndirectCommand)0;
+        Command.VertexCount = 0;
+        Command.InstanceCount  = 0;
+        Command.StartVertex   = 0;
+        Command.StartInstance = 0;
+        g_RWDrawIndirectCommandBuffer[0] = Command;
+    }
+}
+
+[numthreads(WAVE_SIZE, 1, 1)]
 void SSRC_UpdateProbes (int LocalID : SV_GroupThreadID, int GroupID : SV_GroupID) {
 
 	CameraDescription C = GetCameraDescription();
@@ -2229,7 +2314,7 @@ void SSRC_UpdateProbes (int LocalID : SV_GroupThreadID, int GroupID : SV_GroupID
     // Re-initialize the probe if it is not trusted at all
     [branch]
     if(ReprojectionTrust == 0) {
-        // TODO heuristic initialization for probe octahedron radiances
+        // Simly reset the probe texels for probe initialization
         SSRC_ResetProbeTexels(GroupID, LocalID, ProbeIndex, Header.Normal);
     }
 
@@ -2246,7 +2331,7 @@ void SSRC_UpdateProbes (int LocalID : SV_GroupThreadID, int GroupID : SV_GroupID
     float3 BackupRadianceSum = 0.f;
     float  BackupRadianceWeightSum = 0.f;
 
-    // TODO this must be very unstable
+    // TODO: sometimes not stable enough
     float3 ImpactFactors = 1.f - ReprojectionTrust;
 
     // Update probe octahedron radiance
@@ -2507,7 +2592,6 @@ void SSRC_FilterProbes (int GroupID : SV_GroupID, int LocalID : SV_GroupThreadID
     if(WaveIsFirstLane()) {
         WriteScreenProbeSHCoefficients(ProbeIndex, SH_Coefficients);
     }
-    // TODO filter SG
 
 }
 
@@ -2657,7 +2741,7 @@ void SSRC_Integrate (int2 GroupID : SV_GroupID, int LocalID : SV_GroupThreadID) 
             // Normalize weights
             Sample.Weights /= max(dot(Sample.Weights, 1.f.xxxx), 0.01f);
             if(dot(Sample.Weights, 1.f.xxxx) > 0.99f) {
-				// TODO SSAO
+				// TODO: SSAO for enhanced visual quality
                 float  AO = 1.f;
                 float3 ReflectionDirection = calculateGGXSpecularDirection(Normal, ViewDirection, M.Roughness);
                 float3 HalfVector_Spec = normalize(ReflectionDirection + ViewDirection);
@@ -2740,7 +2824,7 @@ void TemporalDenoiseLighting (uint2 DispatchID : SV_DispatchThreadID) {
 	float3 ViewDirection = NDC2ToCameraDirection(C, NDC.xy);
 	float4 NewDirectIllumination_C  = GetDirectIlluminationTexture(C).Load(int3(PixelCoords, 0));
 	float4 NewIndirectIllumination_Diffuse_C = GetIndirectIlluminationTexture(C).Load(int3(PixelCoords, 0));
-	// TODO the normal should be a low frequency one.
+	// TODO: the normal should be a low frequency one.
 	// here the normal is not denoised. Maybe we should use the denoised normal.
 	float3 GeometryNormal = normalize(GetNormalTexture(C).Load(int3(PixelCoords, 0)).xyz - 0.5);
 	float4 DenoisedDI = NewDirectIllumination_C;
@@ -2845,41 +2929,35 @@ void FinalComposition (uint2 DispatchID : SV_DispatchThreadID) {
 	// Alpha
 	// Slightly increases the alpha value to prevent skylight leaking from the background
 	RadianceW.w = saturate(g_GColorTexture.Load(int3(DispatchID, 0)).a + 0.03f);
-
-	// 0. Emission
-	float3 Emission = GetEmissionAlphaTexture(C).Load(int3(DispatchID, 0)).rgb;
-	RadianceW.rgb += Emission;
+	float4 VisualizeRadianceW = RadianceW;
 
 	// 1. Direct illumination
 	Material M = FetchMaterial(C, DispatchID);
-	// RadianceW.rgb += DirectIllumination * M.Albedo;
-
+	RadianceW.rgb += DirectIllumination * M.Albedo;	
+	if(!UB.NoDirectIllumination) {
+		VisualizeRadianceW.rgb += DirectIllumination * M.Albedo;
+	}
 	// 2. Indirect illumination 
 	RadianceW.rgb += IndirectIllumination * M.Albedo;
-
-	RadianceW.rgb = g_RWProbeColorTexture.Load(int3(DispatchID / 2, 0)).rgb;
-
-	// Debugging
-	if(UB.DebugMode == 1) {
-		RadianceW.rgb = ColorToRadiance(g_GColorTexture.Load(int3(DispatchID, 0)).rgb);
-    } else if(UB.DebugMode == 2) {
-        RadianceW.rgb = g_GMaterialTexture.Load(int3(DispatchID, 0)).rrr;
-    } else if(UB.DebugMode == 3) {
-        RadianceW.rgb = g_GNormalTexture.Load(int3(DispatchID, 0)).xyz;
-    } else if(UB.DebugMode == 4) {
-		float Depth = g_GDepthTexture.Load(int3(DispatchID, 0)).r * 0.2f;
-        RadianceW = float4(Depth.xxx, 1);
-    } else if(UB.DebugMode == 5) {
-        float Alpha = g_GColorTexture.Load(int3(DispatchID, 0)).a;
-        RadianceW = float4(Alpha.xxx, 1);
-    } else if(UB.DebugMode == 6) {
-		float3 Color = g_DebugTexture.Load(int3(DispatchID, 0)).rgb;
-		RadianceW = float4(Color, 1);
+	if(!UB.NoIndirectIllumination) {
+		VisualizeRadianceW.rgb += IndirectIllumination * M.Albedo;
 	}
+	// Store intermediate result.
+	g_RW_HistoryRadianceWithoutEmission[DispatchID] = RadianceW;
+
+	// 3. Emission
+	float3 Emission = GetEmissionAlphaTexture(C).Load(int3(DispatchID, 0)).rgb;
+	RadianceW.rgb += Emission;
+	VisualizeRadianceW.rgb += Emission;
+
+	// RadianceW.rgb = g_RWProbeColorTexture.Load(int3(DispatchID / 2, 0)).rgb;
+
 	float3 ViewDirection = -NDC2ToCameraDirection(C, FilmToNDC2(C, DispatchID + 0.5f.xx));
 	float3 SkyRadiance = EvaluateSkyRadiance(ViewDirection);
+	RadianceW.rgb += SkyRadiance * (1.f - RadianceW.w);
+	VisualizeRadianceW.rgb += SkyRadiance * (1.f - RadianceW.w);
 	GetRWRadianceTexture(C)[DispatchID] = float4(
-		RadianceW.rgb + SkyRadiance * (1.f - RadianceW.w),
+		VisualizeRadianceW.rgb,
 		1
 	);
 }
