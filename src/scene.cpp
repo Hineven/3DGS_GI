@@ -218,7 +218,7 @@ int Scene::LoadGltf (std::filesystem::path path) {
     }
     auto scene = gfxCreateScene();
     auto result = gfxSceneImport(scene, path.string().c_str());
-    if (!result) {
+    if (result != kGfxResult_NoError) {
         gfxDestroyScene(scene);
         app_warning("Failed to load: " << path);
         return -1;
@@ -236,7 +236,7 @@ int Scene::LoadGltf (std::filesystem::path path) {
     // int num_textures = gfxSceneGetImageCount(scene);
 
     int old_num_instances = num_instances_;
-    num_instances_ += num_instances_;
+    num_instances_ += num_instances;
     gsi_positions_.resize(num_instances_);
     gsi_rotations_.resize(num_instances_);
     gsi_scales_.resize(num_instances_);
@@ -301,24 +301,34 @@ int Scene::LoadGltf (std::filesystem::path path) {
         });
         UpdateBoundsForInstance(curr_instance);
         int material_index = instances[i].material.getIndex();
-        gsi_materials_[curr_instance] = {
-            materials[material_index].albedo,
-            0.f, // padding
-            materials[material_index].emissivity,
-            materials[material_index].roughness
-        };
-        if (materials[material_index].emissivity != glm::vec3(0.f)) {
+        auto & mat = gsi_materials_[curr_instance];
+        if (material_index != -1) {
+            mat = {
+                materials[material_index].albedo,
+                materials[material_index].roughness, // padding
+                materials[material_index].emissivity,
+                0
+            };
+        } else {
+            mat = {
+                glm::vec3(1.f),
+                0.5f,
+                glm::vec3(0.f),
+                0
+            };
+        }
+        if (mat.Emissive != glm::vec3(0.f)) {
             // Filter out lights and add them into the light list
-            auto radiance = materials[material_index].emissivity;
+            auto radiance = mat.Emissive;
             auto & m = meshes[mesh_index];
-            for (int f = 0; f < m.indices.size(); f ++) {
+            for (int f = 0; f < m.indices.size(); f += 3) {
                 LightData LD {};
                 LD.Radiance = radiance;
                 LD.V1 = m.vertices[m.indices[f]].position;
                 LD.V2 = m.vertices[m.indices[f + 1]].position;
                 LD.V3 = m.vertices[m.indices[f + 2]].position;
                 SetNumLights(GetNumLights() + 1);
-                SetAreaLight(GetNumLights() - 1, LD, curr_instance);
+                SetAreaLight(GetNumLights() - 3, LD, curr_instance);
             }
         }
     }
@@ -359,7 +369,7 @@ int Scene::DuplicateInstance (int src_instance) {
         if (light_instance_[i] == src_instance) {
             LightData LD = light_data_[i];
             SetNumLights(GetNumLights() + 1);
-            SetAreaLight(GetNumLights() - 1, LD, curr_instance);
+            SetAreaLight(GetNumLights() - 3, LD, curr_instance);
         }
     }
 

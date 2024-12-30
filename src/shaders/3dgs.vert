@@ -23,17 +23,18 @@ struct DrawRegulareMeshes_PSInput {
     float3 Emission : COLOR1;
 };
 
+uint g_DrawRegulareMeshes_InstanceIndex;
+
 DrawRegulareMeshes_PSInput DrawRegularMeshes (
     Vertex InVertex,
-    uint VertexIndex : SV_VertexID,
-    uint InstanceIndex : SV_InstanceID
+    uint VertexIndex : SV_VertexID
 ) {
     DrawRegulareMeshes_PSInput Output = (DrawRegulareMeshes_PSInput)0;
-    float3 Position = mul(g_InstanceTransformBuffer[InstanceIndex], float4(InVertex.Position, 1.f));
+    float3 Position = mul(g_InstanceTransformBuffer[g_DrawRegulareMeshes_InstanceIndex], float4(InVertex.Position, 1.f));
     Output.Position = mul(UB.MainCamera.ProjectionView, float4(Position, 1));
-    float3 Normal   = mul(g_InstanceNormalTransformBuffer[InstanceIndex], InVertex.Normal);
+    float3 Normal   = mul(g_InstanceNormalTransformBuffer[g_DrawRegulareMeshes_InstanceIndex], InVertex.Normal);
     Output.Normal   = Normal;
-    SimpleMaterial M = g_MaterialBuffer[InstanceIndex];
+    SimpleMaterial M = g_MaterialBuffer[g_DrawRegulareMeshes_InstanceIndex];
     Output.AlbedoRoughess = float4(M.Albedo, M.Roughness);
     Output.Emission       = M.Emissive;
     return Output;

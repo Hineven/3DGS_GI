@@ -103,7 +103,7 @@ GBufferOutput_RegularMesh DrawRegularMeshes (DrawRegulareMeshes_PSInput Input) {
     GBufferOutput_RegularMesh Result = (GBufferOutput_RegularMesh)0;
     // We do not write to the alpha channel of the albedo texture.
     // The alpha value of gaussians is kept by this texture.
-    Result.AlbedoAlpha    = float4(Input.AlbedoRoughess.xyz, 1);
+    Result.AlbedoAlpha    = float4(Input.AlbedoRoughess.xyz, 0);
     Result.EmissionAlpha  = float4(Input.Emission, 1);
     Result.Normal         = float4(Input.Normal, 1.f);
     Result.Roughness      = float4(Input.AlbedoRoughess.w, 0, 0, 1);

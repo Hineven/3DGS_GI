@@ -177,7 +177,7 @@ void Renderer::RenderUI () {
         auto & scene = AppInternal::GetInstance().GetScene();
         auto & device_scene = scene.GetDeviceScene();
         auto gfx = AppInternal::GetInstance().GetGfx();
-        is_instance_active_.resize(scene.GetNumInstances());
+        is_instance_active_.resize(scene.GetNumInstances(), true);
         if (ImGui::CollapsingHeader("Instances", ImGuiTreeNodeFlags_DefaultOpen)) {
             for (int i = 0; i < is_instance_active_.size(); i++) {
                 std::string id = "Instance " + std::to_string(i);
@@ -876,7 +876,7 @@ void Renderer::Render() {
                         gfx, device_scene.gsi_indices_, scene.gsi_mesh_index_offsets_[i] * sizeof(int),
                         scene.gsi_mesh_num_indices_[i] * sizeof(int));
                 auto vertex_range = gfxCreateBufferRange(
-                        gfx, device_scene.gsi_vertices_, scene.gsi_gs_index_offsets_[i] * sizeof(glm::vec3),
+                        gfx, device_scene.gsi_vertices_, scene.gsi_gs_index_offsets_[i] * sizeof(Vertex),
                         scene.gsi_gs_counts_[i] * sizeof(Vertex));
                 vertex_range.setStride(sizeof(Vertex));
                 gfxRaytracingPrimitiveBuild(
@@ -1319,9 +1319,6 @@ void Renderer::Render() {
             gfxCommandClearTexture(gfx, tex_.G_material);
             gfxCommandClearTexture(gfx, tex_.G_normal[frame_index_ & 1]);
             gfxCommandClearTexture(gfx, tex_.rasterization_depth);
-            gfxCommandBindVertexBuffer(gfx, device_scene.gsi_vertices_);
-            gfxCommandBindIndexBuffer(gfx, device_scene.gsi_indices_);
-            gfxCommandBindKernel(gfx, kernel_.DrawRegularMeshes);
             // Alpha channel is not used in this draw
             gfxCommandBindColorTarget(gfx, 0, tex_.G_albedo_alpha);
             // Alpha is drawn to this texture (0 or 1)
@@ -1329,10 +1326,14 @@ void Renderer::Render() {
             gfxCommandBindColorTarget(gfx, 2, tex_.G_material);
             gfxCommandBindColorTarget(gfx, 3, tex_.G_normal[frame_index_ & 1]);
             gfxCommandBindDepthStencilTarget(gfx, tex_.rasterization_depth);
+            gfxCommandBindVertexBuffer(gfx, device_scene.gsi_vertices_);
+            gfxCommandBindIndexBuffer(gfx, device_scene.gsi_indices_);
             gfxCommandBindKernel(gfx, kernel_.DrawRegularMeshes);
+            is_instance_active_.resize(scene.GetNumInstances(), true);
             for (int i = 0; i < scene.GetNumInstances(); i++) {
                 auto instance = scene.GetInstance(i);
-                if (instance.type != InstanceType::eMesh) continue ;
+                if (instance.type != InstanceType::eMesh || !is_instance_active_[i]) continue ;
+                gfxProgramSetParameter(gfx, program_, "g_DrawRegulareMeshes_InstanceIndex", i);
                 gfxCommandDrawIndexed(gfx, instance.num_indices, 1, instance.index_offset, instance.vertex_offset, i);
             }
         }
@@ -1340,7 +1341,7 @@ void Renderer::Render() {
         {
             // Filter active gaussians, crop gaussians outside the view frustrum
             auto section = TimedSection(*this, "FilterActiveGaussians");
-            is_instance_active_.resize(scene.GetNumInstances());
+            is_instance_active_.resize(scene.GetNumInstances(), true);
             gfxCommandBindKernel(gfx, kernel_.FilterActiveGaussians);
             for (int i = 0; i < scene.GetNumInstances(); i++) {
                 auto instance = scene.GetInstance(i);
