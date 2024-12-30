@@ -619,8 +619,8 @@ bool Renderer::CreateKernels () {
 
         std::vector<char const *> Trace3DGSShadowRaysWithoutIndirectionList_kernel_exports;
         Trace3DGSShadowRaysWithoutIndirectionList_kernel_exports.push_back("Trace3DGSShadowRaygen");
-        Trace3DGSShadowRaysWithoutIndirectionList_kernel_exports.push_back("Trace3DGSShadowAnyHit");
-        Trace3DGSShadowRaysWithoutIndirectionList_kernel_exports.push_back("Trace3DGSShadowMiss");
+        Trace3DGSShadowRaysWithoutIndirectionList_kernel_exports.push_back("Trace3DGSStochasticAnyHit");
+        Trace3DGSShadowRaysWithoutIndirectionList_kernel_exports.push_back("Trace3DGSStochasticMiss");
         std::vector<char const *> Trace3DGSShadowRaysWithoutIndirectionList_kernel_subobjects = base_subobjects;
         Trace3DGSShadowRaysWithoutIndirectionList_kernel_subobjects.push_back("Trace3DGSShadowHitGroup");
         Trace3DGSShadowRaysWithoutIndirectionList_kernel_subobjects.push_back("Trace3DGSShadowShaderConfig");
@@ -634,8 +634,8 @@ bool Renderer::CreateKernels () {
 
         std::vector<char const *> DirectIlluminationTrace3DGSShadow_kernel_exports;
         DirectIlluminationTrace3DGSShadow_kernel_exports.push_back("DirectIlluminationTrace3DGSShadowRaygen");
-        DirectIlluminationTrace3DGSShadow_kernel_exports.push_back("Trace3DGSShadowAnyHit");
-        DirectIlluminationTrace3DGSShadow_kernel_exports.push_back("Trace3DGSShadowMiss");
+        DirectIlluminationTrace3DGSShadow_kernel_exports.push_back("Trace3DGSStochasticAnyHit");
+        DirectIlluminationTrace3DGSShadow_kernel_exports.push_back("Trace3DGSStochasticMiss");
         std::vector<char const *> DirectIlluminationTrace3DGSShadow_kernel_subobjects = base_subobjects;
         DirectIlluminationTrace3DGSShadow_kernel_subobjects.push_back("Trace3DGSShadowHitGroup");
         DirectIlluminationTrace3DGSShadow_kernel_subobjects.push_back("Trace3DGSShadowShaderConfig");
@@ -649,11 +649,12 @@ bool Renderer::CreateKernels () {
 
         std::vector<char const *> Trace3DGSProbeUpdateRays_kernel_exports;
         Trace3DGSProbeUpdateRays_kernel_exports.push_back("Trace3DGSProbeUpdateRaysRaygen");
-        Trace3DGSProbeUpdateRays_kernel_exports.push_back("Trace3DGSShadowAnyHit");
-        Trace3DGSProbeUpdateRays_kernel_exports.push_back("Trace3DGSShadowMiss");
+        Trace3DGSProbeUpdateRays_kernel_exports.push_back("Trace3DGSStochasticAnyHit");
+        Trace3DGSProbeUpdateRays_kernel_exports.push_back("Trace3DGSStochasticClosestHit");
+        Trace3DGSProbeUpdateRays_kernel_exports.push_back("Trace3DGSStochasticMiss");
         std::vector<char const *> Trace3DGSProbeUpdateRays_kernel_subobjects = base_subobjects;
-        Trace3DGSProbeUpdateRays_kernel_subobjects.push_back("Trace3DGSShadowHitGroup");
-        Trace3DGSProbeUpdateRays_kernel_subobjects.push_back("Trace3DGSShadowShaderConfig");
+        Trace3DGSProbeUpdateRays_kernel_subobjects.push_back("Trace3DGSStochasticHitGroup");
+        Trace3DGSProbeUpdateRays_kernel_subobjects.push_back("Trace3DGSStochasticRayShaderConfig");
         defines_c.push_back("PROBE_UPDATE_STOCHASTIC_RAY_TRACING");
         kernel_.Trace3DGSProbeUpdateRays = gfxCreateRaytracingKernel(gfx, program_, nullptr, 0,
             Trace3DGSProbeUpdateRays_kernel_exports.data(), (uint32_t)Trace3DGSProbeUpdateRays_kernel_exports.size(),
@@ -732,8 +733,8 @@ bool Renderer::CreateKernels () {
         gfxDrawStateSetColorTarget(draw_state, 1, tex_.G_emission_alpha.getFormat());
         gfxDrawStateSetColorTarget(draw_state, 2, tex_.G_material.getFormat());
         gfxDrawStateSetColorTarget(draw_state, 3, tex_.G_normal[0].getFormat());
-        kernel_.DrawAreaLights = gfxCreateGraphicsKernel(
-                gfx, program_, draw_state, "DrawAreaLights", defines_c.data(), defines_c.size()
+        kernel_.DrawRegularMeshes = gfxCreateGraphicsKernel(
+                gfx, program_, draw_state, "DrawRegularMeshes", defines_c.data(), defines_c.size()
         );
     }
     {
@@ -827,7 +828,7 @@ void Renderer::DestroyKernels () {
     gfxDestroyKernel(gfx, kernel_.VisualizeMeshCardScene);
     gfxDestroyKernel(gfx, kernel_.VisualizeMeshCardAtlas);
 
-    gfxDestroyKernel(gfx, kernel_.DrawAreaLights);
+    gfxDestroyKernel(gfx, kernel_.DrawRegularMeshes);
     gfxDestroyKernel(gfx, kernel_.DrawActiveGaussians);
     gfxDestroyKernel(gfx, kernel_.TonemapAndDraw);
 
@@ -868,6 +869,8 @@ bool Renderer::Initialize () {
     should_build_acceleration_structure_ = true;
     should_reset_hash_grids_ = true;
     frame_index_ = 0;
+
+    CB.scene_area_light_count = AppInternal::GetInstance().GetScene().GetNumLights() - 2;
 
     rng_ = std::mt19937(0);
 

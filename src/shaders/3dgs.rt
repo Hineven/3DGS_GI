@@ -8,20 +8,29 @@ TriangleHitGroup Trace3DGSHitGroup =
     "Trace3DGSAnyHit",
     ""     // AnyHit only, no closest hit
 };
-
-TriangleHitGroup Trace3DGSShadowHitGroup =
-{
-    "Trace3DGSShadowAnyHit",
-    ""     // AnyHit only, 
-};
-
 RaytracingShaderConfig Trace3DGSShaderConfig =
 {
     HIT_BUFFER_SIZE * 2 * 4, // max payload size in bytes
     8   // max attribute size
 };
 
+TriangleHitGroup Trace3DGSShadowHitGroup =
+{
+    "Trace3DGSStochasticAnyHit",
+    ""     // AnyHit only, 
+};
 RaytracingShaderConfig Trace3DGSShadowShaderConfig =
+{
+    8, // max payload size in bytes
+    8  // max attribute size
+};
+
+TriangleHitGroup Trace3DGSStochasticHitGroup =
+{
+    "Trace3DGSStochasticAnyHit",
+    "Trace3DGSStochasticClosestHit", 
+};
+RaytracingShaderConfig Trace3DGSStochasticRayShaderConfig =
 {
     16, // max payload size in bytes
     8  // max attribute size
@@ -37,11 +46,13 @@ struct Trace3DGSPayload {
     float HitGaussianDepths[HIT_BUFFER_SIZE];
 };
 
-struct Trace3DGSShadowPayload {
+struct Trace3DGSStochasticRayPayload {
     float Seed;
     float HitDist;
+#ifdef PROBE_UPDATE_STOCHASTIC_RAY_TRACING
     uint  HitMaterial;
     uint  HitNormal;
+#endif
 };
 
 // Trace shading rays and shade them according to "3DGS Ray Tracing" in the paper
@@ -145,6 +156,7 @@ void Trace3DGSAnyHit (inout Trace3DGSPayload Payload, in BuiltInTriangleIntersec
     // See: https://github.com/microsoft/DirectXShaderCompiler/issues/5158
     Trace3DGSPayload InPayload = Payload;
     int HitInstance  = InstanceIndex();
+    if(HitInstance & RT_INSTANCE_REGULAR_MESH_BIT) return; // Not a gaussian instance
     int HitPrimitive = PrimitiveIndex();
     
     int  HitGaussianIndex = GetHitGaussianIndex(HitInstance, HitPrimitive, HitAttr);
@@ -184,7 +196,7 @@ void Trace3DGSShadowRaygen ()
 #else
     int RayIndex = DispatchRaysIndex().x;
 #endif
-    Trace3DGSShadowPayload Payload = (Trace3DGSShadowPayload) 0;
+    Trace3DGSStochasticRayPayload Payload = (Trace3DGSStochasticRayPayload) 0;
     RayDesc Ray;
     {
         bool bFetchOrigin = true;
@@ -255,37 +267,84 @@ RayDesc GetRayDesc () {
 
 // TODO reduce bandwidth by packing gaussian data
 [shader("anyhit")]
-void Trace3DGSShadowAnyHit (inout Trace3DGSShadowPayload Payload, in BuiltInTriangleIntersectionAttributes HitAttr)
+void Trace3DGSStochasticAnyHit (inout Trace3DGSStochasticRayPayload Payload, in BuiltInTriangleIntersectionAttributes HitAttr)
 {
     // Duplicate the payload, and copy back the updated payload
     // This is necessary to get rid of a compiler bug... 
     // See: https://github.com/microsoft/DirectXShaderCompiler/issues/5158
-    Trace3DGSShadowPayload InPayload = Payload;
+    Trace3DGSStochasticRayPayload InPayload = Payload;
     int HitInstance  = InstanceIndex();
     int HitPrimitive = PrimitiveIndex();
-
-    int  HitGaussianIndex = GetHitGaussianIndex(HitInstance, HitPrimitive, HitAttr);
-    Gaussian G = FetchGaussian(HitGaussianIndex);
-    RayDesc Ray = GetRayDesc();
-    float RayScaler = 1, RayT = 0;
-    float3x4 WorldToObject = WorldToObject3x4();
-    float3 LocalRayOrigin = TransformPoint(WorldToObject, Ray.Origin);
-    float3 LocalRayDirection = TransformVector(WorldToObject, Ray.Direction);
-    float Alpha = saturate(
-        EvaluateGaussianResponse(LocalRayOrigin, LocalRayDirection, G, RayT)
-    );
-    // Stochastically ignore the hit according to the gaussian response (opacity along the ray)
-    bool ShouldIgnore = Alpha < InPayload.Seed;
-    if(ShouldIgnore) {
-        InPayload.Seed = (InPayload.Seed - Alpha) / (1 - Alpha);
+    bool ShouldIgnore = false;
+    if(HitInstance & RT_INSTANCE_REGULAR_MESH_BIT) {
+        // Opaque object, commit hit.
+        
+        // No need to update the payload if we're not tracing shadow rays
+        // stochastic ray hit data is decoded in the closest hit shader
+#ifndef PROBE_UPDATE_STOCHASTIC_RAY_TRACING
+        InPayload.HitDist     = RayTCurrent();
+#endif
+        ShouldIgnore = false;
     } else {
-        GaussianPBR Pbr = FetchGaussianPBR(HitGaussianIndex);
-        InPayload.HitDist = RayT / max(1e-6, RayScaler); // Use the max response T as reply
-        InPayload.HitNormal   = PackNormal(Pbr.Normal);
-        InPayload.HitMaterial = PackCachedMaterial(Pbr.Albedo, Pbr.Roughness);
+        int  HitGaussianIndex = GetHitGaussianIndex(HitInstance, HitPrimitive, HitAttr);
+        Gaussian G = FetchGaussian(HitGaussianIndex);
+        RayDesc Ray = GetRayDesc();
+        float RayScaler = 1, RayT = 0;
+        float3x4 WorldToObject = WorldToObject3x4();
+        float3 LocalRayOrigin = TransformPoint(WorldToObject, Ray.Origin);
+        float3 LocalRayDirection = TransformVector(WorldToObject, Ray.Direction);
+        float Alpha = saturate(
+            EvaluateGaussianResponse(LocalRayOrigin, LocalRayDirection, G, RayT)
+        );
+        // Stochastically ignore the hit according to the gaussian response (opacity along the ray)
+        ShouldIgnore = Alpha < InPayload.Seed;
+        if(ShouldIgnore) {
+            InPayload.Seed = (InPayload.Seed - Alpha) / (1 - Alpha);
+        } else {
+#ifndef PROBE_UPDATE_STOCHASTIC_RAY_TRACING
+            InPayload.HitDist = RayT / max(1e-6, RayScaler); // Use the max response T as reply
+#endif
+        }
     }
     Payload = InPayload;
     if(ShouldIgnore) IgnoreHit();
+}
+
+[shader("closesthit")]
+void Trace3DGSStochasticClosestHit (inout Trace3DGSStochasticRayPayload Payload, in BuiltInTriangleIntersectionAttributes HitAttr)
+{
+    int HitInstance  = InstanceIndex();
+    int HitPrimitive = PrimitiveIndex();
+    if(HitInstance & RT_INSTANCE_REGULAR_MESH_BIT) {
+        // Opaque object, commit hit.
+        int MeshInstance = HitInstance - RT_INSTANCE_REGULAR_MESH_BIT;
+        SimpleMaterial M = g_MaterialBuffer[MeshInstance];
+        int IndexBase = HitPrimitive * 3 + g_MeshIndexOffsetsBuffer[MeshInstance];
+        int I0 = g_IndexBuffer[IndexBase + 0];
+        int I1 = g_IndexBuffer[IndexBase + 1];
+        int I2 = g_IndexBuffer[IndexBase + 2];
+        float3 V0 = g_VertexBuffer[I0];
+        float3 V1 = g_VertexBuffer[I1];
+        float3 V2 = g_VertexBuffer[I2];
+        Payload.HitDist     = RayTCurrent();
+        Payload.HitNormal   = PackNormal(normalize(cross(V1 - V0, V2 - V0)));
+        Payload.HitMaterial = PackCachedMaterial(M.Albedo, M.Roughness);
+    } else {
+        int  HitGaussianIndex = GetHitGaussianIndex(HitInstance, HitPrimitive, HitAttr);
+        Gaussian G = FetchGaussian(HitGaussianIndex);
+        RayDesc Ray = GetRayDesc();
+        float RayScaler = 1, RayT = 0;
+        float3x4 WorldToObject = WorldToObject3x4();
+        float3 LocalRayOrigin = TransformPoint(WorldToObject, Ray.Origin);
+        float3 LocalRayDirection = TransformVector(WorldToObject, Ray.Direction);
+        float Alpha = saturate(
+            EvaluateGaussianResponse(LocalRayOrigin, LocalRayDirection, G, RayT)
+        );
+        GaussianPBR Pbr = FetchGaussianPBR(HitGaussianIndex);
+        Payload.HitDist = RayT / max(1e-6, RayScaler); // Use the max response T as reply
+        Payload.HitNormal   = PackNormal(Pbr.Normal);
+        Payload.HitMaterial = PackCachedMaterial(Pbr.Albedo, Pbr.Roughness);
+    }
 }
 
 [shader("miss")]
@@ -297,7 +356,7 @@ void Trace3DGSMiss(inout Trace3DGSPayload Payload)
 }
 
 [shader("miss")]
-void Trace3DGSShadowMiss(inout Trace3DGSShadowPayload Payload)
+void Trace3DGSStochasticMiss(inout Trace3DGSStochasticRayPayload Payload)
 {
     // Do nothing
 }

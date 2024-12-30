@@ -280,6 +280,18 @@ struct LightData {
 	float3 Radiance;
 };
 
+#ifndef __cplusplus
+#define SEMANTIC(x) : x
+#else
+#define SEMANTIC(x)
+#endif
+
+struct Vertex {
+    float3 Position SEMANTIC(POSITION);
+    float3 Normal SEMANTIC(TEXCOORD0);
+    float2 TexCoord SEMANTIC(TEXCOORD1);
+};
+
 // Instance space card set
 struct CardSet {
     float3 MinBounds;
@@ -287,6 +299,14 @@ struct CardSet {
     int  CardIndexBase;
     int3 NumCards; // x, y, z, a multiple of 2
     int3 CardResolutions; // yz, xz, xy for 3 axises
+};
+
+// Very-very simple material for regular meshes
+struct SimpleMaterial {
+    float3 Albedo;
+    float  Roughness;
+    float3 Emissive;
+    float  Padding;
 };
 
 #define MIN_CARD_RESOLUTION_L2 4
@@ -332,5 +352,7 @@ struct Card {
 #define HASHGRIDS_TILE_CELL_MIP_OFFSET_2 (HASHGRIDS_TILE_CELL_MIP_OFFSET_1 + (HASHGRIDS_TILE_CELL_MIP_OFFSET_1 / 4))
 #define HASHGRIDS_TILE_CELL_MIP_OFFSET_3 (HASHGRIDS_TILE_CELL_MIP_OFFSET_2 + (HASHGRIDS_TILE_CELL_MIP_OFFSET_1 / 16))
 #define HASHGRIDS_NUM_CELLS_PER_TILE (HASHGRIDS_TILE_CELL_MIP_OFFSET_3 + 1)
+
+#define RT_INSTANCE_REGULAR_MESH_BIT 0x80000000
 
 #endif // INC_3DGS_SHARED_HLSL

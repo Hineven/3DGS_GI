@@ -82,6 +82,16 @@ StructuredBuffer<float3> g_GaussianAlbedoBuffer;
 StructuredBuffer<float>  g_GaussianRoughnessBuffer;
 
 StructuredBuffer<float3> g_GaussianNormalBuffer;
+
+// Regulare mesh
+StructuredBuffer<Vertex> g_VertexBuffer;
+StructuredBuffer<uint>   g_IndexBuffer;
+StructuredBuffer<uint>   g_MeshIndexOffsetsBuffer;
+StructuredBuffer<uint>   g_MeshIndexCountsBuffer;
+
+// Material buffer (naive impl)
+StructuredBuffer<SimpleMaterial> g_MaterialBuffer;
+
 // End of scene related stuff
 
 // Store indirect dispatch commands

@@ -83,10 +83,12 @@ GBufferOutput DrawActiveGaussians (DrawActiveGaussians_FSInput Input) {
 }
 
 
-struct DrawAreaLights_PSInput {
+struct DrawRegulareMeshes_PSInput {
     float4 Position : SV_POSITION;
+    // float2 UV       : TEXCOORD0;
     float3 Normal   : NORMAL;
-    float3 Color    : COLOR;
+    float4 AlbedoRoughess : COLOR0;
+    float3 Emission : COLOR1;
 };
 
 struct GBufferOutput_RegularMesh {
@@ -96,15 +98,15 @@ struct GBufferOutput_RegularMesh {
     float4 Normal         : SV_Target3;
 };
 
-GBufferOutput_RegularMesh DrawAreaLights (DrawAreaLights_PSInput Input) {
+GBufferOutput_RegularMesh DrawRegularMeshes (DrawRegulareMeshes_PSInput Input) {
     CameraDescription C = GetCameraDescription();
     GBufferOutput_RegularMesh Result = (GBufferOutput_RegularMesh)0;
     // We do not write to the alpha channel of the albedo texture.
     // The alpha value of gaussians is kept by this texture.
-    Result.AlbedoAlpha    = 0.xxxx;
-    Result.EmissionAlpha  = float4(Input.Color, 1);
+    Result.AlbedoAlpha    = float4(Input.AlbedoRoughess.xyz, 1);
+    Result.EmissionAlpha  = float4(Input.Emission, 1);
     Result.Normal         = float4(Input.Normal, 1.f);
-    Result.Roughness      = 1.f.xxxx;
+    Result.Roughness      = float4(Input.AlbedoRoughess.w, 0, 0, 1);
     return Result;
 }
 

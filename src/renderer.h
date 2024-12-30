@@ -247,7 +247,7 @@ protected:
         GfxKernel GenerateDrawIndirect;
 
         GfxKernel ClearCounters;
-        GfxKernel DrawAreaLights;
+        GfxKernel DrawRegularMeshes;
         GfxKernel FilterActiveGaussians;
         GfxKernel ProjectActiveGaussians;
         GfxKernel DrawActiveGaussians;
@@ -399,8 +399,9 @@ protected:
     // Frame flags and states
     int frame_index_ {};
     bool should_build_acceleration_structure_ {true};
-    bool should_update_TLAS_ {true};
+    bool should_rebuild_TLAS_ {true};
     bool should_reset_hash_grids_ {true};
+    bool should_update_transforms_ {false};
     bool need_reload_shaders_ {false};
 
     struct {
@@ -415,6 +416,7 @@ protected:
         uint SSRC_freeze_tile_jitter{false};
         uint SSRC_tile_jitter {};
         float HashGrids_cascade_radius {};
+        uint scene_area_light_count {};
     } CB {};
 
     UniformBlock UB {};

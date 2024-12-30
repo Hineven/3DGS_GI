@@ -105,13 +105,7 @@ int AppInternal::Run () {
             glm::vec3 position = glm::vec3(-5, 0, 0);
             glm::vec3 rotation = glm::vec3(0, 0, 0);
             glm::vec3 scale = glm::vec3(1, 1, 1);
-
-            glm::mat4x3 transform = glm::mat4x3(
-                glm::translate(glm::mat4(1.f), position)
-                * glm::toMat4(glm::quat(rotation))
-                * glm::scale(glm::mat4(1.f), scale)
-            );
-            scene_.SetInstanceTransform(inst_x, transform);
+            scene_.SetInstanceTransform(inst_x, {position, rotation, scale});
         }
 
         {
@@ -124,7 +118,7 @@ int AppInternal::Run () {
                 * glm::toMat4(glm::quat(rotation))
                 * glm::scale(glm::mat4(1.f), scale)
             );
-            scene_.SetInstanceTransform(inst_y, transform);
+            scene_.SetInstanceTransform(inst_y, {position, rotation, scale});
         }
         scene_.UpdateSceneBounds();
         scene_.UpdateDeviceScene();
@@ -226,9 +220,6 @@ int AppInternal::Run () {
 
         // End of device frame
 
-        // If I don't do this, there'll be severe flickering when the camera is moving
-        // FIXME why?? UniformBuffer problem?
-        // gfxFinish(gfx_);
         gfxFrame(gfx_, false);
 
         // Logic

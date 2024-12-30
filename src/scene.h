@@ -32,7 +32,6 @@ enum class CameraType {
     eOrthographic = CAMERA_TYPE_ORTHOGRAPHIC
 };
 
-
 class Camera {
 public:
     Camera() = default;
@@ -66,6 +65,12 @@ public:
 enum class InstanceType {
     eGaussians,
     eMesh
+};
+
+struct InstanceTransform {
+    glm::vec3 position {};
+    glm::vec3 rotation {};
+    glm::vec3 scale {1.f};
 };
 
 struct SceneInstance {
@@ -106,15 +111,16 @@ public:
     void DestroyDeviceScene () ;
 
     void UpdateDeviceLights ();
+    void UpdateDeviceTransforms ();
 
-    void SetLight (LightType type, const LightData & LD, int index = 0) ;
+    void SetLight (LightType type, const LightData & LD, int index = 0, int instance_index = -1) ;
 
     LightData GetDirectionalLight ();
     LightData GetSkyLight ();
 
     void SetDirectionalLight (const LightData & light);
     void SetSkyLight (const LightData & light);
-    void SetAreaLight (int area_light_index, const LightData & light);
+    void SetAreaLight (int area_light_index, const LightData & light, int instance_index = -1);
 
     LightData GetLight (int index) ;
 
@@ -139,15 +145,11 @@ public:
     inline void SetNumLights (int num_lights) {
         assert(num_lights >= 2);
         light_data_.resize(num_lights);
+        light_instance_.resize(num_lights, -1);
     }
 
     inline AABB GetInstanceAABB (int id) {
         return {gsi_bounds_min[id], gsi_bounds_max[id]};
-    }
-
-    // Local to world transform
-    inline glm::mat4x3 GetInstanceTransform (int id) {
-        return gsi_transforms_[id];
     }
 
     // Local to world transform
@@ -161,7 +163,7 @@ public:
             .num_vertices = gsi_gs_counts_[index],
             .num_indices = gsi_mesh_num_indices_[index],
             .vertex_offset = gsi_gs_index_offsets_[index],
-            .index_offset = gsi_gs_mesh_index_offsets_[index],
+            .index_offset = gsi_mesh_index_offsets_[index],
             .local_bounds = {gsi_bounds_min[index], gsi_bounds_max[index]},
             .to_world_transform = gsi_transforms_[index],
             .to_local_transform = gsi_inv_transforms_[index],
@@ -170,9 +172,12 @@ public:
         };
     }
 
-    void SetInstanceTransform (int instance, glm::mat4x3 to_world_transform) ;
-
     void UpdateBoundsForInstance (int instance);
+
+    void SetInstanceTransform (int instance, InstanceTransform transform);
+    inline InstanceTransform GetInstanceTransform (int instance) {
+        return {gsi_positions_[instance], gsi_rotations_[instance], gsi_scales_[instance]};
+    }
 
     void UpdateSceneBounds ();
 
@@ -182,6 +187,11 @@ public:
     friend class Renderer;
 protected:
 
+    void SetInstanceTransformMatrix (int instance, glm::mat4x3 to_world_transform) ;
+    // Local to world transform
+    inline glm::mat4x3 GetInstanceTransformMatrix (int id) const {
+        return gsi_transforms_[id];
+    }
     void InitializeLights();
 
     Camera camera_ {};
@@ -213,20 +223,31 @@ protected:
     std::vector<glm::mat4x3> gsi_inv_transforms_;
     std::vector<glm::mat3> gsi_normal_transforms_;
     std::vector<glm::mat3> gsi_inv_normal_transforms_;
-    // GS instance GS index offsets
+    // GS instance GS index offsets, as well as mesh vertex offsets
     std::vector<int> gsi_gs_index_offsets_;
+    // Vertex buffer for regular meshes
+    std::vector<Vertex> gsi_vertices_;
+    std::vector<int>    gsi_indices_;
     // Index offsets for mesh instances
-    std::vector<int> gsi_gs_mesh_index_offsets_;
+    std::vector<int> gsi_mesh_index_offsets_;
     // Num indices for mesh instances
     std::vector<int> gsi_mesh_num_indices_;
     // GS instances GS count
     std::vector<int> gsi_gs_counts_;
+
+    std::vector<glm::vec3> gsi_positions_;
+    std::vector<glm::vec3> gsi_rotations_;
+    std::vector<glm::vec3> gsi_scales_;
 
     std::unique_ptr<DeviceScene> device_scene_;
 
     // Lights (packed)
     // std::vector<Light> lights_;
     std::vector<LightData> light_data_;
+    // Instance transform will be applied to the lights when uploading to device.
+    std::vector<int> light_instance_;
+
+    std::vector<SimpleMaterial> gsi_materials_;
 
     std::filesystem::path environment_map_path_;
 };

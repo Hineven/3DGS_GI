@@ -72,7 +72,7 @@ void ClearCounters () {
 }
 
 // Manually set by dispatches
-uint g_CurrentInstanceIndex;
+uint g_FilterActiveGaussians_CurrentInstanceIndex;
 
 // Filter the active gaussians that are visible in the view frustrum
 [numthreads(WAVE_SIZE, 1, 1)]
@@ -88,7 +88,7 @@ void FilterActiveGaussians (uint DispatchID : SV_DispatchThreadID) {
 	uint GaussianIndex = InstanceBaseGaussianIndex + DispatchID;
 	float3x4 Transform = g_InstanceTransformBuffer[InstanceIndex];
 #else
-	uint InstanceIndex = g_CurrentInstanceIndex;
+	uint InstanceIndex = g_FilterActiveGaussians_CurrentInstanceIndex;
 	uint InstanceBaseGaussianIndex = g_InstanceGaussianIndexOffsetBuffer[InstanceIndex];
 	uint InstanceNumGaussians = g_InstanceGaussianCountBuffer[InstanceIndex];
 	if(DispatchID >= InstanceNumGaussians) return ;
@@ -133,7 +133,6 @@ void ProjectActiveGaussians (uint DispatchID : SV_DispatchThreadID) {
     
     CameraDescription C = GetCameraDescription();
     Gaussian G = FetchGaussian(GaussianIndex);
-    SymmetricMatrix LocalCov3D = ComputeCovarianceMatrix(G.Scale, G.Rotation);;
     // Project to 2D covariance
 #ifndef CARD_SHADERS
 	float3x4 InstanceTransform = g_InstanceTransformBuffer[InstanceIndex];
@@ -153,13 +152,19 @@ void ProjectActiveGaussians (uint DispatchID : SV_DispatchThreadID) {
     );
 #endif
 
-    float4x4 LocalToView = mul(C.View, ExpandMatrixWithIdentities(InstanceTransform));
+#ifndef CARD_SHADERS
+    SymmetricMatrix WorldCov3D = ComputeCovarianceMatrix(G.Scale, G.Rotation, ClipMatrix(InstanceTransform));
+#else
+    SymmetricMatrix WorldCov3D = ComputeCovarianceMatrix(G.Scale, G.Rotation);
+#endif
+
+    // float4x4 LocalToView = mul(C.View, ExpandMatrixWithIdentities(InstanceTransform));
 	float4 HomogeneousW = mul(C.ProjectionView, float4(GaussianWorldPosition, 1));
     float3 Homogeneous = HomogeneousW.xyz / HomogeneousW.w;
 
     // Get the covariance matrix in NDC space ([-1, 1] ^ 2)
     float3 Cov2D = ProjectCovarianceMatrixToNDC(
-        J, LocalCov3D, LocalToView
+        J, WorldCov3D, C.View
     );
 
 	{
@@ -183,8 +188,7 @@ void ProjectActiveGaussians (uint DispatchID : SV_DispatchThreadID) {
 
 #ifndef OUTPUT_PBR_G_BUFFER
 	SHCoefficents3 SH3 = FetchGaussianSHCoefficients(GaussianIndex, 2);
-	float3 WorldGaussianPosition = TransformPoint(g_InstanceTransformBuffer[InstanceIndex], G.Position);
-	float3 ViewDirection = normalize(C.Position - WorldGaussianPosition);
+	float3 ViewDirection = normalize(C.Position - GaussianWorldPosition);
 	float3 Color = SH3Evaluate(ViewDirection, SH3, 2);
 	g_RWActiveGaussianColorBuffer[ActiveIndex] = Color;
 #endif
@@ -3125,10 +3129,15 @@ void VisualizeMeshCardAtlas (uint2 DispatchID : SV_DispatchThreadID) {
 	}
 }
 
+uint g_GenerateRTMesh_InstanceIndex;
+
 [numthreads(WAVE_SIZE, 1, 1)]
 void GenerateRTMesh (uint DispatchID : SV_DispatchThreadID) {
-	int GaussianIndex = DispatchID;
-	if(GaussianIndex >= UB.NumGaussians) return ;
+	int GaussianRank = DispatchID;
+	int NumInstanceGaussians = g_InstanceGaussianCountBuffer[g_GenerateRTMesh_InstanceIndex];
+	if(GaussianRank >= NumInstanceGaussians) return;
+	int GaussianIndex = GaussianRank + g_InstanceGaussianIndexOffsetBuffer[g_GenerateRTMesh_InstanceIndex];
+
 	
 	Gaussian G = FetchGaussian(GaussianIndex);
 	float4x4 ToWorld = 0;
@@ -3199,7 +3208,7 @@ void GenerateRTMesh (uint DispatchID : SV_DispatchThreadID) {
 	}
 	// Emit the indices
 	int IndexBase = GaussianIndex * 60;
-	int IndexOffset = GaussianIndex * 12;
+	int IndexOffset = GaussianRank * 12;
 	for(int i = 0; i < 20; i++) {
 		int3 Face = IcoFaces[i];
 		g_RW_RTIndexBuffer[IndexBase + i * 3 + 0] = Face.x + IndexOffset;

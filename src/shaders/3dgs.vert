@@ -15,27 +15,27 @@ DrawActiveGaussians_GSInput DrawActiveGaussians (
     return Input;
 }
 
-struct DrawAreaLights_PSInput {
+struct DrawRegulareMeshes_PSInput {
     float4 Position : SV_POSITION;
+    // float2 UV       : TEXCOORD0;
     float3 Normal   : NORMAL;
-    float3 Color    : COLOR;
+    float4 AlbedoRoughess : COLOR0;
+    float3 Emission : COLOR1;
 };
 
-DrawAreaLights_PSInput DrawAreaLights (
+DrawRegulareMeshes_PSInput DrawRegularMeshes (
+    Vertex InVertex,
     uint VertexIndex : SV_VertexID,
     uint InstanceIndex : SV_InstanceID
 ) {
-    DrawAreaLights_PSInput Output = (DrawAreaLights_PSInput)0;
-    LightData LD = FetchLightDetails(2 + InstanceIndex);
-    switch(VertexIndex) {
-        case 0: Output.Position = float4(LD.V1, 1); break;
-        case 1: Output.Position = float4(LD.V2, 1); break;
-        case 2: Output.Position = float4(LD.V3, 1); break;
-    }
-    Output.Position = mul(UB.MainCamera.ProjectionView, Output.Position);
-    float3 Normal = normalize(cross(LD.V2 - LD.V1, LD.V3 - LD.V1));
-    Output.Normal = Normal;
-    Output.Color  = LD.Radiance;
+    DrawRegulareMeshes_PSInput Output = (DrawRegulareMeshes_PSInput)0;
+    float3 Position = mul(g_InstanceTransformBuffer[InstanceIndex], float4(InVertex.Position, 1.f));
+    Output.Position = mul(UB.MainCamera.ProjectionView, float4(Position, 1));
+    float3 Normal   = mul(g_InstanceNormalTransformBuffer[InstanceIndex], InVertex.Normal);
+    Output.Normal   = Normal;
+    SimpleMaterial M = g_MaterialBuffer[InstanceIndex];
+    Output.AlbedoRoughess = float4(M.Albedo, M.Roughness);
+    Output.Emission       = M.Emissive;
     return Output;
 }
 

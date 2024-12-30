@@ -13,6 +13,8 @@
 #include "glm/ext/matrix_transform.hpp"
 #include "glm/ext/matrix_clip_space.hpp"
 #include "app_internal.h"
+#include "glm/gtx/matrix_decompose.hpp"
+#include "glm/gtx/quaternion.hpp"
 
 Scene::Scene () {
     InitializeLights();
@@ -175,6 +177,9 @@ int Scene::LoadGaussians (std::filesystem::path path, bool always_load_sh) {
     }
 
     num_instances_ ++;
+    gsi_positions_.resize(num_instances_);
+    gsi_rotations_.resize(num_instances_);
+    gsi_scales_.resize(num_instances_);
     gsi_transforms_.resize(num_instances_);
     gsi_inv_transforms_.resize(num_instances_);
     gsi_normal_transforms_.resize(num_instances_);
@@ -188,14 +193,16 @@ int Scene::LoadGaussians (std::filesystem::path path, bool always_load_sh) {
     gsi_types_[curr_instance] = InstanceType::eGaussians;
     gsi_gs_index_offsets_.resize(num_instances_);
     gsi_gs_index_offsets_[curr_instance] = old_num_gaussians;
-    gsi_gs_mesh_index_offsets_.resize(num_instances_);
-    gsi_gs_mesh_index_offsets_[curr_instance] = 0;
+    gsi_mesh_index_offsets_.resize(num_instances_);
+    gsi_mesh_index_offsets_[curr_instance] = 0;
     gsi_mesh_num_indices_.resize(num_instances_);
     gsi_mesh_num_indices_[curr_instance] = 0;
     gsi_gs_counts_.resize(num_instances_);
     gsi_gs_counts_[curr_instance] = inst_num_gaussians;
+    gsi_materials_.resize(num_instances_);
+    gsi_materials_[curr_instance] = {};
 
-    SetInstanceTransform(curr_instance, glm::mat4x3(1.f));
+    SetInstanceTransform(curr_instance, InstanceTransform{});
 
     UpdateBoundsForInstance(curr_instance);
 
@@ -204,10 +211,129 @@ int Scene::LoadGaussians (std::filesystem::path path, bool always_load_sh) {
     return curr_instance;
 }
 
+int Scene::LoadGltf (std::filesystem::path path) {
+    if(path.extension() != ".gltf") {
+        app_warning("only .gltf files are supported. (.glb not supported)");
+        return -1;
+    }
+    auto scene = gfxCreateScene();
+    auto result = gfxSceneImport(scene, path.string().c_str());
+    if (!result) {
+        gfxDestroyScene(scene);
+        app_warning("Failed to load: " << path);
+        return -1;
+    }
+    auto meshes = gfxSceneGetMeshes(scene);
+    int num_meshes = gfxSceneGetMeshCount(scene);
+    auto instances = gfxSceneGetInstances(scene);
+    int num_instances = gfxSceneGetInstanceCount(scene);
+
+    auto materials = gfxSceneGetMaterials(scene);
+    int num_materials = gfxSceneGetMaterialCount(scene);
+    // A simple material system only for demonstration purpose. No textures. That'll save
+    // my efforts as well.
+    // auto images = gfxSceneGetImages(scene);
+    // int num_textures = gfxSceneGetImageCount(scene);
+
+    int old_num_instances = num_instances_;
+    num_instances_ += num_instances_;
+    gsi_positions_.resize(num_instances_);
+    gsi_rotations_.resize(num_instances_);
+    gsi_scales_.resize(num_instances_);
+    gsi_transforms_.resize(num_instances_);
+    gsi_inv_transforms_.resize(num_instances_);
+    gsi_normal_transforms_.resize(num_instances_);
+    gsi_inv_normal_transforms_.resize(num_instances_);
+    gsi_bounds_min.resize(num_instances_);
+    gsi_bounds_max.resize(num_instances_);
+
+    gsi_types_.resize(num_instances_);
+    gsi_mesh_index_offsets_.resize(num_instances_);
+    gsi_gs_index_offsets_.resize(num_instances_);
+    gsi_mesh_num_indices_.resize(num_instances_);
+    gsi_gs_counts_.resize(num_instances_);
+    gsi_materials_.resize(num_instances_);
+
+    // Firstly flush all mesh data into our geometry buffers and keep indices
+    std::vector<int> mesh_index_offsets;
+    std::vector<int> mesh_vertex_offsets;
+    int old_num_vertices = gsi_vertices_.size();
+    int old_num_indices  = gsi_indices_.size();
+    for (int i = 0; i < num_meshes; i++) {
+        mesh_index_offsets.push_back(gsi_indices_.size());
+        mesh_vertex_offsets.push_back(gsi_vertices_.size());
+        auto & mesh = meshes[i];
+        for (auto & v : mesh.vertices) {
+            gsi_vertices_.push_back({
+                v.position,
+                v.normal,
+                v.uv
+            });
+        }
+        for (auto & idx : mesh.indices) {
+            gsi_indices_.push_back(idx);
+        }
+    }
+
+    // Then stuff all instance data into our arrays
+    for (int i = 0; i < num_instances; i++) {
+        int curr_instance = old_num_instances + i;
+        gsi_types_[curr_instance] = InstanceType::eMesh;
+        int mesh_index = instances[i].mesh.getIndex();
+        gsi_gs_index_offsets_[curr_instance] = old_num_vertices + mesh_vertex_offsets[mesh_index];
+        gsi_mesh_index_offsets_[curr_instance] = old_num_indices + mesh_index_offsets[mesh_index];
+        gsi_gs_counts_[curr_instance] = meshes[mesh_index].vertices.size();
+        gsi_mesh_num_indices_[curr_instance] = meshes[mesh_index].indices.size();
+        glm::vec3 position;
+        glm::vec3 rotation;
+        glm::vec3 scale;
+        {
+            glm::quat orientation;
+            glm::vec3 skew;
+            glm::vec4 perspective;
+            glm::decompose(instances[i].transform, scale, orientation, position, skew, perspective);
+            rotation = glm::eulerAngles(orientation);
+        }
+        SetInstanceTransform(curr_instance, InstanceTransform{
+            position,
+            rotation,
+            scale
+        });
+        UpdateBoundsForInstance(curr_instance);
+        int material_index = instances[i].material.getIndex();
+        gsi_materials_[curr_instance] = {
+            materials[material_index].albedo,
+            0.f, // padding
+            materials[material_index].emissivity,
+            materials[material_index].roughness
+        };
+        if (materials[material_index].emissivity != glm::vec3(0.f)) {
+            // Filter out lights and add them into the light list
+            auto radiance = materials[material_index].emissivity;
+            auto & m = meshes[mesh_index];
+            for (int f = 0; f < m.indices.size(); f ++) {
+                LightData LD {};
+                LD.Radiance = radiance;
+                LD.V1 = m.vertices[m.indices[f]].position;
+                LD.V2 = m.vertices[m.indices[f + 1]].position;
+                LD.V3 = m.vertices[m.indices[f + 2]].position;
+                SetNumLights(GetNumLights() + 1);
+                SetAreaLight(GetNumLights() - 1, LD, curr_instance);
+            }
+        }
+    }
+
+    UpdateSceneBounds ();
+    return old_num_instances;
+}
+
 int Scene::DuplicateInstance (int src_instance) {
     num_instances_ ++;
     int curr_instance = num_instances_ - 1;
     gsi_types_.resize(num_instances_);
+    gsi_positions_.resize(num_instances_);
+    gsi_rotations_.resize(num_instances_);
+    gsi_scales_.resize(num_instances_);
     gsi_transforms_.resize(num_instances_);
     gsi_inv_transforms_.resize(num_instances_);
     gsi_normal_transforms_.resize(num_instances_);
@@ -215,37 +341,54 @@ int Scene::DuplicateInstance (int src_instance) {
     gsi_bounds_min.resize(num_instances_);
     gsi_bounds_max.resize(num_instances_);
     gsi_gs_index_offsets_.resize(num_instances_);
-    gsi_gs_mesh_index_offsets_.resize(num_instances_);
+    gsi_mesh_index_offsets_.resize(num_instances_);
     gsi_mesh_num_indices_.resize(num_instances_);
     gsi_gs_counts_.resize(num_instances_);
 
     // Copy data
     gsi_types_[curr_instance] = gsi_types_[src_instance];
     gsi_gs_index_offsets_[curr_instance] = gsi_gs_index_offsets_[src_instance];
-    gsi_gs_mesh_index_offsets_[curr_instance] = gsi_gs_mesh_index_offsets_[src_instance];
+    gsi_mesh_index_offsets_[curr_instance] = gsi_mesh_index_offsets_[src_instance];
     gsi_mesh_num_indices_[curr_instance] = gsi_mesh_num_indices_[src_instance];
     gsi_gs_counts_[curr_instance] = gsi_gs_counts_[src_instance];
     gsi_bounds_min[curr_instance] = gsi_bounds_min[src_instance];
     gsi_bounds_max[curr_instance] = gsi_bounds_max[src_instance];
 
-    SetInstanceTransform(curr_instance, glm::mat4x3(1.f));
+    // Copy and add lights
+    for (int i = 0; i < (int)light_data_.size(); i++) {
+        if (light_instance_[i] == src_instance) {
+            LightData LD = light_data_[i];
+            SetNumLights(GetNumLights() + 1);
+            SetAreaLight(GetNumLights() - 1, LD, curr_instance);
+        }
+    }
+
+    SetInstanceTransform(curr_instance, {});
     // UpdateBoundsForInstance(curr_instance);
     UpdateSceneBounds ();
 
     return curr_instance;
 }
 
+void Scene::SetInstanceTransform(int instance, InstanceTransform transform) {
+    gsi_positions_[instance] = transform.position;
+    gsi_rotations_[instance] = transform.rotation;
+    gsi_scales_[instance] = transform.scale;
+    SetInstanceTransformMatrix(instance, glm::mat4x3(
+        glm::translate(glm::mat4(1.f), transform.position)
+        * glm::toMat4(glm::quat(transform.rotation))
+        * glm::scale(glm::mat4(1.f), transform.scale)
+    ));
+}
 
 
-void Scene::SetInstanceTransform(int instance, glm::mat4x3 to_world_transform) {
+void Scene::SetInstanceTransformMatrix(int instance, glm::mat4x3 to_world_transform) {
     gsi_transforms_[instance] = to_world_transform;
     {
-        glm::mat3 inner = gsi_transforms_[instance];
-        glm::mat3 inv_inner = glm::inverse(inner);
-        gsi_inv_transforms_[instance] = glm::mat4x3(inv_inner);
-        gsi_inv_transforms_[instance][3][0] = -gsi_transforms_[instance][3][0];
-        gsi_inv_transforms_[instance][3][1] = -gsi_transforms_[instance][3][1];
-        gsi_inv_transforms_[instance][3][2] = -gsi_transforms_[instance][3][2];
+        glm::mat4 outer = gsi_transforms_[instance];
+        outer[3][3] = 1;
+        glm::mat4 inv_outer = glm::inverse(outer);
+        gsi_inv_transforms_[instance] = glm::mat4x3(inv_outer);
     }
 
     gsi_normal_transforms_[instance] = glm::transpose(glm::inverse(glm::mat3x3(to_world_transform)));
@@ -253,7 +396,7 @@ void Scene::SetInstanceTransform(int instance, glm::mat4x3 to_world_transform) {
 }
 
 
-void Scene::SetLight (LightType type, const LightData & LD, int index) {
+void Scene::SetLight (LightType type, const LightData & LD, int index, int instance_index) {
     if (type == LightType::eDirectional && index) {
         app_warning("Directional light is always the first light.");
         index = 0;
@@ -269,6 +412,7 @@ void Scene::SetLight (LightType type, const LightData & LD, int index) {
         return ;
     }
     light_data_[index] = LD;
+    light_instance_[index] = instance_index;
 }
 
 void Scene::SetDirectionalLight(const LightData &light) {
@@ -279,8 +423,8 @@ void Scene::SetSkyLight(const LightData &light) {
     SetLight(LightType::eSky, light, 1);
 }
 
-void Scene::SetAreaLight(int area_light_index, const LightData &light) {
-    SetLight(LightType::eArea, light, area_light_index + 2);
+void Scene::SetAreaLight(int area_light_index, const LightData &light, int instance_index) {
+    SetLight(LightType::eArea, light, area_light_index + 2, instance_index);
 }
 
 LightData Scene::GetDirectionalLight() {
@@ -311,7 +455,6 @@ void Scene::UpdateBoundsForInstance (int instance) {
     if (gsi_types_[instance] == InstanceType::eGaussians) {
         float scale_multiplier = 3.f;
         Bounds bounds;
-
         bounds.mn = glm::vec3(FLT_MAX);
         bounds.mx = glm::vec3(-FLT_MAX);
         for (int j = gsi_gs_index_offsets_[instance]; j < gsi_gs_index_offsets_[instance] + gsi_gs_counts_[instance]; j++) {
@@ -323,6 +466,17 @@ void Scene::UpdateBoundsForInstance (int instance) {
             auto mx = pos + mscale * scale_multiplier;
             bounds.mn = glm::min(bounds.mn, mn);
             bounds.mx = glm::max(bounds.mx, mx);
+        }
+        gsi_bounds_min[instance] = bounds.mn;
+        gsi_bounds_max[instance] = bounds.mx;
+    } else {
+        Bounds bounds;
+        bounds.mn = glm::vec3(FLT_MAX);
+        bounds.mx = glm::vec3(-FLT_MAX);
+        for (int j = gsi_gs_index_offsets_[instance]; j < gsi_gs_index_offsets_[instance] + gsi_gs_counts_[instance]; j++) {
+            auto & pos = gsi_vertices_[j].Position;
+            bounds.mn = glm::min(bounds.mn, pos);
+            bounds.mx = glm::max(bounds.mx, pos);
         }
         gsi_bounds_min[instance] = bounds.mn;
         gsi_bounds_max[instance] = bounds.mx;
@@ -369,6 +523,14 @@ void Scene::UpdateDeviceLights() {
         device_scene_ = std::make_unique<DeviceScene>();
     }
     device_scene_->UpdateLights(scene);
+}
+
+void Scene::UpdateDeviceTransforms() {
+    Scene & scene = *this;
+    if(!device_scene_) {
+        device_scene_ = std::make_unique<DeviceScene>();
+    }
+    device_scene_->UpdateTransforms(scene);
 }
 
 Scene::~Scene () {

@@ -86,14 +86,24 @@ void DeviceScene::Upload (const Scene & scene) {
     gsi_instance_base_.setName("GSInstanceBaseBuffer");
     gsi_instance_count_ = gfxCreateBuffer(gfx, scene.num_instances_ * sizeof(uint32_t), scene.gsi_gs_counts_.data());
     gsi_instance_count_.setName("GSInstanceCountBuffer");
-    gsi_transform_ = gfxCreateBuffer(gfx, scene.num_instances_ * sizeof(glm::mat4x3), scene.gsi_transforms_.data());
-    gsi_transform_.setName("GSITransformBuffer");
-    gsi_inv_transform_ = gfxCreateBuffer(gfx, scene.num_instances_ * sizeof(glm::mat4x3), scene.gsi_inv_transforms_.data());
-    gsi_inv_transform_.setName("GSIInvTransformBuffer");
-    gsi_normal_transform_ = gfxCreateBuffer(gfx, scene.num_instances_ * sizeof(glm::mat3x3), scene.gsi_normal_transforms_.data());
-    gsi_normal_transform_.setName("GSINormalTransformBuffer");
-    gsi_inv_normal_transform_ = gfxCreateBuffer(gfx, scene.num_instances_ * sizeof(glm::mat3x3), scene.gsi_inv_normal_transforms_.data());
-    gsi_inv_normal_transform_.setName("GSIInvNormalTransformBuffer");
+
+    // Regulare meshes
+    gsi_mesh_num_indices_ = gfxCreateBuffer(gfx, scene.num_instances_ * sizeof(uint32_t), scene.gsi_mesh_num_indices_.data());
+    gsi_mesh_num_indices_.setName("MeshNumIndicesBuffer");
+    gsi_mesh_index_offsets_ = gfxCreateBuffer(gfx, scene.num_instances_ * sizeof(uint32_t), scene.gsi_mesh_index_offsets_.data());
+    gsi_mesh_index_offsets_.setName("MeshIndexOffsetsBuffer");
+
+    gsi_vertices_ = gfxCreateBuffer(gfx, scene.gsi_vertices_.size() * sizeof(Vertex), scene.gsi_vertices_.data());
+    gsi_vertices_.setName("VerticesBuffer");
+    gsi_vertices_.setStride(sizeof(Vertex));
+    gsi_indices_ = gfxCreateBuffer(gfx, scene.gsi_indices_.size() * sizeof(uint32_t), scene.gsi_indices_.data());
+    gsi_indices_.setName("IndicesBuffer");
+
+    // Simple materials
+    gsi_materials_ = gfxCreateBuffer(gfx, scene.num_instances_ * sizeof(SimpleMaterial), scene.gsi_materials_.data());
+    gsi_materials_.setName("MaterialsBuffer");
+
+    UpdateTransforms(scene);
 
     UpdateLights(scene);
 
@@ -121,11 +131,65 @@ void DeviceScene::UpdateLights(const Scene &scene) {
         light_data_staging_.setName("LightDataStagingBuffer");
     }
     gfxCommandClearBuffer(gfx, light_count_, num_lights);
-    memcpy(gfxBufferGetData(gfx, light_data_staging_), scene.light_data_.data(), num_lights * 4 * sizeof(float3));
+    std::vector<LightData> transformed_light_data(num_lights);
+    // Apply instance transforms to the light if they are attached to an instance
+    for (int i = 0; i < num_lights; i++) {
+        if (scene.light_instance_[i] != -1) {
+            glm::mat4x3 transform = scene.GetInstanceTransformMatrix(scene.light_instance_[i]);
+            transformed_light_data[i] = scene.light_data_[i];
+            transformed_light_data[i].V1 = transform * glm::vec4(transformed_light_data[i].V1, 1.f);
+            transformed_light_data[i].V2 = transform * glm::vec4(transformed_light_data[i].V2, 1.f);
+            transformed_light_data[i].V3 = transform * glm::vec4(transformed_light_data[i].V3, 1.f);
+        }
+    }
+    memcpy(gfxBufferGetData(gfx, light_data_staging_), transformed_light_data.data(), num_lights * 4 * sizeof(float3));
     gfxCommandCopyBuffer(gfx, light_data_, light_data_staging_);
 }
 
-
+void DeviceScene::UpdateTransforms(const Scene &scene) {
+    auto gfx = AppInternal::GetInstance().GetGfx();
+    auto total_size = uint32_t(2 * scene.num_instances_ * (sizeof(glm::mat4x3) + sizeof(glm::mat3x3)));
+    if (transform_data_staging_.getSize() < total_size) {
+        transform_data_staging_ = gfxCreateBuffer(gfx, total_size, nullptr, kGfxCpuAccess_Write);
+        transform_data_staging_.setName("TransformDataStagingBuffer");
+    }
+    uint32_t offset = 0;
+    if (!gsi_transform_ || gsi_transform_.getSize() < scene.num_instances_ * sizeof(glm::mat4x3)) {
+        if (gsi_transform_) gfxDestroyBuffer(gfx, gsi_transform_);
+        gsi_transform_ = gfxCreateBuffer(gfx, scene.num_instances_ * sizeof(glm::mat4x3), scene.gsi_transforms_.data());
+        gsi_transform_.setName("GSITransformBuffer");
+    } else {
+        memcpy((char*)gfxBufferGetData(gfx, transform_data_staging_) + offset, scene.gsi_transforms_.data(), scene.num_instances_ * sizeof(glm::mat4x3));
+        gfxCommandCopyBuffer(gfx, gsi_transform_, 0, transform_data_staging_, offset, scene.num_instances_ * sizeof(glm::mat4x3));
+    }
+    offset += scene.num_instances_ * sizeof(glm::mat4x3);
+    if (!gsi_inv_transform_ || gsi_inv_transform_.getSize() < scene.num_instances_ * sizeof(glm::mat4x3)) {
+        if (gsi_inv_transform_) gfxDestroyBuffer(gfx, gsi_inv_transform_);
+        gsi_inv_transform_ = gfxCreateBuffer(gfx, scene.num_instances_ * sizeof(glm::mat4x3), scene.gsi_inv_transforms_.data());
+        gsi_inv_transform_.setName("GSIInvTransformBuffer");
+    } else {
+        memcpy((char*)gfxBufferGetData(gfx, transform_data_staging_) + offset, scene.gsi_inv_transforms_.data(), scene.num_instances_ * sizeof(glm::mat4x3));
+        gfxCommandCopyBuffer(gfx, gsi_inv_transform_, 0, transform_data_staging_, offset, scene.num_instances_ * sizeof(glm::mat4x3));
+    }
+    offset += scene.num_instances_ * sizeof(glm::mat4x3);
+    if (!gsi_normal_transform_ || gsi_normal_transform_.getSize() < scene.num_instances_ * sizeof(glm::mat3x3)) {
+        if (gsi_normal_transform_) gfxDestroyBuffer(gfx, gsi_normal_transform_);
+        gsi_normal_transform_ = gfxCreateBuffer(gfx, scene.num_instances_ * sizeof(glm::mat3x3), scene.gsi_normal_transforms_.data());
+        gsi_normal_transform_.setName("GSINormalTransformBuffer");
+    } else {
+        memcpy((char*)gfxBufferGetData(gfx, transform_data_staging_) + offset, scene.gsi_normal_transforms_.data(), scene.num_instances_ * sizeof(glm::mat3x3));
+        gfxCommandCopyBuffer(gfx, gsi_normal_transform_, 0,  transform_data_staging_, offset, scene.num_instances_ * sizeof(glm::mat3x3));
+    }
+    offset += scene.num_instances_ * sizeof(glm::mat3x3);
+    if (!gsi_inv_normal_transform_ || gsi_inv_normal_transform_.getSize() < scene.num_instances_ * sizeof(glm::mat3x3)) {
+        if (gsi_inv_normal_transform_) gfxDestroyBuffer(gfx, gsi_inv_normal_transform_);
+        gsi_inv_normal_transform_ = gfxCreateBuffer(gfx, scene.num_instances_ * sizeof(glm::mat3x3), scene.gsi_inv_normal_transforms_.data());
+        gsi_inv_normal_transform_.setName("GSIInvNormalTransformBuffer");
+    } else {
+        memcpy((char*)gfxBufferGetData(gfx, transform_data_staging_) + offset, scene.gsi_inv_normal_transforms_.data(), scene.num_instances_ * sizeof(glm::mat3x3));
+        gfxCommandCopyBuffer(gfx, gsi_inv_normal_transform_, 0, transform_data_staging_, offset, scene.num_instances_ * sizeof(glm::mat3x3));
+    }
+}
 
 void DeviceScene::UpdateGfxScene(const Scene & scene) {
     auto gfx = AppInternal::GetInstance().GetGfx();
@@ -241,11 +305,20 @@ void DeviceScene::Destroy () {
     gfxDestroyBuffer(gfx, gsi_normal_transform_);
     gfxDestroyBuffer(gfx, gsi_inv_normal_transform_);
 
+    gfxDestroyBuffer(gfx, gsi_vertices_);
+    gfxDestroyBuffer(gfx, gsi_indices_);
+    gfxDestroyBuffer(gfx, gsi_mesh_index_offsets_);
+    gfxDestroyBuffer(gfx, gsi_mesh_num_indices_);
+    gfxDestroyBuffer(gfx, gsi_materials_);
+
     gfxDestroyTexture(gfx, environment_map_);
 
     gfxDestroyBuffer(gfx, light_count_);
     gfxDestroyBuffer(gfx, light_);
     gfxDestroyBuffer(gfx, light_data_);
+
+    gfxDestroyBuffer(gfx, light_data_staging_);
+    gfxDestroyBuffer(gfx, transform_data_staging_);
 
     gfxDestroyScene(gfx_scene_);
 }
@@ -276,6 +349,13 @@ void DeviceScene::Bind(const GfxProgram &program) {
     gfxProgramSetParameter(gfx, program, "g_InstanceInvTransformBuffer", gsi_inv_transform_);
     gfxProgramSetParameter(gfx, program, "g_InstanceNormalTransformBuffer", gsi_normal_transform_);
     gfxProgramSetParameter(gfx, program, "g_InstanceInvNormalTransformBuffer", gsi_inv_normal_transform_);
+
+    // Meshes
+    gfxProgramSetParameter(gfx, program, "g_VertexBuffer", gsi_vertices_);
+    gfxProgramSetParameter(gfx, program, "g_IndexBuffer", gsi_indices_);
+    gfxProgramSetParameter(gfx, program, "g_MeshIndexOffsetsBuffer", gsi_mesh_index_offsets_);
+    gfxProgramSetParameter(gfx, program, "g_MeshIndexCountsBuffer", gsi_mesh_num_indices_);
+    gfxProgramSetParameter(gfx, program, "g_MaterialBuffer", gsi_materials_);
 
     // Lights
     gfxProgramSetParameter(gfx, program, "g_LightCountBuffer", light_count_);

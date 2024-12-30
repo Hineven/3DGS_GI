@@ -246,7 +246,7 @@ SymmetricMatrix ComputeCovarianceMatrix (float3 Scale, float4 Rotation) {
 
 SymmetricMatrix ComputeCovarianceMatrix (float3 Scale, float4 Rotation, float3x3 InstanceRotationScale) {
     float3x3 M = mul(InstanceRotationScale, GetRotationScaleTransform(Rotation, Scale));
-    // Covariance matrix
+    // Covariance matrixs
     float3x3 Covariance = mul(M, transpose(M));
 
     float3 Diagonal = float3(

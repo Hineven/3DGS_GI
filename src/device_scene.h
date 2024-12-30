@@ -54,6 +54,13 @@ public:
     GfxBuffer gsi_normal_transform_;
     GfxBuffer gsi_inv_normal_transform_;
 
+    GfxBuffer gsi_vertices_;
+    GfxBuffer gsi_indices_;
+    GfxBuffer gsi_mesh_index_offsets_;
+    GfxBuffer gsi_mesh_num_indices_;
+
+    GfxBuffer gsi_materials_;
+
     GfxScene gfx_scene_;
 
     GfxTexture environment_map_;
@@ -63,8 +70,11 @@ public:
     GfxBuffer light_data_;
 
     GfxBuffer light_data_staging_;
+    GfxBuffer transform_data_staging_;
 
     void UpdateLights (const Scene & scene);
+
+    void UpdateTransforms (const Scene & scene);
 
 protected:
 

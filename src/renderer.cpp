@@ -13,6 +13,7 @@
 
 #include "device_scene.h"
 #include "3dgs_shared.hlsl"
+#include "glm/gtx/matrix_decompose.hpp"
 
 // Flag for debugging. Sometimes incorrect indirect dispatches will let my system panic.
 // This flag disables all the indirect shader dispatches so i can safely check for
@@ -180,13 +181,26 @@ void Renderer::RenderUI () {
         if (ImGui::CollapsingHeader("Instances", ImGuiTreeNodeFlags_DefaultOpen)) {
             for (int i = 0; i < is_instance_active_.size(); i++) {
                 std::string id = "Instance " + std::to_string(i);
+                ImGui::PushID(id.c_str());
                 bool bv = is_instance_active_[i];
                 ImGui::Checkbox(id.c_str(), &bv);
                 if (is_instance_active_[i] != bv) {
                     gfxSetRaytracingPrimitiveActive(gfx, device_scene.rt_primitives_[i], bv);
-                    should_update_TLAS_ = true;
+                    should_rebuild_TLAS_ = true;
                 }
                 is_instance_active_[i] = bv;
+                InstanceTransform model = scene.GetInstanceTransform(i);
+                bool changed = false;
+                changed |= ImGui::InputFloat3("Position", &model.position.x);
+                model.rotation = glm::degrees(model.rotation);
+                changed |= ImGui::SliderFloat3("Rotation", &model.rotation.x, -180, 180);
+                model.rotation = glm::radians(model.rotation);
+                changed |= ImGui::InputFloat3("Scale", &model.scale.x);
+                if (changed) {
+                    scene.SetInstanceTransform(i, model);
+                    should_update_transforms_ = true;
+                }
+                ImGui::PopID();
             }
         }
         if (ImGui::CollapsingHeader("Area Lights", ImGuiTreeNodeFlags_DefaultOpen)) {
@@ -443,11 +457,11 @@ void Renderer::Render() {
         REGISTER_CVAR(UB.DI_FilterGaussianRadius, "Direct illumination spatial filter gaussian kernel multiplier.", 1.3f, 0.5f, 4.f);
         UB.DI_InvFilterGaussianRadius2 = 1.f / (UB.DI_FilterGaussianRadius * UB.DI_FilterGaussianRadius);
 
-        REGISTER_CVAR(UB.DI_Denoiser_DepthThreshold, "Direct illumination relative depth difference threshold for depth occlusion rejection", 5e-3f);
+        REGISTER_CVAR(UB.DI_Denoiser_DepthThreshold, "Direct illumination relative depth difference threshold for depth occlusion rejection", 1e-3f);
         REGISTER_CVAR(UB.DI_NoTemporalDenoising, "Disable temporal denoising for direct illumination.", false);
 
         REGISTER_CVAR(UB.DI_NoSpatialDenoising, "Disable spatial denoising for direct illumination.", false);
-        REGISTER_CVAR(UB.DI_Denoiser_TargetNumSamples, "The target number of samples to achieve for direct illumination denoising.", 48, 1, 100);
+        REGISTER_CVAR(UB.DI_Denoiser_TargetNumSamples, "The target number of samples to achieve for direct illumination denoising.", 16, 1, 100);
 
         REGISTER_CVAR(UB.II_NoTemporalDenoising, "Disable temporal denoising for indirect illumination.", false);
         REGISTER_CVAR(UB.II_Denoiser_TargetNumSamples, "The target number of samples to achieve for indirect illumination denoising.", 12, 1, 100);
@@ -555,8 +569,8 @@ void Renderer::Render() {
 
     // Area lights
     {
-        if (scene.GetNumLights() != CB.area_light_count + 2) {
-            scene.SetNumLights(CB.area_light_count + 2);
+        if (scene.GetNumLights() != CB.scene_area_light_count + CB.area_light_count + 2) {
+            scene.SetNumLights(CB.scene_area_light_count + CB.area_light_count + 2);
         }
         auto toworld = [&](glm::vec3 x, glm::vec3 y, glm::vec3 z, glm::vec3 u) {
             return x * u.x + y * u.y + z * u.z;
@@ -578,12 +592,18 @@ void Renderer::Render() {
                 CB.area_light_positions[i] + toworld(tangent, bitangent, normal, scale * CB.area_light_local_vertices[i * 3 + 2]),
                 CB.area_light_colors[i]
             };
-            scene.SetAreaLight(i, L);
+            scene.SetAreaLight(CB.scene_area_light_count + i, L);
         }
     }
 
     // Update lights
     scene.UpdateDeviceLights();
+
+    if (should_update_transforms_) {
+        scene.UpdateDeviceTransforms();
+        should_rebuild_TLAS_ = true;
+        should_update_transforms_ = false;
+    }
 
     auto & device_scene = scene.GetDeviceScene();
     device_scene.Bind(program_);
@@ -785,15 +805,17 @@ void Renderer::Render() {
 
     // Build the acceleration structure if required
     if(should_build_acceleration_structure_) {
+        // Do not perform any primitive level updates unless they are no longer used.
+        gfxFinish(gfx);
         std::cout << "Building acceleration structure" << std::endl;
-        if(!device_scene.acceleration_structure_) {
-            device_scene.acceleration_structure_ = gfxCreateAccelerationStructure(gfx);
-        } else {
-            for(auto primitive : device_scene.rt_primitives_) {
-                gfxDestroyRaytracingPrimitive(gfx, primitive);
-            }
-            device_scene.rt_primitives_.clear();
+        for(auto primitive : device_scene.rt_primitives_) {
+            gfxDestroyRaytracingPrimitive(gfx, primitive);
         }
+        device_scene.rt_primitives_.clear();
+        if (device_scene.acceleration_structure_) {
+            gfxDestroyAccelerationStructure(gfx, device_scene.acceleration_structure_);
+        }
+        device_scene.acceleration_structure_ = gfxCreateAccelerationStructure(gfx);
         GfxBuffer vertex_buffer = gfxCreateBuffer<glm::vec3>(gfx, 12 * scene.GetNumGaussians());
         GfxBuffer index_buffer = gfxCreateBuffer<int>(gfx, 60 * scene.GetNumGaussians());
 
@@ -803,8 +825,15 @@ void Renderer::Render() {
         auto timed_section = TimedSection(*this, "GenerateRTMesh");
         gfxCommandBindKernel(gfx, kernel_.GenerateRTMesh);
         auto num_threads = gfxKernelGetNumThreads(gfx, kernel_.GenerateRTMesh);
-        gfxCommandDispatch(gfx, divideAndRoundUp(scene.GetNumGaussians(), (int)num_threads[0]), 1, 1);
-
+        for (int i = 0; i < scene.GetNumInstances(); i++) {
+            auto inst = scene.GetInstance(i);
+            if (inst.type != InstanceType::eGaussians) {
+                continue;
+            }
+            int inst_gaussians = scene.GetInstanceNumGaussians(i);
+            gfxProgramSetParameter(gfx, program_, "g_GenerateRTMesh_InstanceIndex", i);
+            gfxCommandDispatch(gfx, divideAndRoundUp(inst_gaussians, (int)num_threads[0]), 1, 1);
+        }
         // Wait for the command to finish
         gfxFinish(gfx);
 
@@ -813,34 +842,64 @@ void Renderer::Render() {
         }
         device_scene.rt_primitives_.resize(scene.GetNumInstances());
 
-        for(int i = 0; i < (int)scene.GetNumInstances(); i++) {
-            device_scene.rt_primitives_[i] = gfxCreateRaytracingPrimitive(gfx, device_scene.acceleration_structure_);
-            auto index_range = gfxCreateBufferRange(
-                    gfx, index_buffer, scene.gsi_gs_index_offsets_[i] * 60 * sizeof(int),
-                    scene.gsi_gs_counts_[i] * 60 * sizeof(int));
-            auto vertex_range = gfxCreateBufferRange(
-                    gfx, vertex_buffer, scene.gsi_gs_index_offsets_[i] * 12 * sizeof(glm::vec3),
-                    scene.gsi_gs_counts_[i] * 12 * sizeof(glm::vec3));
-            gfxRaytracingPrimitiveBuild(
-                    gfx, device_scene.rt_primitives_[i], index_range, vertex_range, sizeof(glm::vec3)
-            );
-            glm::mat4x3 mat4x3_colmajor = scene.gsi_transforms_[i];
-            float mat4x4_rowmajor[16] = {
+        for(int i = 0; i < scene.GetNumInstances(); i++) {
+            auto inst = scene.GetInstance(i);
+            if (inst.type == InstanceType::eGaussians) {
+                device_scene.rt_primitives_[i] = gfxCreateRaytracingPrimitive(gfx, device_scene.acceleration_structure_);
+                auto index_range = gfxCreateBufferRange(
+                        gfx, index_buffer, scene.gsi_gs_index_offsets_[i] * 60 * sizeof(int),
+                        scene.gsi_gs_counts_[i] * 60 * sizeof(int));
+                auto vertex_range = gfxCreateBufferRange(
+                        gfx, vertex_buffer, scene.gsi_gs_index_offsets_[i] * 12 * sizeof(glm::vec3),
+                        scene.gsi_gs_counts_[i] * 12 * sizeof(glm::vec3));
+                gfxRaytracingPrimitiveBuild(
+                        gfx, device_scene.rt_primitives_[i], index_range, vertex_range, sizeof(glm::vec3)
+                );
+                glm::mat4x3 mat4x3_colmajor = scene.gsi_transforms_[i];
+                float mat4x4_rowmajor[16] = {
                     mat4x3_colmajor[0][0], mat4x3_colmajor[1][0], mat4x3_colmajor[2][0], mat4x3_colmajor[3][0],
                     mat4x3_colmajor[0][1], mat4x3_colmajor[1][1], mat4x3_colmajor[2][1], mat4x3_colmajor[3][1],
                     mat4x3_colmajor[0][2], mat4x3_colmajor[1][2], mat4x3_colmajor[2][2], mat4x3_colmajor[3][2],
                     0, 0, 0, 1
                 };
-            gfxRaytracingPrimitiveSetTransform(gfx, device_scene.rt_primitives_[i], mat4x4_rowmajor);
-            gfxRaytracingPrimitiveSetInstanceID(gfx, device_scene.rt_primitives_[i], i);
-            gfxRaytracingPrimitiveSetInstanceContributionToHitGroupIndex(
-                    gfx, device_scene.rt_primitives_[i],
-                    0
-            );
-            gfxDestroyBuffer(gfx, index_range);
-            gfxDestroyBuffer(gfx, vertex_range);
+                gfxRaytracingPrimitiveSetTransform(gfx, device_scene.rt_primitives_[i], mat4x4_rowmajor);
+                gfxRaytracingPrimitiveSetInstanceID(gfx, device_scene.rt_primitives_[i], i);
+                gfxRaytracingPrimitiveSetInstanceContributionToHitGroupIndex(
+                        gfx, device_scene.rt_primitives_[i],
+                        0
+                );
+                gfxDestroyBuffer(gfx, index_range);
+                gfxDestroyBuffer(gfx, vertex_range);
+            } else {
+                device_scene.rt_primitives_[i] = gfxCreateRaytracingPrimitive(gfx, device_scene.acceleration_structure_);
+                auto index_range = gfxCreateBufferRange(
+                        gfx, device_scene.gsi_indices_, scene.gsi_mesh_index_offsets_[i] * sizeof(int),
+                        scene.gsi_mesh_num_indices_[i] * sizeof(int));
+                auto vertex_range = gfxCreateBufferRange(
+                        gfx, device_scene.gsi_vertices_, scene.gsi_gs_index_offsets_[i] * sizeof(glm::vec3),
+                        scene.gsi_gs_counts_[i] * sizeof(Vertex));
+                vertex_range.setStride(sizeof(Vertex));
+                gfxRaytracingPrimitiveBuild(
+                        gfx, device_scene.rt_primitives_[i], index_range, vertex_range, sizeof(Vertex)
+                );
+                glm::mat4x3 mat4x3_colmajor = scene.gsi_transforms_[i];
+                float mat4x4_rowmajor[16] = {
+                    mat4x3_colmajor[0][0], mat4x3_colmajor[1][0], mat4x3_colmajor[2][0], mat4x3_colmajor[3][0],
+                    mat4x3_colmajor[0][1], mat4x3_colmajor[1][1], mat4x3_colmajor[2][1], mat4x3_colmajor[3][1],
+                    mat4x3_colmajor[0][2], mat4x3_colmajor[1][2], mat4x3_colmajor[2][2], mat4x3_colmajor[3][2],
+                    0, 0, 0, 1
+                };
+                gfxRaytracingPrimitiveSetTransform(gfx, device_scene.rt_primitives_[i], mat4x4_rowmajor);
+                gfxRaytracingPrimitiveSetInstanceID(gfx, device_scene.rt_primitives_[i], i | RT_INSTANCE_REGULAR_MESH_BIT);
+                gfxRaytracingPrimitiveSetInstanceContributionToHitGroupIndex(
+                        gfx, device_scene.rt_primitives_[i],
+                        0
+                );
+                gfxDestroyBuffer(gfx, index_range);
+                gfxDestroyBuffer(gfx, vertex_range);
+            }
         }
-        should_update_TLAS_ = true;
+        should_rebuild_TLAS_ = true;
 
         gfxDestroyBuffer(gfx, vertex_buffer);
         gfxDestroyBuffer(gfx, index_buffer);
@@ -848,9 +907,19 @@ void Renderer::Render() {
         should_build_acceleration_structure_ = false;
     }
 
-    if (should_update_TLAS_) {
+    if (should_rebuild_TLAS_) {
+        for (int i = 0; i < scene.GetNumInstances(); i++) {
+            glm::mat4x3 mat4x3_colmajor = scene.gsi_transforms_[i];
+            float mat4x4_rowmajor[16] = {
+                mat4x3_colmajor[0][0], mat4x3_colmajor[1][0], mat4x3_colmajor[2][0], mat4x3_colmajor[3][0],
+                mat4x3_colmajor[0][1], mat4x3_colmajor[1][1], mat4x3_colmajor[2][1], mat4x3_colmajor[3][1],
+                mat4x3_colmajor[0][2], mat4x3_colmajor[1][2], mat4x3_colmajor[2][2], mat4x3_colmajor[3][2],
+                0, 0, 0, 1
+            };
+            gfxRaytracingPrimitiveSetTransform(gfx, device_scene.rt_primitives_[i], mat4x4_rowmajor);
+        }
         gfxAccelerationStructureUpdate(gfx, device_scene.acceleration_structure_);
-        should_update_TLAS_ = false;
+        should_rebuild_TLAS_ = false;
     }
 
     // Bind the acceleration structure if present
@@ -972,7 +1041,7 @@ void Renderer::Render() {
             MC.card_set_add_requests.pop_back();
             auto aabb = scene.GetInstanceAABB(instance_id);
             auto transform = scene.GetInstanceTransform(instance_id);
-            glm::vec3 scaling = {transform[0][0], transform[1][1], transform[2][2]};
+            glm::vec3 scaling = transform.scale;
             glm::vec3 world_extents = (aabb.mx - aabb.mn) * scaling;
             glm::ivec3 preferred_num_texels = glm::ivec3(world_extents / UB.Card_PreferredTexelWorldSize);
             // Find the actual mip size
@@ -1244,13 +1313,15 @@ void Renderer::Render() {
 
         // Draw ordinary geometries first. The depth infomation can be further used to cull gaussians
         {
-            auto section = TimedSection(*this, "DrawAreaLights");
+            auto section = TimedSection(*this, "DrawRegularMeshes");
             gfxCommandClearTexture(gfx, tex_.G_albedo_alpha);
             gfxCommandClearTexture(gfx, tex_.G_emission_alpha);
             gfxCommandClearTexture(gfx, tex_.G_material);
             gfxCommandClearTexture(gfx, tex_.G_normal[frame_index_ & 1]);
             gfxCommandClearTexture(gfx, tex_.rasterization_depth);
-            gfxCommandBindKernel(gfx, kernel_.DrawAreaLights);
+            gfxCommandBindVertexBuffer(gfx, device_scene.gsi_vertices_);
+            gfxCommandBindIndexBuffer(gfx, device_scene.gsi_indices_);
+            gfxCommandBindKernel(gfx, kernel_.DrawRegularMeshes);
             // Alpha channel is not used in this draw
             gfxCommandBindColorTarget(gfx, 0, tex_.G_albedo_alpha);
             // Alpha is drawn to this texture (0 or 1)
@@ -1258,8 +1329,12 @@ void Renderer::Render() {
             gfxCommandBindColorTarget(gfx, 2, tex_.G_material);
             gfxCommandBindColorTarget(gfx, 3, tex_.G_normal[frame_index_ & 1]);
             gfxCommandBindDepthStencilTarget(gfx, tex_.rasterization_depth);
-            gfxCommandBindKernel(gfx, kernel_.DrawAreaLights);
-            gfxCommandDraw(gfx, 3, CB.area_light_count);
+            gfxCommandBindKernel(gfx, kernel_.DrawRegularMeshes);
+            for (int i = 0; i < scene.GetNumInstances(); i++) {
+                auto instance = scene.GetInstance(i);
+                if (instance.type != InstanceType::eMesh) continue ;
+                gfxCommandDrawIndexed(gfx, instance.num_indices, 1, instance.index_offset, instance.vertex_offset, i);
+            }
         }
 
         {
@@ -1271,7 +1346,7 @@ void Renderer::Render() {
                 auto instance = scene.GetInstance(i);
                 bool should_draw = is_instance_active_[i];
                 if (instance.type == InstanceType::eGaussians && should_draw) {
-                    gfxProgramSetParameter(gfx, program_, "g_CurrentInstanceIndex", i);
+                    gfxProgramSetParameter(gfx, program_, "g_FilterActiveGaussians_CurrentInstanceIndex", i);
                     gfxCommandDispatch(gfx, divideAndRoundUp(instance.num_vertices, cfg_.wave_lane_count), 1, 1);
                 }
             }
