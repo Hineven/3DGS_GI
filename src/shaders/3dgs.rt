@@ -323,12 +323,14 @@ void Trace3DGSStochasticClosestHit (inout Trace3DGSStochasticRayPayload Payload,
         int I0 = g_IndexBuffer[IndexBase + 0];
         int I1 = g_IndexBuffer[IndexBase + 1];
         int I2 = g_IndexBuffer[IndexBase + 2];
-        float3 V0 = g_VertexBuffer[I0];
-        float3 V1 = g_VertexBuffer[I1];
-        float3 V2 = g_VertexBuffer[I2];
+        float3 V0 = g_VertexBuffer[I0].Position;
+        float3 V1 = g_VertexBuffer[I1].Position;
+        float3 V2 = g_VertexBuffer[I2].Position;
         Payload.HitDist     = RayTCurrent();
+#ifdef PROBE_UPDATE_STOCHASTIC_RAY_TRACING
         Payload.HitNormal   = PackNormal(normalize(cross(V1 - V0, V2 - V0)));
         Payload.HitMaterial = PackCachedMaterial(M.Albedo, M.Roughness);
+#endif
     } else {
         int  HitGaussianIndex = GetHitGaussianIndex(HitInstance, HitPrimitive, HitAttr);
         Gaussian G = FetchGaussian(HitGaussianIndex);
@@ -342,8 +344,10 @@ void Trace3DGSStochasticClosestHit (inout Trace3DGSStochasticRayPayload Payload,
         );
         GaussianPBR Pbr = FetchGaussianPBR(HitGaussianIndex);
         Payload.HitDist = RayT / max(1e-6, RayScaler); // Use the max response T as reply
+#ifdef PROBE_UPDATE_STOCHASTIC_RAY_TRACING
         Payload.HitNormal   = PackNormal(Pbr.Normal);
         Payload.HitMaterial = PackCachedMaterial(Pbr.Albedo, Pbr.Roughness);
+#endif
     }
 }
 

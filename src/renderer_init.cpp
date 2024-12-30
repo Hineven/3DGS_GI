@@ -606,8 +606,8 @@ bool Renderer::CreateKernels () {
 
         std::vector<char const *> Trace3DGSShadow_kernel_exports;
         Trace3DGSShadow_kernel_exports.push_back("Trace3DGSShadowRaygen");
-        Trace3DGSShadow_kernel_exports.push_back("Trace3DGSShadowAnyHit");
-        Trace3DGSShadow_kernel_exports.push_back("Trace3DGSShadowMiss");
+        Trace3DGSShadow_kernel_exports.push_back("Trace3DGSStochasticAnyHit");
+        Trace3DGSShadow_kernel_exports.push_back("Trace3DGSStochasticMiss");
         std::vector<char const *> Trace3DGSShadow_kernel_subobjects = base_subobjects;
         Trace3DGSShadow_kernel_subobjects.push_back("Trace3DGSShadowHitGroup");
         Trace3DGSShadow_kernel_subobjects.push_back("Trace3DGSShadowShaderConfig");

@@ -1297,7 +1297,7 @@ void Renderer::Render() {
                 gfxCommandBindKernel(gfx, kernel_.Trace3DGSShadowRays);
                 gfxSbtSetShaderGroup(gfx, sbt_, kGfxShaderGroupType_Raygen, 0, "Trace3DGSShadowRaygen");
                 gfxSbtSetShaderGroup(gfx, sbt_, kGfxShaderGroupType_Hit, 0, "Trace3DGSShadowHitGroup");
-                gfxSbtSetShaderGroup(gfx, sbt_, kGfxShaderGroupType_Miss, 0, "Trace3DGSShadowMiss");
+                gfxSbtSetShaderGroup(gfx, sbt_, kGfxShaderGroupType_Miss, 0, "Trace3DGSStochasticMiss");
             }
             gfxCommandDispatchRays(gfx, sbt_, num_rays, 1, 1);
         }
@@ -1521,7 +1521,7 @@ void Renderer::Render() {
             gfxCommandBindKernel(gfx, kernel_.DirectIlluminationTrace3DGSShadowRays);
             gfxSbtSetShaderGroup(gfx, sbt_, kGfxShaderGroupType_Raygen, 0, "DirectIlluminationTrace3DGSShadowRaygen");
             gfxSbtSetShaderGroup(gfx, sbt_, kGfxShaderGroupType_Hit, 0, "Trace3DGSShadowHitGroup");
-            gfxSbtSetShaderGroup(gfx, sbt_, kGfxShaderGroupType_Miss, 0, "Trace3DGSShadowMiss");
+            gfxSbtSetShaderGroup(gfx, sbt_, kGfxShaderGroupType_Miss, 0, "Trace3DGSStochasticMiss");
 
 #if !(defined(NO_INDIRECT_DISPATCH) || defined(NO_RAYTRACING_INDIRECT_DISPATCH))
             gfxCommandDispatchRaysIndirect(gfx, sbt_, buf_.dispatch_rays_indirect_command);
@@ -1665,8 +1665,8 @@ void Renderer::Render() {
             GenerateDispatchRaysIndirect(buf_.ray_to_trace_count[ray_compact_count & 1]);
             gfxCommandBindKernel(gfx, kernel_.Trace3DGSProbeUpdateRays);
             gfxSbtSetShaderGroup(gfx, sbt_, kGfxShaderGroupType_Raygen, 0, "Trace3DGSProbeUpdateRaysRaygen");
-            gfxSbtSetShaderGroup(gfx, sbt_, kGfxShaderGroupType_Hit, 0, "Trace3DGSShadowHitGroup");
-            gfxSbtSetShaderGroup(gfx, sbt_, kGfxShaderGroupType_Miss, 0, "Trace3DGSShadowMiss");
+            gfxSbtSetShaderGroup(gfx, sbt_, kGfxShaderGroupType_Hit, 0, "Trace3DGSStochasticHitGroup");
+            gfxSbtSetShaderGroup(gfx, sbt_, kGfxShaderGroupType_Miss, 0, "Trace3DGSStochasticMiss");
 
 #if !(defined(NO_INDIRECT_DISPATCH) || defined(NO_RAYTRACING_INDIRECT_DISPATCH))
             gfxCommandDispatchRaysIndirect(gfx, sbt_, buf_.dispatch_rays_indirect_command);
@@ -1726,14 +1726,14 @@ void Renderer::Render() {
 #endif
         }
 
-        // Trace shadow rays (HWRT
+        // Trace shadow rays (HWRT)
         {
             auto section = TimedSection(*this, "Trace3DGSShadowRaysWithoutIndirectionList");
             GenerateDispatchRaysIndirect(buf_.ray_to_trace_count[ray_compact_count & 1]);
             gfxCommandBindKernel(gfx, kernel_.Trace3DGSShadowRaysWithoutIndirectionList);
             gfxSbtSetShaderGroup(gfx, sbt_, kGfxShaderGroupType_Raygen, 0, "Trace3DGSShadowRaygen");
             gfxSbtSetShaderGroup(gfx, sbt_, kGfxShaderGroupType_Hit, 0, "Trace3DGSShadowHitGroup");
-            gfxSbtSetShaderGroup(gfx, sbt_, kGfxShaderGroupType_Miss, 0, "Trace3DGSShadowMiss");
+            gfxSbtSetShaderGroup(gfx, sbt_, kGfxShaderGroupType_Miss, 0, "Trace3DGSStochasticMiss");
 #if !(defined(NO_INDIRECT_DISPATCH) || defined(NO_RAYTRACING_INDIRECT_DISPATCH))
             gfxCommandDispatchRaysIndirect(gfx, sbt_, buf_.dispatch_rays_indirect_command);
 #endif

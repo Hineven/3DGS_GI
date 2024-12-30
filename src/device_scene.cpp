@@ -140,6 +140,8 @@ void DeviceScene::UpdateLights(const Scene &scene) {
             transformed_light_data[i].V1 = transform * glm::vec4(transformed_light_data[i].V1, 1.f);
             transformed_light_data[i].V2 = transform * glm::vec4(transformed_light_data[i].V2, 1.f);
             transformed_light_data[i].V3 = transform * glm::vec4(transformed_light_data[i].V3, 1.f);
+        } else {
+            transformed_light_data[i] = scene.light_data_[i];
         }
     }
     memcpy(gfxBufferGetData(gfx, light_data_staging_), transformed_light_data.data(), num_lights * 4 * sizeof(float3));

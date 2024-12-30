@@ -443,6 +443,7 @@ void Scene::InitializeLights () {
     light_data_.resize(2);
     light_data_[0].Radiance = di_radiance;
     light_data_[0].V1 = {0.f, 0.f, 1.f};
+    light_instance_.resize(2, -1);
     // Skylight data is not used for now, no initialization required
 }
 
