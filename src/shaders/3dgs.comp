@@ -257,7 +257,8 @@ void ResolveGBuffers (uint2 DispatchID : SV_DispatchThreadID) {
 	// If the normals are reconstructed from the depth, they are not rendered to the GBuffer
 #ifndef RECONSTRUCT_NORMALS_FROM_DEPTH
 	// Normalize rendered normals
-	float3 Normal = GetRWNormalTexture(C)[DispatchID].xyz / max(Weight, 1e-6f);
+	float3 Normal = GetRWNormalTexture(C)[DispatchID].xyz;
+	if(Opacity >= UB.OpaqueThreshold) Normal /= max(Weight, 1e-6f);
 	Normal = Normal * 2 - 1;
 	if(any(Normal != -1)) {
 		Normal = normalize(Normal);
@@ -334,8 +335,8 @@ void CombineGBuffers (uint2 DispatchID : SV_DispatchThreadID) {
 	float3 GaussianEmission = 0.f;
 	GetRWEmissionAlphaTexture(C)[DispatchID].rgb = lerp(EmissionA.rgb, GaussianEmission, LerpingFactor);
 	// Normal is naturally blended (or being reconstructed from depth later)
-	// Accumulate opacities
-	GetRWColorTexture(C)[DispatchID].w = RegularOpacity + GaussianOpacity;
+	// Accumulate opacities. (Color is already blended)
+	GetRWColorTexture(C)[DispatchID].w = saturate(RegularOpacity + GaussianOpacity);
 }
 
 Texture2D<float> g_InNearHZBTexture;
@@ -344,11 +345,19 @@ RWTexture2D<float> g_OutNearHZBTexture;
 [numthreads(TILE_SIZE, TILE_SIZE, 1)]
 void GenerateNearHZB (uint2 DispatchID : SV_DispatchThreadID) {
 	CameraDescription C = GetCameraDescription();
-	uint2 Dimensions = 0;
+	uint2 Dimensions = 0, OutDimensions = 0;
 	g_InNearHZBTexture.GetDimensions(Dimensions.x, Dimensions.y);
-	if(any(DispatchID * 2 >= Dimensions)) return;
-	float2 GatherUV = (DispatchID * 2 + 0.5f) / Dimensions;
-	float4 ZDepths = g_InNearHZBTexture.GatherRed(g_PointClampSampler, GatherUV);
+	g_OutNearHZBTexture.GetDimensions(OutDimensions.x, OutDimensions.y);
+	if(any(DispatchID >= OutDimensions)) return;
+	int2 BaseCoords = DispatchID * 2;
+	float4 ZDepths = 0.f;
+	for(int dx = 0; dx < 2; dx++) {
+		for(int dy = 0; dy < 2; dy++) {
+			int2 TapCoords = BaseCoords + int2(dx, dy);
+			if(any(TapCoords >= Dimensions)) continue;
+			ZDepths[dx + dy * 2] = g_InNearHZBTexture.Load(int3(TapCoords, 0));
+		}
+	}
 	float  MinZDepth = min(
 		min(ZDepths.x, ZDepths.y),
 		min(ZDepths.z, ZDepths.w)
@@ -357,7 +366,7 @@ void GenerateNearHZB (uint2 DispatchID : SV_DispatchThreadID) {
 }
 
 float TapDepthFiltered (CameraDescription C, int2 TapCoords) {
-	TapCoords = clamp(TapCoords, 0, C.FilmDimensions - 1);
+	if(any(TapCoords < 0) || any(TapCoords >= C.FilmDimensions)) return 0;
 	return GetFilteredDepthTexture(C).Load(int3(TapCoords, 0)).r;
 }
 
@@ -583,8 +592,7 @@ struct LightSample {
 
 Material FetchMaterial (CameraDescription C, uint2 TexelCoords) {
 	Material Result = MakeMaterial(0.f, 0.f);
-	Result.Normal = GetNormalTexture(C).Load(int3(TexelCoords, 0)).xyz;
-	Result.Normal = normalize(Result.Normal * 2 - 1);
+	Result.Normal = normalize(2 * GetNormalTexture(C).Load(int3(TexelCoords, 0)).xyz - 1);
 	float4 AlbedoAlpha = GetColorTexture(C).Load(int3(TexelCoords, 0));
 	Result.Albedo = AlbedoAlpha.xyz;
 	Result.Alpha = AlbedoAlpha.w;
@@ -597,13 +605,13 @@ LightSample SampleLightWithCosineWeight (float3 Position, Material M, uint Light
 	Result.LightType = LightType;
 	if(LightType == LIGHT_TYPE_DIRECTIONAL) {
 		Result.Position = LD.V1;
-		float CosineFactor = saturate(dot(LD.V1, M.Normal));
-		Result.Radiance = LD.Radiance * CosineFactor;
+		float ReceiverCosine = saturate(dot(LD.V1, M.Normal));
+		Result.Radiance = LD.Radiance * ReceiverCosine;
 		Result.Pdf = 1.f;
 	} else if(LightType == LIGHT_TYPE_SKY) {
 		Result.Position = SampleSkyLight(M.Normal, u2, Result.Pdf);
-		float CosineFactor = saturate(dot(Result.Position, M.Normal));
-		Result.Radiance = EvaluateSkyRadiance(-Result.Position) * CosineFactor;
+		float ReceiverCosine = saturate(dot(Result.Position, M.Normal));
+		Result.Radiance = EvaluateSkyRadiance(-Result.Position) * ReceiverCosine;
 	} else if(LightType == LIGHT_TYPE_AREA) {
 		Result.Position = SampleAreaLightArea(LD.V1, LD.V2, LD.V3, u2, Result.Pdf);
 		// Convert area pdf to solid angle pdf
@@ -764,14 +772,15 @@ void TraceRaysInScreenSpace (uint DispatchID : SV_DispatchThreadID) {
 	if(DispatchID >= g_RWRayToTraceCountBuffer[0]) return;
 	int RayIndex = g_RWRayToTraceListBuffer[DispatchID];
 	RayToTrace Ray = FetchRayToTrace(RayIndex, UB.RT_MaxTraceDistance, false);
+	CameraDescription C = GetCameraDescription();
 #ifndef SSRC_PROBE_UPDATE_RAY_TRACING
 	// Shadow ray tracing for DI
 	{
 		// Manually recover the origin from the screen position
 		float2 FilmPosition = UnpackUnorm16x2(g_RWRayToTraceUVPositionBuffer[RayIndex])
-			* GetCameraDescription().FilmDimensions;
-		float  LinearDepth = GetFilteredDepthTexture(GetCameraDescription()).Load(int3(FilmPosition, 0)).r;
-		Ray.Origin = RecoverWorldSpacePosition(GetCameraDescription(), FilmPosition, LinearDepth);
+			* C.FilmDimensions;
+		float  LinearDepth = GetFilteredDepthTexture(C).Load(int3(FilmPosition, 0)).r;
+		Ray.Origin = RecoverWorldSpacePosition(C, FilmPosition, LinearDepth);
 	}
 #else
 	// SSRC probe update ray tracing for indirect illumination
@@ -782,8 +791,6 @@ void TraceRaysInScreenSpace (uint DispatchID : SV_DispatchThreadID) {
 		Ray.Origin = ProbeWorldPosition;
 	}
 #endif
-
-	CameraDescription C = GetCameraDescription();
 	
 	float3 OriginUVW   = TransformPointWithPerspectiveDivide(C.ProjectionView, Ray.Origin);
 	OriginUVW.xy = NDC2ToUV(OriginUVW.xy);
@@ -797,8 +804,9 @@ void TraceRaysInScreenSpace (uint DispatchID : SV_DispatchThreadID) {
 	{
 		float2 CornerUV = OriginUVW.xy + .5f * C.FilmTexelSize;
 		float3 CornerWorldPosition = RecoverWorldSpacePositionNDC2(C, UVToNDC2(CornerUV), ZDepthToLinear(C, OriginUVW.z));
+		float TexelSize = length(CornerWorldPosition - Ray.Origin);
 		// Project texel corner onto normal
-		NormalBias = abs(dot(CornerWorldPosition - Ray.Origin, TexelNormal)) * 2;
+		NormalBias = abs(max(dot(CornerWorldPosition - Ray.Origin, TexelNormal), TexelSize * 0.25f)) * 2;
 	}
 
 	float3 BiasedOrigin = Ray.Origin + NormalBias * TexelNormal;
@@ -842,7 +850,7 @@ void TraceRaysInScreenSpace (uint DispatchID : SV_DispatchThreadID) {
 		float2 NoiseUV = float2(
 			RayIndex % 1024,
 			RayIndex / 1024
-		) + 0.5f.xx;
+		) / 1024;
 		float Noise = InterleavedGradientNoise(NoiseUV, UB.FrameIndex);
 		// No vignetting for screen traces for now.
 		if (bHit)
@@ -861,11 +869,21 @@ void TraceRaysInScreenSpace (uint DispatchID : SV_DispatchThreadID) {
 #ifdef SSRC_PROBE_UPDATE_RAY_TRACING
 		if (bHit)
 		{
+			// // Resolve geometries and materials for the hit point (cause we're tracing shading rays)
+			// {
+			// 	uint2 Packed = 0;
+			// 	Material M = FetchMaterial(C, int2(HitUVW.xy * C.FilmDimensions));
+			// 	Packed.x = PackCachedMaterial(M.Albedo, M.Roughness);
+			// 	Packed.y = PackNormal(M.Normal);
+			// 	g_RWRayToTraceResultBuffer[RayIndex] = Packed;
+			// }
 			float3 PreviousUVW = ReprojectToPreviousUVWFromUVW(C, HitUVW);
 			if(all(PreviousUVW.xy >= 0) && all(PreviousUVW.xy < 1)) {
 				float3 Radiance = g_HistoryRadianceWithoutEmission.SampleLevel(g_PointClampSampler, PreviousUVW.xy, 0).xyz;
+				Material M = FetchMaterial(C, int2(HitUVW.xy * C.FilmDimensions));
+				float3 MaterialBRDF = EvaluateLambertian(M.Albedo);
 				ProbeUpdateRayResult Result = FetchProbeUpdateRayResult(RayIndex);
-				Result.Radiance = Radiance;
+				Result.Radiance = Radiance * MaterialBRDF;
 				Result.bBypass  = true;
 				WriteProbeUpdateRayResult(RayIndex, Result);
 				// float3 Normal = normalize(
@@ -877,8 +895,17 @@ void TraceRaysInScreenSpace (uint DispatchID : SV_DispatchThreadID) {
 #endif
 	}
 
-	// Remember to reduce the texel relative thickness on SSRT if there're too many false hits.
-	
+	// If not hit, backward the ray a little from the last visible position for ray continuation
+	if(!bHit) {
+		float LinearDepth = ZDepthToLinear(C, LastVisibleUVW.z);
+		float Bias = LinearDepth * UB.SSRT_RayContinuationBackwardBiasFactor;
+		float3 LastVisibleWorldPosition = RecoverWorldSpacePositionNDC2(C, 
+			UVToNDC2(LastVisibleUVW.xy), LinearDepth
+		);
+		HitDistance = min(length(LastVisibleWorldPosition - BiasedOrigin), MaxTraceDistance);
+		HitDistance = max(HitDistance - Bias, 0);
+	}
+	// Remember to reduce the texel relative thickness on SSRT if there're too many false hits.	
 	WriteRayTraceFlags(RayIndex, bHit, HitDistance);
 }
 
@@ -889,20 +916,15 @@ void CompactRayTraces (uint DispatchID : SV_DispatchThreadID) {
 	// Ray origin is not used so we do not need to fetch it.
 	RayToTrace Ray = FetchRayToTrace(RayIndex, UB.RT_MaxTraceDistance, false);
 	if(!Ray.bHit) {
-		int RayCount = WaveActiveCountBits(1);
-		int RayWarpRank  = WavePrefixCountBits(1);
+		int RayWarpAllocation = WaveActiveCountBits(1);
+		int RayWarpRank       = WavePrefixCountBits(1);
 		int RayBaseRank = 0;
 		if(WaveIsFirstLane()) {
-			InterlockedAdd(g_RWCompactedRayToTraceCountBuffer[0], RayCount, RayBaseRank);
+			InterlockedAdd(g_RWCompactedRayToTraceCountBuffer[0], RayWarpAllocation, RayBaseRank);
 		}
 		RayBaseRank = WaveReadLaneFirst(RayBaseRank);
 		int NewRayRank = RayBaseRank + RayWarpRank;
 		g_RWCompactedRayToTraceListBuffer[NewRayRank] = RayIndex;
-		// Backward a little bit for ray continuation.
-		// FIXME
-		// float RayTMinBiased = max(Ray.RayTMin * 0.4f, Ray.RayTMin - 0.4f);
-		float RayTMinBiased = Ray.RayTMin;
-		WriteRayTraceFlags(RayIndex, Ray.bHit, RayTMinBiased);
 	}
 }
 
@@ -978,7 +1000,12 @@ void SpatialFilterDirectIllumination (uint2 DispatchID : SV_DispatchThreadID) {
 		return;
 	}
 	float  PixelLinearDepth = GetFilteredDepthTexture(C).Load(int3(PixelCoords, 0)).r;
-	float3 PixelNormal = normalize(GetNormalTexture(C).Load(int3(PixelCoords, 0)).xyz - 0.5f);
+	if(PixelLinearDepth == 0) {
+		// Strangely this should never occur. But when i removed this
+		// nans will popup in the seams between gaussians and regular geometries.
+		return;
+	}
+	float3 PixelNormal = normalize(2.f * GetNormalTexture(C).Load(int3(PixelCoords, 0)).xyz - 1.f);
 	float3 SumRadiance = 0;
 	float SumWeight = 0;
 
@@ -998,7 +1025,7 @@ void SpatialFilterDirectIllumination (uint2 DispatchID : SV_DispatchThreadID) {
 			int2 TexelCoords = PixelCoords + Offset;
 			if(IsOutOfFilm(C, TexelCoords)) continue;
 			float  NeighborLinearDepth = GetFilteredDepthTexture(C).Load(int3(TexelCoords, 0)).r;
-			float3 NeighborNormal = normalize(GetNormalTexture(C).Load(int3(TexelCoords, 0)).xyz - 0.5f);
+			float3 NeighborNormal = normalize(2.f * GetNormalTexture(C).Load(int3(TexelCoords, 0)).xyz - 1.f);
 			bool   bIsNeightborTransparent = NeighborLinearDepth == 0;
 			float3 NeighborRadiance = Input.Load(int3(TexelCoords, 0)).rgb;
 			float Weight = GetFilterPositionWeight(NeighborLinearDepth, PixelLinearDepth);
@@ -1016,6 +1043,10 @@ void SpatialFilterDirectIllumination (uint2 DispatchID : SV_DispatchThreadID) {
 #else
 	RWTexture2D<float4> Output = GetRWDirectIlluminationTexture(C);
 #endif
+	// if(any(isnan(SumRadiance))) {
+	// 	SumRadiance = 0;
+	// }
+	// SumWeight = max(SumWeight, 1e-4f);
 	Output[PixelCoords] = float4(SumRadiance / SumWeight, SumWeight);
 }
 
@@ -1076,7 +1107,7 @@ void SSRC_ReInsertHashGridTiles (uint DispatchID : SV_DispatchThreadID) {
 // SSRC probe allocation
 
 float3 GetProbeOffsetAdaptiveNormal (int2 ScreenCoords, float3 GeometryNormal, float3 ViewDirection) {
-    float3 AdaptiveNormal = ViewDirection;//normalize(ViewDirection + GeometryNormal);
+    float3 AdaptiveNormal = normalize(ViewDirection + GeometryNormal);
 #if false
     // Fine-tune the normal to bent normal when close to occluded regions
     float4 BentNormalOcc  = g_BentNormalAndOcclusionTexture.Load(int3(ScreenCoords, 0));
@@ -1106,7 +1137,10 @@ void SSRC_AllocateUniformProbes (int DispatchID : SV_DispatchThreadID) {
     float3 WorldPosition  = RecoverWorldSpacePosition(C, Header.ScreenCoords + 0.5f, LinearDepth);
     // Offset the probe along adaptive "normal".
     float3 Normal         = normalize(GetNormalTexture(C).Load(int3(Header.ScreenCoords, 0)).xyz * 2.f - 1.f);
-    float3 ViewDirection  = normalize(C.Position - WorldPosition);
+	float3 ViewDirection  = normalize(C.Position - WorldPosition);
+	if(dot(Normal, ViewDirection) < 0) {
+		Normal = -Normal;
+	}
     float3 AdaptiveNormal = GetProbeOffsetAdaptiveNormal(Header.ScreenCoords, Normal, ViewDirection);
     float3 ProbePositionOffset = AdaptiveNormal * Header.LinearDepth * SSRC_PROBE_NORMAL_OFFSET;
     Header.Position      = WorldPosition + ProbePositionOffset;
@@ -1291,7 +1325,10 @@ void SSRC_AllocateAdaptiveProbes (int DispatchID : SV_DispatchThreadID, int Loca
                 if(bValid) {
                     float3 WorldPosition  = RecoverWorldSpacePosition(C, AdaptiveProbeScreenCoords + 0.5f, LinearDepth);
                     float3 GeometryNormal = normalize(GetNormalTexture(C).Load(int3(AdaptiveProbeScreenCoords, 0)).xyz * 2.f - 1.f);
-                    SSRC_SampleData Sample;
+                    if(dot(GeometryNormal, C.Position - WorldPosition) < 0) {
+						GeometryNormal = -GeometryNormal;
+					}
+					SSRC_SampleData Sample;
 
                     CalculateSSRCSampleWeights(
                         AdaptiveProbeScreenCoords + 0.5f,
@@ -1343,12 +1380,15 @@ void SSRC_AllocateAdaptiveProbes (int DispatchID : SV_DispatchThreadID, int Loca
         ProbeHeader Header;
         Header.ScreenCoords   = LocalProbeScreenCoordsToAllocate[LocalID];
         float3 GeometryNormal = normalize(GetNormalTexture(C).Load(int3(Header.ScreenCoords, 0)).xyz * 2.f - 1.f);
-        float  LinearDepth    = GetFilteredDepthTexture(C).Load(int3(Header.ScreenCoords, 0)).x;
+		float  LinearDepth    = GetFilteredDepthTexture(C).Load(int3(Header.ScreenCoords, 0)).x;
         Header.LinearDepth    = LinearDepth;
         float2 UV = (Header.ScreenCoords + 0.5f) * UB.InvScreenDimensions;
         // High resolution recovery for accurate probe placement (otherwise may cause artifacts because of inaccurate occlusions)
         float3 WorldPosition = RecoverWorldSpacePosition(C, Header.ScreenCoords + 0.5f, LinearDepth);
         float3 ViewDirection = normalize(C.Position - WorldPosition);
+		if(dot(GeometryNormal, ViewDirection) < 0) {
+			GeometryNormal = -GeometryNormal;
+		}
         float3 AdaptiveNormal = GetProbeOffsetAdaptiveNormal(Header.ScreenCoords, GeometryNormal, ViewDirection);
         Header.Position      = WorldPosition + AdaptiveNormal * Header.LinearDepth * SSRC_PROBE_NORMAL_OFFSET;
         
@@ -1801,6 +1841,7 @@ void SSRC_ResolveHitLightingFromScreenHistory (uint DispatchID : SV_DispatchThre
 				// The irradiance is directly attained from reprojected history radiance
 				// TODO: exclude specular radiance
 				float3 HistoryRadiance = g_HistoryRadianceWithoutEmission.Load(int3(HistoryScreenCoords, 0)).xyz;
+				// The radiance has been multiplied by BRDF. So no need to do shading again.
 				ProbeUpdateRayResult Result = FetchProbeUpdateRayResult(RayIndex);
 				Result.Radiance = HistoryRadiance;
 				Result.bBypass = true;
@@ -1901,7 +1942,7 @@ void SSRC_SampleLightRays (uint DispatchID : SV_DispatchThreadID) {
 			Light L = FetchLightHeader(LightIndex);
 			// We have to produce a full sample of the light to accurately estimate the light contribution
 			LightData   Details = FetchLightDetails(LightIndex);
-			// Note: the returned sample is already cosine weighted
+			// Note: the returned sample is already cosine weighted (receiver cosine term included, but bsdf is not included)
 			LightSample Sample  = SampleLightWithCosineWeight(HitPosition, HitMaterial, L.Type, Details, u2);
 			if(Sample.IsValid()) {
 				float LightGridWeight = EstimateLightGridContribution(L, GridMin, GridSize);
@@ -2032,7 +2073,7 @@ void SSRC_ResolveHitDirectLightingFromTraceResult (uint DispatchID : SV_Dispatch
 	// Shadow ray tracing will not overwrite RayToTraceResultBuffer.
 	Material M = UnpackCachedMaterial(g_RWRayToTraceResultBuffer[ProbeUpdateRayIndex].x);
 	// Lambertian only for secondary vertices
-	Radiance *= M.Albedo;
+	Radiance *= EvaluateLambertian(M.Albedo);
 
 	// Accumulate the radiance to the hash grid cell
 	uint HashCellIndex = g_RWProbeUpdateRayResolveHashCellIndexBuffer[ProbeUpdateRayIndex];
@@ -2156,7 +2197,7 @@ void SSRC_ResolveProbeUpdateRayRadianceFromCells (uint DispatchID : SV_DispatchT
 	ProbeUpdateRayResult Result = FetchProbeUpdateRayResult(ProbeUpdateRayIndex);
 	if(!Result.bBypass) {
 		// Resolve radiance from hash grid cache if no bypass is specified
-		Result.Radiance = Radiance.xyz;
+		Result.Radiance = 0.f;//Radiance.xyz;
 		WriteProbeUpdateRayResult(ProbeUpdateRayIndex, Result);
 	}
 }
@@ -2790,7 +2831,7 @@ void SSRC_Integrate (int2 GroupID : SV_GroupID, int LocalID : SV_GroupThreadID) 
                         }
                     }
                 }
-                LowFreq_Specular = SpecularAlbedo * LowFreq_Specular;
+                LowFreq_Specular = 0;//SpecularAlbedo * LowFreq_Specular;
                 
 				
                 float3 HighFreq_Diffuse = 0.f.xxx;
@@ -2940,14 +2981,15 @@ void FinalComposition (uint2 DispatchID : SV_DispatchThreadID) {
 
 	// 1. Direct illumination
 	Material M = FetchMaterial(C, DispatchID);
-	RadianceW.rgb += DirectIllumination * M.Albedo;	
+	float3 DiffuseBRDF = EvaluateLambertian(M.Albedo);
+	RadianceW.rgb += DirectIllumination * DiffuseBRDF;
 	if(!UB.NoDirectIllumination) {
-		VisualizeRadianceW.rgb += DirectIllumination * M.Albedo;
+		VisualizeRadianceW.rgb += DirectIllumination * DiffuseBRDF;
 	}
 	// 2. Indirect illumination 
-	RadianceW.rgb += IndirectIllumination * M.Albedo;
+	RadianceW.rgb += IndirectIllumination * DiffuseBRDF;
 	if(!UB.NoIndirectIllumination) {
-		VisualizeRadianceW.rgb += IndirectIllumination * M.Albedo;
+		VisualizeRadianceW.rgb += IndirectIllumination * DiffuseBRDF;
 	}
 	// Store intermediate result.
 	g_RW_HistoryRadianceWithoutEmission[DispatchID] = RadianceW;

@@ -13,6 +13,7 @@
 
 #include "device_scene.h"
 #include "3dgs_shared.hlsl"
+#include "glm/gtc/round.hpp"
 #include "glm/gtx/matrix_decompose.hpp"
 
 // Flag for debugging. Sometimes incorrect indirect dispatches will let my system panic.
@@ -171,7 +172,7 @@ void Renderer::RenderUI () {
         }
         ImGui::Checkbox("SSRT Enable", &options_.SSRT_enable);
         ImGui::Checkbox("HWRT Enable", &options_.HWRT_enable);
-        if (ImGui::Button("Rest HashGrids")) {
+        if (ImGui::Button("Reset HashGrids")) {
             should_reset_hash_grids_ = true;
         }
         auto & scene = AppInternal::GetInstance().GetScene();
@@ -381,7 +382,7 @@ void Renderer::Render() {
         REGISTER_CVAR(UB.VisualizeShadingRays, "Visualize HWRT shading ray results. Otherwise, visualize shadow ray depth results.",
             false);
         REGISTER_CVAR(UB.OpaqueThreshold, "Pixels with alpha values higher than this threshold are considered opaque.",
-            0.1f, 0.0f, 1.0f);
+            0.6f, 0.0f, 1.0f);
         // Not that useful.
         UB.DepthAlphaClipValue = 0;
 
@@ -391,10 +392,10 @@ void Renderer::Render() {
         UB.RT_MaxTraceDistance              = MaxTraceDistance;
         REGISTER_CVAR(UB.SSRT_MaxTraceDistance, "Normally, SSRT just helps to solve near field occlusions."
         "Due to the depth bias in rasterization, SSRT in 3DGS is not as reliable as it is in regular context.",
-        0.25f);
+        5.f);
         REGISTER_CVAR(UB.SSRT_RelativeTexelThickness,
             "How thick a texel is on Z axis in the projected space when doing screen space ray tracing."
-            "Thicker values may produce more artifacts but can cull more rays.", 0.005f, 0.001f, 0.01f);
+            "Thicker values may produce more artifacts but can cull more rays.", 0.01f, 0.001f, 0.02f);
 
         REGISTER_CVAR(UB.Debug_LightPosition, "", glm::vec3(0, 0, 0), -10, 10);
         UB.SSRT_MaxNumIterations            = 50; // Consistent with Lumen
@@ -454,17 +455,17 @@ void Renderer::Render() {
         REGISTER_CVAR(UB.DI_OcclusionThresholdMinFactor, "Minimum factor of shadow ray length threshold upon DI occlusion tests.", 0.97f);
         REGISTER_CVAR(UB.DI_OcclusionThresholdMaxFactor, "Maximum factor of shadow ray length threshold upon DI occlusion tests.", 0.99f);
 
-        REGISTER_CVAR(UB.DI_FilterGaussianRadius, "Direct illumination spatial filter gaussian kernel multiplier.", 1.3f, 0.5f, 4.f);
+        REGISTER_CVAR(UB.DI_FilterGaussianRadius, "Direct illumination spatial filter gaussian kernel multiplier.", 2.f, 0.5f, 4.f);
         UB.DI_InvFilterGaussianRadius2 = 1.f / (UB.DI_FilterGaussianRadius * UB.DI_FilterGaussianRadius);
 
         REGISTER_CVAR(UB.DI_Denoiser_DepthThreshold, "Direct illumination relative depth difference threshold for depth occlusion rejection", 1e-3f);
         REGISTER_CVAR(UB.DI_NoTemporalDenoising, "Disable temporal denoising for direct illumination.", false);
 
         REGISTER_CVAR(UB.DI_NoSpatialDenoising, "Disable spatial denoising for direct illumination.", false);
-        REGISTER_CVAR(UB.DI_Denoiser_TargetNumSamples, "The target number of samples to achieve for direct illumination denoising.", 16, 1, 100);
+        REGISTER_CVAR(UB.DI_Denoiser_TargetNumSamples, "The target number of samples to achieve for direct illumination denoising.", 128, 1, 256);
 
         REGISTER_CVAR(UB.II_NoTemporalDenoising, "Disable temporal denoising for indirect illumination.", false);
-        REGISTER_CVAR(UB.II_Denoiser_TargetNumSamples, "The target number of samples to achieve for indirect illumination denoising.", 12, 1, 100);
+        REGISTER_CVAR(UB.II_Denoiser_TargetNumSamples, "The target number of samples to achieve for indirect illumination denoising.", 20, 1, 64);
         REGISTER_CVAR(UB.II_SecondaryVertexNormalOffset, "Offset along the normal of the secondary vertex when spawning shadow rays for direct illumination.", 2e-2f, 0.f, 0.5f);
         REGISTER_CVAR(UB.SSRC_ProbeFiltering, "Enable probe filtering for SSRC.", true);
 
@@ -513,6 +514,8 @@ void Renderer::Render() {
 
         REGISTER_CVAR(UB.NoDirectIllumination, "Disable direct illumination in final composition.", false);
         REGISTER_CVAR(UB.NoIndirectIllumination, "Disable indirect illumination in final composition.", false);
+        REGISTER_CVAR(UB.SSRT_RayContinuationBackwardBiasFactor,
+            "Move back the origin along the ray before HWRT ray continuation.", 8e-3f, 5e-3f, 2e-2f);
 
         REGISTER_CVAR(UB.LightingSkyRadianceLOD, "LOD when sampling lighting from the sky.", 0, 0, 5);
         REGISTER_CVAR(UB.Debug_VisualizeLightGridCascade, "", false);
@@ -551,8 +554,8 @@ void Renderer::Render() {
 
     // other constants
     {
-        REGISTER_CVAR(CB.directional_light_dir, "", glm::vec3{0, 0, 1});
-        REGISTER_CVAR(CB.directional_light_color, "", glm::vec3{1, 0.62, 0.5});
+        REGISTER_CVAR(CB.directional_light_dir, "", scene.GetDirectionalLight().V1);
+        REGISTER_CVAR(CB.directional_light_color, "", scene.GetDirectionalLight().Radiance);
     }
 
     {
@@ -1417,14 +1420,18 @@ void Renderer::Render() {
         // Generate near HZB
         {
             auto section = TimedSection(*this, "GenerateNearHZB");
-            int num_mips = gfxCalculateMipCount(UB.ScreenDimensions.x, UB.ScreenDimensions.y);
-            for (int i = 1; i < num_mips; i++) {
-                GfxTexture in_texture = i == 1 ? tex_.G_zdepth[frame_index_ & 1] : tex_.near_HZB;
-                gfxProgramSetParameter(gfx, program_, "g_InNearHZBTexture", in_texture, std::max(i - 2, 0));
-                gfxProgramSetParameter(gfx, program_, "g_OutNearHZBTexture", tex_.near_HZB, i - 1);
+            // Round up to nearest power of 2 to build a "complete tree" mip chain (which is required for HZB)
+            int W = glm::ceilPowerOfTwo(UB.ScreenDimensions.x) / 2;
+            int H = glm::ceilPowerOfTwo(UB.ScreenDimensions.y) / 2;
+            W = glm::max(W, H);
+            int num_HZB_mips = gfxCalculateMipCount(W, W);
+            for (int i = 0; i < num_HZB_mips; i++) {
+                GfxTexture in_texture = i == 0 ? tex_.G_zdepth[frame_index_ & 1] : tex_.near_HZB;
+                gfxProgramSetParameter(gfx, program_, "g_InNearHZBTexture", in_texture, std::max(i - 1, 0));
+                gfxProgramSetParameter(gfx, program_, "g_OutNearHZBTexture", tex_.near_HZB, i);
                 gfxCommandBindKernel(gfx, kernel_.GenerateNearHZB);
-                int curr_width = divideAndRoundUp(UB.ScreenDimensions.x, (1 << i));
-                int curr_height = divideAndRoundUp(UB.ScreenDimensions.y, (1 << i));
+                int curr_width = divideAndRoundUp(W, (1 << i));
+                int curr_height = divideAndRoundUp(W, (1 << i));
                 gfxCommandDispatch(gfx,
                     divideAndRoundUp(curr_width, TILE_SIZE),
                     divideAndRoundUp(curr_height, TILE_SIZE), 1);

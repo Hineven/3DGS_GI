@@ -24,24 +24,24 @@ float2 NDC2ToScreen(float2 NDC2) {
 }
 
 float2 NDC2ToFilm (CameraDescription C, float2 NDC2) {
-    float2 T = float2(NDC2.x, -NDC2.y);
-    return 0.5f * float2(C.FilmDimensions) * (T + 1.0f);
-}
-
-// Convert screen position to NDC2
-// Screen: [0, ScreenDimensions] -> NDC2: [-1, 1]
-float2 ScreenToNDC2(float2 Screen) {
-    float2 T = 2.0f * Screen / UB.ScreenDimensions - 1.0f;
-    return float2(T.x, -T.y);
+    float2 UV = NDC2ToUV(NDC2);
+    return UV * float2(C.FilmDimensions);
 }
 
 float2 ScreenToUV (float2 Screen) {
     return Screen / UB.ScreenDimensions;
 }
 
+// Convert screen position to NDC2
+// Screen: [0, ScreenDimensions] -> NDC2: [-1, 1]
+float2 ScreenToNDC2(float2 Screen) {
+    float2 UV = ScreenToUV(Screen);
+    return UVToNDC2(UV);
+}
+
 float2 FilmToNDC2(CameraDescription C, float2 Film) {
-    float2 T = 2.f * Film / float2(C.FilmDimensions) - 1.f;
-    return float2(T.x, -T.y);
+    float2 UV = Film / float2(C.FilmDimensions);
+    return UVToNDC2(UV);
 }
 
 float3x4 FetchInstanceTransform (int Index) {
@@ -703,8 +703,7 @@ float ZDepthToLinear (CameraDescription C, float ZDepth) {
     if(GetCameraType(C) == CAMERA_TYPE_ORTHOGRAPHIC) {
         return ZDepth * (C.FarPlane - C.NearPlane) + C.NearPlane;
     }
-    float ZDepthN = 2.0 * ZDepth - 1.0;
-    return 2.f * C.NearPlane * C.FarPlane / (C.FarPlane + C.NearPlane - ZDepthN * (C.FarPlane - C.NearPlane));
+    return -C.NearPlane * C.FarPlane / (- C.FarPlane + ZDepth * (C.FarPlane - C.NearPlane));
 }
 
 float3 GetSkyBoxDirection (int i) {

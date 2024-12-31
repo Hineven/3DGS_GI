@@ -51,7 +51,7 @@ public:
     glm::vec2 min_clip {-1, -1};
     glm::vec2 max_clip {1, 1};
     // radians
-    float fov_y {1.f};
+    float fov_y {0.6f};
 
     CameraType type {CameraType::ePerspective};
 

@@ -128,6 +128,13 @@ int AppInternal::Run () {
             scene_.SetInstanceTransform(inst_z, {position, rotation, scale});
         }
         scene_.UpdateSceneBounds();
+
+        scene_.SetDirectionalLight(LightData{
+            glm::vec3(-4.f, 2.5, -1.f),
+            {}, {},
+            {7.f, 4.5f, 4.f}
+        });
+
         scene_.UpdateDeviceScene();
     }
 
@@ -144,14 +151,13 @@ int AppInternal::Run () {
     std::vector<std::pair<std::string, float>> last_frame_timed_sections;
     std::vector<float> frame_latency_history;
 
-    // {
-    //     auto & camera = scene_.GetCamera();
-    //     auto abs_up = glm::normalize(glm::vec3{0, -1, 0.00});
-    //     camera.direction = glm::normalize(glm::vec3{0.86, 0.24, 0.45});
-    //     camera.position  = glm::vec3{-4.01, -0.75, -1.30};
-    //     auto right = glm::normalize(glm::cross(camera.direction, abs_up));
-    //     camera.up = glm::normalize(glm::cross(right, camera.direction));
-    // }
+    {
+        auto & camera = scene_.GetCamera();
+        camera.direction = glm::normalize(glm::vec3{0, 0, -1.f});
+        camera.position  = glm::vec3{0, -0.40, 7.8};
+        // auto right = glm::normalize(glm::cross(camera.direction, abs_up));
+        // camera.up = glm::normalize(glm::cross(right, camera.direction));
+    }
 
     // Main loop
     while(!gfxWindowIsCloseRequested(window_)) {

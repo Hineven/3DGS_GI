@@ -1,24 +1,25 @@
-import os
-import shutil
+import numpy as np
 
-def copy_files(number):
-    src = f"C:\\Users\\hineven\\PycharmProjects\\Relightable3DGaussian\\datasets\\neilfpp\\data_dtu\\DTU_scan{number}\\inputs\\images\\000000.png"
-    dst = f"C:\\Users\\hineven\\Desktop\\scanned_pics\\{number}.png"
-    
-    # check if the source file exists
-    if not os.path.exists(src):
-        print(f"Source file {src} not found.")
-        return
+def octahedron_to_unit_vector(oct):
+    N = np.array([oct[0], oct[1], 1 - np.sum(np.abs(oct))])
+    t = max(-N[2], 0)
+    if N[0] >= 0:
+        N[0] -= t
+    else:
+        N[0] += t
+    if N[1] >= 0:
+        N[1] -= t
+    else:
+        N[1] += t
+    return N / np.linalg.norm(N)
 
-    try:
-        shutil.copy(src, dst)
-        print(f"File copied from {src} to {dst}")
-    except FileNotFoundError:
-        print(f"Source file {src} not found.")
-    except Exception as e:
-        print(f"Error occurred: {e}")
+def unpack_unorm16x2(packed):
+    return np.array([
+        (packed & 0xFFFF) / 65535.0,
+        (packed >> 16) / 65535.0
+    ])
 
-if __name__ == "__main__":
-    # Example usage
-    for i in range(1, 122):  # Adjust the range as needed
-        copy_files(i)
+def get_normal_from_packed_uint(value):
+    return octahedron_to_unit_vector(unpack_unorm16x2(value) * 2.0 - 1.0)
+
+print(get_normal_from_packed_uint(4286611200))

@@ -62,9 +62,10 @@ void GetOrthoVectors(in float3 n, out float3 b1, out float3 b2)
 }
 
 
-float3 TransformPointWithPerspectiveDivide (float4x4 Transform, float3 Point) {
+float3 TransformPointWithPerspectiveDivide (float4x4 Transform, float3 Point, bool Max1 = false) {
     float4 Homogeneous = mul(Transform, float4(Point, 1.0f));
-    return Homogeneous.xyz / Homogeneous.w;
+    if(!Max1) return Homogeneous.xyz / Homogeneous.w;
+    else return Homogeneous.xyz / max(Homogeneous.w, 1.0f);
 }
 
 float3 TransformPoint (float3x4 Transform, float3 Point) {

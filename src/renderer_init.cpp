@@ -5,6 +5,7 @@
  */
 #include "renderer.h"
 #include "3dgs_shared.hlsl"
+#include "glm/gtc/round.hpp"
 
 
 bool Renderer::CreateResources () {
@@ -204,9 +205,15 @@ bool Renderer::CreateResources () {
     tex_.G_filtered_depth.setName("G_filtered_depth");
     int num_mips = gfxCalculateMipCount(width, height);
     assert(num_mips > 1);
-    tex_.near_HZB = gfxCreateTexture2D(gfx, divideAndRoundUp(width, 2), divideAndRoundUp(height, 2), DXGI_FORMAT_R32_FLOAT, num_mips - 1, zero_clear_value);
-    tex_.near_HZB.setName("NearHZB");
-
+    {
+        // Round up to nearest power of 2 to build a "complete tree" mip chain (which is required for HZB)
+        int W = glm::ceilPowerOfTwo(width) / 2;
+        int H = glm::ceilPowerOfTwo(height) / 2;
+        W = glm::max(W, H);
+        int num_HZB_mips = gfxCalculateMipCount(W, W);
+        tex_.near_HZB = gfxCreateTexture2D(gfx, W, W, DXGI_FORMAT_R32_FLOAT, num_HZB_mips, zero_clear_value);
+        tex_.near_HZB.setName("NearHZB");
+    }
     tex_.debug = gfxCreateTexture2D(gfx, width, height, DXGI_FORMAT_R16G16B16A16_FLOAT, 1, zero_clear_value);
     tex_.debug.setName("Debug");
 

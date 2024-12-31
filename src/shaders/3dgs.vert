@@ -18,7 +18,7 @@ DrawActiveGaussians_GSInput DrawActiveGaussians (
 struct DrawRegulareMeshes_PSInput {
     float4 Position : SV_POSITION;
     // float2 UV       : TEXCOORD0;
-    float3 Normal   : NORMAL;
+    float3 Normal   : TEXCOORD0;
     float4 AlbedoRoughess : COLOR0;
     float3 Emission : COLOR1;
 };
@@ -33,7 +33,7 @@ DrawRegulareMeshes_PSInput DrawRegularMeshes (
     float3 Position = mul(g_InstanceTransformBuffer[g_DrawRegulareMeshes_InstanceIndex], float4(InVertex.Position, 1.f));
     Output.Position = mul(UB.MainCamera.ProjectionView, float4(Position, 1));
     float3 Normal   = mul(g_InstanceNormalTransformBuffer[g_DrawRegulareMeshes_InstanceIndex], InVertex.Normal);
-    Output.Normal   = Normal;
+    Output.Normal   = normalize(Normal);
     SimpleMaterial M = g_MaterialBuffer[g_DrawRegulareMeshes_InstanceIndex];
     Output.AlbedoRoughess = float4(M.Albedo, M.Roughness);
     Output.Emission       = M.Emissive;
@@ -80,7 +80,7 @@ Debug_SSRC_VisualizeProbeUpdateRays_FSInput Debug_SSRC_VisualizeProbeUpdateRays 
     int RayRank   = InstanceIndex;
     int RayIndex  = g_RWProbeUpdateRayOffsetsBuffer[ProbeIndex1] + RayRank;
     float3 RayOrigin         = Header.Position;
-    float3 RayDirection      = OctahedronToUnitVector(UnpackUnorm16x2(g_RWProbeUpdateRayDirectionBuffer[RayIndex]) * 2.f - 1.f);
+    float3 RayDirection      = UnpackNormal(g_RWProbeUpdateRayDirectionBuffer[RayIndex]);
     ProbeUpdateRayResult Result = FetchProbeUpdateRayResult(RayIndex);
     float3 RayRadiance       = Result.Radiance;
     float  InvPdf            = Result.InvPdf;

@@ -46,6 +46,14 @@ struct CameraDescription {
     float2 FilmTexelSize;
     // Size of each pixel on HZB buffer at mip 0
     float2 HZBBaseTexelSize;
+
+    int2   HZBDimensions;
+    float2 InvHZBDimensions;
+
+    // Converting from screen uv to hzb uv
+    float4 UVToHZB_ScaleOffset;
+    // Converting from hzb uv to screen uv
+    float4 HZBToUV_ScaleOffset;
 };
 
 INLINE int GetCameraType (CameraDescription C) {
@@ -169,7 +177,8 @@ struct UniformBlock {
 
     uint   NoDirectIllumination;
     uint   NoIndirectIllumination;
-    uint2 Padding000;
+    float  SSRT_RayContinuationBackwardBiasFactor;
+    uint Padding000;
     
     float  LightingSkyRadianceLOD;
     uint   Debug_VisualizeLightGridCascade;
@@ -325,7 +334,7 @@ struct Card {
 
 #define LIGHT_GRID_MAX_NUM_CASCADES 4
 
-#define LIGHT_GRID_MAX_NUM_GRID_LIGHTS 8
+#define LIGHT_GRID_MAX_NUM_GRID_LIGHTS 16
 
 #define LIGHT_GRID_MAX_GRID_SIZE 32
 
@@ -339,7 +348,7 @@ struct Card {
 #if SSRC_PROBE_TEXTURE_TEXEL_COUNT != (1 << SSRC_PROBE_TEXTURE_TEXEL_COUNT_L2)
 #error "inconsistent SSRC_PROBE_TEXTURE_TEXEL_COUNT and SSRC_PROBE_TEXTURE_TEXEL_COUNT_L2"
 #endif
-#define SSRC_PROBE_NORMAL_OFFSET (5e-5f)
+#define SSRC_PROBE_NORMAL_OFFSET (1e-4f)
 
 #define SSRC_MAX_NUM_UPDATE_RAY_PER_PROBE 128
 

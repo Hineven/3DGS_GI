@@ -13,6 +13,7 @@
 #include "glm/ext/matrix_transform.hpp"
 #include "glm/ext/matrix_clip_space.hpp"
 #include "app_internal.h"
+#include "glm/gtc/round.hpp"
 #include "glm/gtx/matrix_decompose.hpp"
 #include "glm/gtx/quaternion.hpp"
 
@@ -614,8 +615,30 @@ CameraDescription Camera::PackDescription(
     ret.Up = axis_up;
     ret.Padding = 0;
 
-    ret.FilmTexelSize = 1.f / glm::vec2(film_width, film_height);
-    ret.HZBBaseTexelSize = 2.f * ret.FilmTexelSize;
+    int HZB_width = 0;
+    {
+        HZB_width = glm::max(glm::ceilPowerOfTwo(ret.FilmDimensions.x), glm::ceilPowerOfTwo(ret.FilmDimensions.y));
+        HZB_width /= 2;
+    }
+
+    ret.FilmTexelSize = glm::vec2(1.0 / glm::dvec2(film_width, film_height));
+    ret.HZBBaseTexelSize = glm::vec2(1.0 / glm::dvec2(HZB_width, HZB_width));
+
+    ret.HZBDimensions = glm::ivec2(HZB_width, HZB_width);
+    ret.InvHZBDimensions = glm::vec2(1.0 / HZB_width, 1.0 / HZB_width);
+
+    ret.UVToHZB_ScaleOffset = glm::vec4(
+        float(0.5 * film_width / HZB_width),
+        float(0.5 * film_height / HZB_width),
+        0,
+        0
+    );
+    ret.HZBToUV_ScaleOffset = glm::vec4(
+        float(2.0 * HZB_width / film_width),
+        float(2.0 * HZB_width / film_height),
+        0,
+        0
+    );
 
     return ret;
 }

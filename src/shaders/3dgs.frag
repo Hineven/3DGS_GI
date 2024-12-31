@@ -86,7 +86,7 @@ GBufferOutput DrawActiveGaussians (DrawActiveGaussians_FSInput Input) {
 struct DrawRegulareMeshes_PSInput {
     float4 Position : SV_POSITION;
     // float2 UV       : TEXCOORD0;
-    float3 Normal   : NORMAL;
+    float3 Normal   : TEXCOORD0;
     float4 AlbedoRoughess : COLOR0;
     float3 Emission : COLOR1;
 };
@@ -105,7 +105,7 @@ GBufferOutput_RegularMesh DrawRegularMeshes (DrawRegulareMeshes_PSInput Input) {
     // The alpha value of gaussians is kept by this texture.
     Result.AlbedoAlpha    = float4(Input.AlbedoRoughess.xyz, 0);
     Result.EmissionAlpha  = float4(Input.Emission, 1);
-    Result.Normal         = float4(Input.Normal, 1.f);
+    Result.Normal         = float4(normalize(Input.Normal) * 0.5f + 0.5f, 1.f);
     Result.Roughness      = float4(Input.AlbedoRoughess.w, 0, 0, 1);
     return Result;
 }
@@ -134,7 +134,7 @@ float4 TonemapAndDraw (float4 InPosition : SV_Position) : SV_Target {
     } else if(UB.DebugMode == 3) {
         Color.rgb = g_GNormalTexture.Sample(g_LinearClampSampler, UV).xyz;
     } else if(UB.DebugMode == 4) {
-		float Depth = g_GDepthTexture.Sample(g_LinearClampSampler, UV).r * 0.2f;
+		float Depth = g_GFilteredDepthTexture.Sample(g_LinearClampSampler, UV).r * 0.2f;
         Color = float4(Depth.xxx, 1);
     } else if(UB.DebugMode == 5) {
         float Alpha = g_GColorTexture.Sample(g_LinearClampSampler, UV).a;
