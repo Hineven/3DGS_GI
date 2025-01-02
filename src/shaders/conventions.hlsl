@@ -106,10 +106,10 @@ uint2 PackFp16x4Safe (float4 Unpacked) {
 
 float4 UnpackFp16x4 (uint2 Packed) {
     float4 Unpacked = float4(
-        f16tof32(Packed.x & 0xFFFF),
-        f16tof32(Packed.x >> 16),
-        f16tof32(Packed.y & 0xFFFF),
-        f16tof32(Packed.y >> 16)
+        f16tof32(Packed.x & 0xFFFFu),
+        f16tof32(Packed.x >> 16u),
+        f16tof32(Packed.y & 0xFFFFu),
+        f16tof32(Packed.y >> 16u)
     );
     return Unpacked;
 }
@@ -195,6 +195,22 @@ float4 UnpackUnorm8x4 (uint Packed) {
         ((Packed >> 16u) & 0xFFu) / 256.0f,
         ((Packed >> 24u) & 0xFFu) / 256.0f
     );
+}
+
+uint PackRadianceU32 (float3 Radiance) {
+    Radiance = min(Radiance, asfloat(0x477C0000));
+    uint X = ((f32tof16(Radiance.x) + 8) >> 4) & 0x000007FF;
+    uint Y = ((f32tof16(Radiance.y) + 8) << 7) & 0x003FF800;
+    uint Z = ((f32tof16(Radiance.z) + 16) << 17) & 0xFFC00000;
+    return X | Y | Z;
+}
+
+float3 UnpackRadianceU32(uint Packed)
+{
+    float X = f16tof32((Packed << 4) & 0x7FF0);
+    float Y = f16tof32((Packed >> 7) & 0x7FF0);
+    float Z = f16tof32((Packed >> 17) & 0x7FE0);
+    return float3(X, Y, Z);
 }
 
 

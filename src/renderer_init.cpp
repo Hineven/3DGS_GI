@@ -39,6 +39,8 @@ bool Renderer::CreateResources () {
     buf_.LightGrid_grid_light_list_offset.setName("LightGridGridLightListOffset");
     buf_.LightGrid_grid_light_list = gfxCreateBuffer<uint>(gfx, options_.light_grid_max_num_entries);
     buf_.LightGrid_grid_light_list.setName("LightGridGridLightList");
+    buf_.LightGrid_grid_reservoir_weight = gfxCreateBuffer<float>(gfx, options_.light_grid_max_num_entries);
+    buf_.LightGrid_grid_reservoir_weight.setName("LightGridGridReservoirWeight");
 
     buf_.HashGrids_free_tile_count = gfxCreateBuffer<uint>(gfx, 1);
     buf_.HashGrids_free_tile_count.setName("HashGridsFreeTileCount");
@@ -283,8 +285,23 @@ bool Renderer::CreateResources () {
     tex_.radiance[1] = gfxCreateTexture2D(gfx, width, height, DXGI_FORMAT_R16G16B16A16_FLOAT, 1, zero_clear_value);
     tex_.radiance[1].setName("Radiance1");
 
-    tex_.history_radiance_without_emission = gfxCreateTexture2D(gfx, width, height, DXGI_FORMAT_R16G16B16A16_FLOAT, 1, zero_clear_value);
-    tex_.history_radiance_without_emission.setName("HistoryRadianceWithoutEmission");
+    tex_.history_diffuse_radiance_without_emission = gfxCreateTexture2D(gfx, width, height, DXGI_FORMAT_R16G16B16A16_FLOAT, 1, zero_clear_value);
+    tex_.history_diffuse_radiance_without_emission.setName("HistoryRadianceWithoutEmission");
+
+    tex_.reflection[0] = gfxCreateTexture2D(gfx, width, height, DXGI_FORMAT_R16G16B16A16_FLOAT, 1, zero_clear_value);
+    tex_.reflection[0].setName("Reflection0");
+    tex_.reflection[1] = gfxCreateTexture2D(gfx, width, height, DXGI_FORMAT_R16G16B16A16_FLOAT, 1, zero_clear_value);
+    tex_.reflection[1].setName("Reflection1");
+    tex_.filtered_reflection = gfxCreateTexture2D(gfx, width, height, DXGI_FORMAT_R16G16B16A16_FLOAT, 1, zero_clear_value);
+    tex_.filtered_reflection.setName("FilteredReflection");
+    tex_.reflection_direction = gfxCreateTexture2D(gfx, width, height, DXGI_FORMAT_R32_UINT, 1, zero_clear_value);
+    tex_.reflection_direction.setName("ReflectionDirection");
+    tex_.reflection_STD_ray_depth = gfxCreateTexture2D(gfx, width, height, DXGI_FORMAT_R16G16B16A16_FLOAT, 1, zero_clear_value);
+    tex_.reflection_STD_ray_depth.setName("ReflectionSTDRayDepth");
+    tex_.filtered_reflection_STD_ray_depth = gfxCreateTexture2D(gfx, width, height, DXGI_FORMAT_R16G16B16A16_FLOAT, 1, zero_clear_value);
+    tex_.filtered_reflection_STD_ray_depth.setName("FilteredReflectionSTDRayDepth");
+    tex_.fallback_reflection = gfxCreateTexture2D(gfx, width, height, DXGI_FORMAT_R16G16B16A16_FLOAT, 1, zero_clear_value);
+    tex_.fallback_reflection.setName("FallbackReflection");
 
     tex_.card_workspace_color_alpha = gfxCreateTexture2D(gfx, MAX_CARD_RESOLUTION, MAX_CARD_RESOLUTION, DXGI_FORMAT_R8G8B8A8_UNORM, 1, zero_clear_value);
     tex_.card_workspace_color_alpha.setName("CardWorkspaceColorAlpha");
@@ -345,6 +362,7 @@ void Renderer::DestroyResources() {
     gfxDestroyBuffer(gfx, buf_.LightGrid_grid_light_count);
     gfxDestroyBuffer(gfx, buf_.LightGrid_grid_light_list_offset);
     gfxDestroyBuffer(gfx, buf_.LightGrid_grid_light_list);
+    gfxDestroyBuffer(gfx, buf_.LightGrid_grid_reservoir_weight);
 
     gfxDestroyBuffer(gfx, buf_.HashGrids_free_tile_count);
     gfxDestroyBuffer(gfx, buf_.HashGrids_free_tile_list);
@@ -460,7 +478,14 @@ void Renderer::DestroyResources() {
     gfxDestroyTexture(gfx, tex_.filtered_indirect_illumination);
     gfxDestroyTexture(gfx, tex_.radiance[0]);
     gfxDestroyTexture(gfx, tex_.radiance[1]);
-    gfxDestroyTexture(gfx, tex_.history_radiance_without_emission);
+    gfxDestroyTexture(gfx, tex_.history_diffuse_radiance_without_emission);
+    gfxDestroyTexture(gfx, tex_.reflection[0]);
+    gfxDestroyTexture(gfx, tex_.reflection[1]);
+    gfxDestroyTexture(gfx, tex_.filtered_reflection);
+    gfxDestroyTexture(gfx, tex_.reflection_direction);
+    gfxDestroyTexture(gfx, tex_.reflection_STD_ray_depth);
+    gfxDestroyTexture(gfx, tex_.filtered_reflection_STD_ray_depth);
+    gfxDestroyTexture(gfx, tex_.fallback_reflection);
 
     gfxDestroyTexture(gfx, tex_.card_atlas_color);
     gfxDestroyTexture(gfx, tex_.card_atlas_alpha);
@@ -570,6 +595,21 @@ bool Renderer::CreateKernels () {
         kernel_.SSRC_FilterProbes = gfxCreateComputeKernel(gfx, program_, "SSRC_FilterProbes", defines_c.data(), defines_c.size());
         kernel_.SSRC_PadProbeTextureEdges = gfxCreateComputeKernel(gfx, program_, "SSRC_PadProbeTextureEdges", defines_c.data(), defines_c.size());
         kernel_.SSRC_Integrate = gfxCreateComputeKernel(gfx, program_, "SSRC_Integrate", defines_c.data(), defines_c.size());
+        kernel_.SpawnReflectionRays = gfxCreateComputeKernel(gfx, program_, "SpawnReflectionRays", defines_c.data(), defines_c.size());
+        defines_c.push_back("REFLECTION_RAY_TRACING");
+        kernel_.TraceRaysInScreenSpaceForReflection = gfxCreateComputeKernel(gfx, program_, "TraceRaysInScreenSpace", defines_c.data(), defines_c.size());
+        defines_c.pop_back();
+        kernel_.ResolveReflectionTraceResults = gfxCreateComputeKernel(gfx, program_, "ResolveReflectionTraceResults", defines_c.data(), defines_c.size());
+        defines_c.push_back("FILTER_PASS=0");
+        kernel_.SpatialFilterReflection[0] = gfxCreateComputeKernel(gfx, program_, "SpatialFilterReflection", defines_c.data(), defines_c.size());
+        defines_c.pop_back();
+        defines_c.push_back("FILTER_PASS=1");
+        kernel_.SpatialFilterReflection[1] = gfxCreateComputeKernel(gfx, program_, "SpatialFilterReflection", defines_c.data(), defines_c.size());
+        defines_c.pop_back();
+        defines_c.push_back("FILTER_PASS=2");
+        kernel_.SpatialFilterReflection[2] = gfxCreateComputeKernel(gfx, program_, "SpatialFilterReflection", defines_c.data(), defines_c.size());
+        defines_c.pop_back();
+        kernel_.TemporalDenoiseReflection = gfxCreateComputeKernel(gfx, program_, "TemporalDenoiseReflection", defines_c.data(), defines_c.size());
         kernel_.TemporalDenoiseLighting = gfxCreateComputeKernel(gfx, program_, "TemporalDenoiseLighting", defines_c.data(), defines_c.size());
         kernel_.FinalComposition = gfxCreateComputeKernel(gfx, program_, "FinalComposition", defines_c.data(), defines_c.size());
 
@@ -670,6 +710,22 @@ bool Renderer::CreateKernels () {
         );
         defines_c.pop_back();
 
+        std::vector<char const *> Trace3DGSReflectionRays_kernel_exports;
+        Trace3DGSReflectionRays_kernel_exports.push_back("Trace3DGSReflectionRaysRaygen");
+        Trace3DGSReflectionRays_kernel_exports.push_back("Trace3DGSStochasticAnyHit");
+        Trace3DGSReflectionRays_kernel_exports.push_back("Trace3DGSStochasticClosestHit");
+        Trace3DGSReflectionRays_kernel_exports.push_back("Trace3DGSStochasticMiss");
+        std::vector<char const *> Trace3DGSReflectionRays_kernel_subobjects = base_subobjects;
+        Trace3DGSReflectionRays_kernel_subobjects.push_back("Trace3DGSStochasticHitGroup");
+        Trace3DGSReflectionRays_kernel_subobjects.push_back("Trace3DGSStochasticRayShaderConfig");
+        defines_c.push_back("REFLECTION_STOCHASTIC_RAY_TRACING");
+        kernel_.Trace3DGSReflectionRays = gfxCreateRaytracingKernel(gfx, program_, nullptr, 0,
+            Trace3DGSReflectionRays_kernel_exports.data(), (uint32_t)Trace3DGSReflectionRays_kernel_exports.size(),
+            Trace3DGSReflectionRays_kernel_subobjects.data(), (uint32_t)Trace3DGSReflectionRays_kernel_subobjects.size(),
+            defines_c.data(), defines_c.size()
+        );
+        defines_c.pop_back();
+
         uint32_t entry_count[kGfxShaderGroupType_Count] {
                 1, // 1 raygen record
                 1, // 1 hitgroups
@@ -679,7 +735,8 @@ bool Renderer::CreateKernels () {
         GfxKernel sbt_kernels[] {
             kernel_.Trace3DGSRays, kernel_.Trace3DGSShadowRays, kernel_.Trace3DGSShadowRaysWithoutIndirectionList,
             kernel_.DirectIlluminationTrace3DGSShadowRays,
-            kernel_.Trace3DGSProbeUpdateRays
+            kernel_.Trace3DGSProbeUpdateRays,
+            kernel_.Trace3DGSReflectionRays
         };
         sbt_ = gfxCreateSbt(gfx, sbt_kernels, ARRAYSIZE(sbt_kernels), entry_count);
     }
@@ -815,6 +872,13 @@ void Renderer::DestroyKernels () {
     gfxDestroyKernel(gfx, kernel_.SSRC_FilterProbes);
     gfxDestroyKernel(gfx, kernel_.SSRC_PadProbeTextureEdges);
     gfxDestroyKernel(gfx, kernel_.SSRC_Integrate);
+    gfxDestroyKernel(gfx, kernel_.SpawnReflectionRays);
+    gfxDestroyKernel(gfx, kernel_.TraceRaysInScreenSpaceForReflection);
+    gfxDestroyKernel(gfx, kernel_.ResolveReflectionTraceResults);
+    gfxDestroyKernel(gfx, kernel_.SpatialFilterReflection[0]);
+    gfxDestroyKernel(gfx, kernel_.SpatialFilterReflection[1]);
+    gfxDestroyKernel(gfx, kernel_.SpatialFilterReflection[2]);
+    gfxDestroyKernel(gfx, kernel_.TemporalDenoiseReflection);
     gfxDestroyKernel(gfx, kernel_.TemporalDenoiseLighting);
     gfxDestroyKernel(gfx, kernel_.FinalComposition);
 
@@ -830,6 +894,8 @@ void Renderer::DestroyKernels () {
     gfxDestroyKernel(gfx, kernel_.Trace3DGSShadowRaysWithoutIndirectionList);
     gfxDestroyKernel(gfx, kernel_.DirectIlluminationTrace3DGSShadowRays);
     gfxDestroyKernel(gfx, kernel_.Trace3DGSProbeUpdateRays);
+    gfxDestroyKernel(gfx, kernel_.Trace3DGSReflectionRays);
+
     gfxDestroyKernel(gfx, kernel_.SpawnCameraRays);
     gfxDestroyKernel(gfx, kernel_.DisplayCameraRays);
     gfxDestroyKernel(gfx, kernel_.VisualizeMeshCardScene);

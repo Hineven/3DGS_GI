@@ -22,4 +22,6 @@ def unpack_unorm16x2(packed):
 def get_normal_from_packed_uint(value):
     return octahedron_to_unit_vector(unpack_unorm16x2(value) * 2.0 - 1.0)
 
-print(get_normal_from_packed_uint(4286611200))
+print(get_normal_from_packed_uint(235512528))
+
+# [159042]	{ Element=235512528 }	

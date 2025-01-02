@@ -127,6 +127,8 @@ void Renderer::RenderUI () {
             "Normal",
             "Depth",
             "Alpha",
+            "Reflectioon",
+            "FallbackReflection",
             "Debug"
         };
 
@@ -139,7 +141,7 @@ void Renderer::RenderUI () {
                 if (val.type == CVar::BOOL) {
                     tmp_bv = val.v.i;
                     if (tmp_bv) {
-                        options_.debug_mode = 6;
+                        options_.debug_mode = 8;
                         auto_switch_debug_ = true;
                         any_debug_flag_enabled = true;
                         break;
@@ -455,18 +457,20 @@ void Renderer::Render() {
         REGISTER_CVAR(UB.DI_OcclusionThresholdMinFactor, "Minimum factor of shadow ray length threshold upon DI occlusion tests.", 0.97f);
         REGISTER_CVAR(UB.DI_OcclusionThresholdMaxFactor, "Maximum factor of shadow ray length threshold upon DI occlusion tests.", 0.99f);
 
-        REGISTER_CVAR(UB.DI_FilterGaussianRadius, "Direct illumination spatial filter gaussian kernel multiplier.", 2.f, 0.5f, 4.f);
+        REGISTER_CVAR(UB.DI_FilterGaussianRadius, "Direct illumination spatial filter gaussian kernel multiplier.", 2.8f, 0.5f, 4.f);
         UB.DI_InvFilterGaussianRadius2 = 1.f / (UB.DI_FilterGaussianRadius * UB.DI_FilterGaussianRadius);
 
         REGISTER_CVAR(UB.DI_Denoiser_DepthThreshold, "Direct illumination relative depth difference threshold for depth occlusion rejection", 1e-3f);
         REGISTER_CVAR(UB.DI_NoTemporalDenoising, "Disable temporal denoising for direct illumination.", false);
 
         REGISTER_CVAR(UB.DI_NoSpatialDenoising, "Disable spatial denoising for direct illumination.", false);
-        REGISTER_CVAR(UB.DI_Denoiser_TargetNumSamples, "The target number of samples to achieve for direct illumination denoising.", 128, 1, 256);
+        REGISTER_CVAR(UB.DI_Denoiser_TargetNumSamples, "The target number of samples to achieve for direct illumination denoising.", 192, 1, 256);
 
         REGISTER_CVAR(UB.II_NoTemporalDenoising, "Disable temporal denoising for indirect illumination.", false);
         REGISTER_CVAR(UB.II_Denoiser_TargetNumSamples, "The target number of samples to achieve for indirect illumination denoising.", 20, 1, 64);
-        REGISTER_CVAR(UB.II_SecondaryVertexNormalOffset, "Offset along the normal of the secondary vertex when spawning shadow rays for direct illumination.", 2e-2f, 0.f, 0.5f);
+        REGISTER_CVAR(UB.II_SecondaryVertexNormalOffset, "Offset along the normal of the secondary vertex when spawning shadow rays for direct illumination.", 1e-2f, 0.f, 0.5f);
+        REGISTER_CVAR(UB.II_SecondaryVertexRadianceClamping, "Clamp radiance values of secondary vertices for indirect illumination. "
+                                                             "Excluding outliers.", 100.f, 1.f, 200.f);
         REGISTER_CVAR(UB.SSRC_ProbeFiltering, "Enable probe filtering for SSRC.", true);
 
         REGISTER_CVAR(UB.SSRC_NoImportanceSampling, "Disable importance sampling for SSRC.", false);
@@ -484,20 +488,24 @@ void Renderer::Render() {
         UB.SSRC_PreviousTileJitterFrameSeed = history_UB_.SSRC_TileJitterFrameSeed;
 
         UB.TAAJitterUV = glm::vec2(0);
-        REGISTER_CVAR(UB.HashGrids_MaxNumSamples, "Maximum number of samples kept in each hash grid cell.", 64, 0, 128);
+        REGISTER_CVAR(UB.HashGrids_MaxNumSamples, "Maximum number of samples kept in each hash grid cell.", 128, 0, 256);
         UB.HashGrids_MaxNumTiles = options_.HashGrids_max_num_tiles;
         UB.HashGrids_Center = camera.position;
-        REGISTER_CVAR(CB.HashGrids_cascade_radius, "Radius of the base cascade in the hash grid", 2.f, 1.f, 10.f);
+        REGISTER_CVAR(CB.HashGrids_cascade_radius, "Radius of the base cascade in the hash grid", 4.f, 1.f, 20.f);
         UB.HashGrids_InvCascadeRadius = 1.f / CB.HashGrids_cascade_radius;
 
-        REGISTER_CVAR(UB.HashGrids_CellSize, "Size of base level cell in hash grids.", 0.04f, 0.01f, 0.2f);
+        REGISTER_CVAR(UB.HashGrids_CellSize, "Size of base level cell in hash grids.", 0.15f, 0.01f, 0.3f);
         UB.HashGrids_NumBuckets = options_.HashGrids_max_num_buckets;
         UB.HashGrids_NumInterleavedEntriesPerBucket = options_.HashGrids_num_slots_per_bucket;
-        REGISTER_CVAR(UB.HashGrids_TargetSampleCount, "Target number of samples to achieve for hash grid sampling.", 16, 1, 128);
+        REGISTER_CVAR(UB.HashGrids_TargetSampleCount, "Target number of samples to achieve for hash grid sampling.", 40, 1, 128);
         REGISTER_CVAR(UB.HashGrids_TileLifespan, "Tile lifespan in hash grids (max number of frames unvisited).", 30, 1, 60);
         REGISTER_CVAR(UB.HashGrids_MaxNumEntriesSearchedPerBucket, "Maximum number of entries to search when query hash table for a tile.", 8, 1, HASHGRIDS_MAX_NUM_ENTRIES_SEARCHED_PER_BUCKET);
         UB.PreviousTAAJitterUV = history_UB_.TAAJitterUV;
 
+        // FIXME
+        REGISTER_CVAR(UB.Reflection_MaxRoughness, "Maximum roughness to spawn reflection rays.", 1.f);
+        REGISTER_CVAR(UB.Reflection_FilterRadius, "Gaussian filter radius for spatial reflection denoising.", 3.f, 1, 7);
+        UB.Reflection_InvFilterRadius2 = 1.f / (UB.Reflection_FilterRadius * UB.Reflection_FilterRadius);
 
         REGISTER_CVAR(UB.DepthFilterRadius, "Filter radius for depth reconstruction.", 1, 0, 3);
         REGISTER_CVAR(UB.GaussianClampingScale, "Magic number for clamping the gaussian 2D eigen value to a minimum value.",
@@ -512,8 +520,8 @@ void Renderer::Render() {
             1e-3f);
         REGISTER_CVAR(UB.TonemapExposure, "Exposure", 1.0f, 0.1f, 10.0f);
 
-        REGISTER_CVAR(UB.NoDirectIllumination, "Disable direct illumination in final composition.", false);
-        REGISTER_CVAR(UB.NoIndirectIllumination, "Disable indirect illumination in final composition.", false);
+        REGISTER_CVAR(UB.NoDirectDiffuseIllumination, "Disable diffuse direct illumination in final composition.", false);
+        REGISTER_CVAR(UB.NoIndirectDiffuseIllumination, "Disable diffuse indirect illumination in final composition.", false);
         REGISTER_CVAR(UB.SSRT_RayContinuationBackwardBiasFactor,
             "Move back the origin along the ray before HWRT ray continuation.", 8e-3f, 5e-3f, 2e-2f);
 
@@ -561,7 +569,7 @@ void Renderer::Render() {
     {
         LightData di = scene.GetDirectionalLight();
         di.Radiance = CB.directional_light_color;
-        di.V1       = CB.directional_light_dir;
+        di.V1       = normalize(CB.directional_light_dir);
         scene.SetDirectionalLight(di);
     }
     {
@@ -618,6 +626,7 @@ void Renderer::Render() {
     gfxProgramSetBuffer(gfx, program_, "g_LightGrid_GridLightCountBuffer", buf_.LightGrid_grid_light_count);
     gfxProgramSetBuffer(gfx, program_, "g_LightGrid_GridLightListOffsetBuffer", buf_.LightGrid_grid_light_list_offset);
     gfxProgramSetBuffer(gfx, program_, "g_LightGrid_GridLightListBuffer", buf_.LightGrid_grid_light_list);
+    gfxProgramSetBuffer(gfx, program_, "g_LightGrid_GridReservoirWeightBuffer", buf_.LightGrid_grid_reservoir_weight);
 
     // Hash grids
     gfxProgramSetBuffer(gfx, program_, "g_HashGrids_FreeTileCountBuffer", buf_.HashGrids_free_tile_count);
@@ -744,8 +753,16 @@ void Renderer::Render() {
     gfxProgramSetParameter(gfx, program_, "g_RW_Radiance", tex_.radiance[frame_index_ & 1]);
     gfxProgramSetParameter(gfx, program_, "g_Radiance", tex_.radiance[frame_index_ & 1]);
     gfxProgramSetParameter(gfx, program_, "g_HistoryRadiance", tex_.radiance[(frame_index_ + 1) & 1]);
-    gfxProgramSetParameter(gfx, program_, "g_RW_HistoryRadianceWithoutEmission", tex_.history_radiance_without_emission);
-    gfxProgramSetParameter(gfx, program_, "g_HistoryRadianceWithoutEmission", tex_.history_radiance_without_emission);
+    gfxProgramSetParameter(gfx, program_, "g_RW_HistoryDiffuseRadianceWithoutEmission", tex_.history_diffuse_radiance_without_emission);
+    gfxProgramSetParameter(gfx, program_, "g_HistoryDiffuseRadianceWithoutEmission", tex_.history_diffuse_radiance_without_emission);
+
+    gfxProgramSetParameter(gfx, program_, "g_RWReflectionTexture", tex_.reflection[frame_index_ & 1]);
+    gfxProgramSetParameter(gfx, program_, "g_RWFilteredReflectionTexture", tex_.filtered_reflection);
+    gfxProgramSetParameter(gfx, program_, "g_RWReflectionDirectionTexture", tex_.reflection_direction);
+    gfxProgramSetParameter(gfx, program_, "g_RWReflectionSTDRayDepthTexture", tex_.reflection_STD_ray_depth);
+    gfxProgramSetParameter(gfx, program_, "g_RWFilteredReflectionSTDRayDepthTexture", tex_.filtered_reflection_STD_ray_depth);
+    gfxProgramSetParameter(gfx, program_, "g_HistoryReflectionTexture", tex_.reflection[(frame_index_ + 1) & 1]);
+    gfxProgramSetParameter(gfx, program_, "g_RWFallbackReflectionTexture", tex_.fallback_reflection);
 
     // Cards
     gfxProgramSetParameter(gfx, program_, "g_CardSets", buf_.card_sets);
@@ -1632,18 +1649,18 @@ void Renderer::Render() {
 #endif
         }
 
-         // Scan sum the ray counts to allocate indices for each probe update ray
-         {
-             auto section = TimedSection(*this, "ScanSumProbeUpdateRayCounts");
-             gfxCommandScanSum(gfx, kGfxDataType_Uint, buf_.probe_update_ray_offsets, buf_.probe_update_ray_counts, &buf_.probe_update_ray_reduce_count);
-         }
+        // Scan sum the ray counts to allocate indices for each probe update ray
+        {
+            auto section = TimedSection(*this, "ScanSumProbeUpdateRayCounts");
+            gfxCommandScanSum(gfx, kGfxDataType_Uint, buf_.probe_update_ray_offsets, buf_.probe_update_ray_counts, &buf_.probe_update_ray_reduce_count);
+        }
 
-         // Finalize counters
-         {
-             auto section = TimedSection(*this, "SSRC_SetRayCounts");
-             gfxCommandBindKernel(gfx, kernel_.SSRC_SetRayCounts);
-             gfxCommandDispatch(gfx, 1, 1, 1);
-         }
+        // Finalize counters
+        {
+            auto section = TimedSection(*this, "SSRC_SetRayCounts");
+            gfxCommandBindKernel(gfx, kernel_.SSRC_SetRayCounts);
+            gfxCommandDispatch(gfx, 1, 1, 1);
+        }
 
         // Importance sample probe update rays using the reprojected radiance distribution on each probe
         {
@@ -1815,7 +1832,96 @@ void Renderer::Render() {
             gfxCommandDispatch(gfx, UB.TileDimensions.x, UB.TileDimensions.y, 1);
         }
 
-        // Temporal denoising for direct and indirect illumination
+        // Reflection
+        {
+            auto section = TimedSection(*this, "PrepareReflectionRays");
+            gfxCommandClearBuffer(gfx, buf_.ray_to_trace_count[ray_compact_count & 1]);
+        }
+
+        // Spawn reflection rays
+        {
+            auto section = TimedSection(*this, "SpawnReflectionRays");
+            gfxCommandBindKernel(gfx, kernel_.SpawnReflectionRays);
+            gfxCommandDispatch(gfx, UB.TileDimensions.x, UB.TileDimensions.y, 1);
+            // duplicate ray count
+            gfxCommandCopyBuffer(gfx, buf_.ray_count, buf_.ray_to_trace_count[ray_compact_count & 1]);
+            // Clear reflection texture
+            gfxCommandClearTexture(gfx, tex_.reflection[frame_index_ & 1]);
+            gfxCommandClearTexture(gfx, tex_.reflection_STD_ray_depth);
+        }
+
+        // Trace reflection
+        {
+            auto section = TimedSection(*this, "TraceRaysInScreenSpaceForReflection");
+            GenerateDispatchIndirect(buf_.ray_to_trace_count[ray_compact_count & 1]);
+            gfxCommandBindKernel(gfx, kernel_.TraceRaysInScreenSpaceForReflection);
+#ifndef NO_INDIRECT_DISPATCH
+            gfxCommandDispatchIndirect(gfx, buf_.dispatch_indirect_command);
+#endif
+        }
+
+        CompactRayTraces();
+
+        // HWRT
+        {
+            auto section = TimedSection(*this, "Trace3DGSStochasticRaysForReflection");
+            GenerateDispatchRaysIndirect(buf_.ray_to_trace_count[ray_compact_count & 1]);
+            gfxCommandBindKernel(gfx, kernel_.Trace3DGSReflectionRays);
+            gfxSbtSetShaderGroup(gfx, sbt_, kGfxShaderGroupType_Raygen, 0, "Trace3DGSReflectionRaysRaygen");
+            gfxSbtSetShaderGroup(gfx, sbt_, kGfxShaderGroupType_Hit, 0, "Trace3DGSStochasticHitGroup");
+            gfxSbtSetShaderGroup(gfx, sbt_, kGfxShaderGroupType_Miss, 0, "Trace3DGSStochasticMiss");
+#if !(defined(NO_INDIRECT_DISPATCH) || defined(NO_RAYTRACING_INDIRECT_DISPATCH))
+            gfxCommandDispatchRaysIndirect(gfx, sbt_, buf_.dispatch_rays_indirect_command);
+#endif
+        }
+
+        // Resolve reflection trace results
+        {
+            auto section = TimedSection(*this, "ResolveReflectionTraceResults");
+            GenerateDispatchIndirect(buf_.ray_count);
+            gfxCommandBindKernel(gfx, kernel_.ResolveReflectionTraceResults);
+#ifndef NO_INDIRECT_DISPATCH
+            gfxCommandDispatchIndirect(gfx, buf_.dispatch_indirect_command);
+#endif
+        }
+
+        // Filter reflection
+        {
+            auto section = TimedSection(*this, "SpatialFilterReflection #0");
+            gfxCommandClearTexture(gfx, tex_.filtered_reflection);
+            gfxCommandClearTexture(gfx, tex_.filtered_reflection_STD_ray_depth);
+            gfxCommandBindKernel(gfx, kernel_.SpatialFilterReflection[0]);
+            gfxCommandDispatch(gfx, UB.TileDimensions.x, UB.TileDimensions.y, 1);
+            gfxCommandCopyTexture(gfx, tex_.reflection[frame_index_ & 1], tex_.filtered_reflection);
+            gfxCommandCopyTexture(gfx, tex_.reflection_STD_ray_depth, tex_.filtered_reflection_STD_ray_depth);
+        }
+        {
+            auto section = TimedSection(*this, "SpatialFilterReflection #1");
+            gfxCommandClearTexture(gfx, tex_.filtered_reflection);
+            gfxCommandClearTexture(gfx, tex_.filtered_reflection_STD_ray_depth);
+            gfxCommandBindKernel(gfx, kernel_.SpatialFilterReflection[1]);
+            gfxCommandDispatch(gfx, UB.TileDimensions.x, UB.TileDimensions.y, 1);
+            gfxCommandCopyTexture(gfx, tex_.reflection[frame_index_ & 1], tex_.filtered_reflection);
+            gfxCommandCopyTexture(gfx, tex_.reflection_STD_ray_depth, tex_.filtered_reflection_STD_ray_depth);
+        }
+        {
+            auto section = TimedSection(*this, "SpatialFilterReflection #2");
+            gfxCommandClearTexture(gfx, tex_.filtered_reflection);
+            gfxCommandClearTexture(gfx, tex_.filtered_reflection_STD_ray_depth);
+            gfxCommandBindKernel(gfx, kernel_.SpatialFilterReflection[2]);
+            gfxCommandDispatch(gfx, UB.TileDimensions.x, UB.TileDimensions.y, 1);
+            gfxCommandCopyTexture(gfx, tex_.reflection[frame_index_ & 1], tex_.filtered_reflection);
+            gfxCommandCopyTexture(gfx, tex_.reflection_STD_ray_depth, tex_.filtered_reflection_STD_ray_depth);
+        }
+
+        // Temporal denoising for reflection
+        {
+            auto section = TimedSection(*this, "TemporalDenoiseReflection");
+            gfxCommandBindKernel(gfx, kernel_.TemporalDenoiseReflection);
+            gfxCommandDispatch(gfx, UB.TileDimensions.x, UB.TileDimensions.y, 1);
+        }
+
+        // Temporal denoising for diffuse illumination
         {
             auto section = TimedSection(*this, "TemporalDenoiseLighting");
             gfxCommandBindKernel(gfx, kernel_.TemporalDenoiseLighting);
@@ -1840,7 +1946,7 @@ void Renderer::Render() {
         // Final radiance composition
         {
             auto section = TimedSection(*this, "FinalComposition");
-            gfxCommandClearTexture(gfx, tex_.history_radiance_without_emission);
+            gfxCommandClearTexture(gfx, tex_.history_diffuse_radiance_without_emission);
             gfxCommandBindKernel(gfx, kernel_.FinalComposition);
             gfxCommandDispatch(gfx, UB.TileDimensions.x, UB.TileDimensions.y, 1);
         }

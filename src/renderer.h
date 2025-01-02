@@ -66,6 +66,7 @@ protected:
         GfxBuffer LightGrid_grid_light_count;
         GfxBuffer LightGrid_grid_light_list_offset;
         GfxBuffer LightGrid_grid_light_list;
+        GfxBuffer LightGrid_grid_reservoir_weight;
 
         // Hash grids
         GfxBuffer HashGrids_free_tile_count;
@@ -203,7 +204,14 @@ protected:
         GfxTexture filtered_indirect_illumination;
         // fp16x4
         GfxTexture radiance[2];
-        GfxTexture history_radiance_without_emission;
+        GfxTexture history_diffuse_radiance_without_emission;
+
+        GfxTexture reflection[2];
+        GfxTexture filtered_reflection;
+        GfxTexture reflection_direction;
+        GfxTexture reflection_STD_ray_depth;
+        GfxTexture filtered_reflection_STD_ray_depth;
+        GfxTexture fallback_reflection;
 
         // RGBA8 (max card res)
         GfxTexture card_workspace_color_alpha;
@@ -211,7 +219,6 @@ protected:
         GfxTexture card_workspace_normal;
         // RG32F (max card res)
         GfxTexture card_workspace_linear_depth;
-
 
         GfxTexture card_atlas_color;
         GfxTexture card_atlas_alpha;
@@ -288,6 +295,11 @@ protected:
         GfxKernel SSRC_FilterProbes;
         GfxKernel SSRC_PadProbeTextureEdges;
         GfxKernel SSRC_Integrate;
+        GfxKernel SpawnReflectionRays;
+        GfxKernel TraceRaysInScreenSpaceForReflection;
+        GfxKernel ResolveReflectionTraceResults;
+        GfxKernel SpatialFilterReflection[3];
+        GfxKernel TemporalDenoiseReflection;
         GfxKernel TemporalDenoiseLighting;
         GfxKernel FinalComposition;
 
@@ -305,6 +317,8 @@ protected:
         GfxKernel Trace3DGSShadowRaysWithoutIndirectionList;
         GfxKernel DirectIlluminationTrace3DGSShadowRays;
         GfxKernel Trace3DGSProbeUpdateRays;
+        GfxKernel Trace3DGSReflectionRays;
+
         GfxKernel SpawnCameraRays;
         GfxKernel DisplayCameraRays;
         GfxKernel VisualizeMeshCardScene;
@@ -360,7 +374,7 @@ protected:
         bool HWRT_enable {true};
 
         // Normals are reconstructed from the depth buffer rather than rasterized from gaussians.
-        bool reconstruct_normals {true};
+        bool reconstruct_normals {false};
 
         DXGI_FORMAT depth_format {DXGI_FORMAT_R16G16_FLOAT};
 

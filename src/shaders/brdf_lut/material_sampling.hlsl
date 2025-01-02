@@ -322,7 +322,7 @@ float calculateBRDFProbability(float3 F0, float dotHV, float3 albedo)
     float diffuse = luminance(albedo * diffuseCompensationTerm(f, dotHV));
 
     // Calculate probability of selecting specular component over the diffuse
-    float probability = saturate(specular / clampMax(specular + diffuse));
+    float probability = saturate(specular / max(FLT_EPSILON, specular + diffuse));
 #else
     float probability = 0.0f;
 #endif

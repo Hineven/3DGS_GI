@@ -78,6 +78,8 @@ RWStructuredBuffer<uint> g_LightGrid_GridLightListOffsetBuffer;
 // RWStructuredBuffer<float> g_LightGrid_GridLightSumWeightBuffer;
 // Light indices in each grid
 RWStructuredBuffer<uint> g_LightGrid_GridLightListBuffer;
+// The weight should be multiplied for each multi-reservoir light grid.
+RWStructuredBuffer<float> g_LightGrid_GridReservoirWeightBuffer;
 
 
 uint LightGrid_GetGridIndex1 (uint4 GridIndex) {

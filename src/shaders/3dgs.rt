@@ -28,7 +28,7 @@ RaytracingShaderConfig Trace3DGSShadowShaderConfig =
 TriangleHitGroup Trace3DGSStochasticHitGroup =
 {
     "Trace3DGSStochasticAnyHit",
-    "Trace3DGSStochasticClosestHit", 
+    "Trace3DGSStochasticClosestHit",
 };
 RaytracingShaderConfig Trace3DGSStochasticRayShaderConfig =
 {
@@ -49,7 +49,7 @@ struct Trace3DGSPayload {
 struct Trace3DGSStochasticRayPayload {
     float Seed;
     float HitDist;
-#ifdef PROBE_UPDATE_STOCHASTIC_RAY_TRACING
+#if defined(PROBE_UPDATE_STOCHASTIC_RAY_TRACING) || defined(REFLECTION_STOCHASTIC_RAY_TRACING)
     uint  HitMaterial;
     uint  HitNormal;
 #endif
@@ -185,6 +185,8 @@ void Trace3DGSAnyHit (inout Trace3DGSPayload Payload, in BuiltInTriangleIntersec
 void DirectIlluminationTrace3DGSShadowRaygen ()
 #elif defined(PROBE_UPDATE_STOCHASTIC_RAY_TRACING)
 void Trace3DGSProbeUpdateRaysRaygen ()
+#elif defined(REFLECTION_STOCHASTIC_RAY_TRACING)
+void Trace3DGSReflectionRaysRaygen ()
 #else
 void Trace3DGSShadowRaygen ()
 #endif
@@ -200,6 +202,7 @@ void Trace3DGSShadowRaygen ()
     Trace3DGSStochasticRayPayload Payload = (Trace3DGSStochasticRayPayload) 0;
     RayDesc Ray;
     {
+        // Default true
         bool bFetchOrigin = true;
         float TraceDistance = UB.RT_MaxTraceDistance; 
 #ifdef DIRECT_ILLUMINATION_SHADOW_RAY_TRACING
@@ -209,9 +212,11 @@ void Trace3DGSShadowRaygen ()
         TraceDistance = g_RWDirectIlluminationRayOcclusionThresholdBuffer[RayIndex];
 #elif defined(PROBE_UPDATE_STOCHASTIC_RAY_TRACING)
         bFetchOrigin = false;
+#elif defined(REFLECTION_STOCHASTIC_RAY_TRACING)
+        bFetchOrigin = false;
 #endif
         RayToTrace RayData = FetchRayToTrace(RayIndex, TraceDistance, bFetchOrigin);
-#ifdef DIRECT_ILLUMINATION_SHADOW_RAY_TRACING
+#if defined(DIRECT_ILLUMINATION_SHADOW_RAY_TRACING) || defined(REFLECTION_STOCHASTIC_RAY_TRACING)
         float2 FilmPosition = UnpackUnorm16x2(g_RWRayToTraceUVPositionBuffer[RayIndex]) * C.FilmDimensions;
         float  LinearDepth  = GetFilteredDepthTexture(C).Load(int3(FilmPosition, 0)).x;
         RayData.Origin = RecoverWorldSpacePosition(C, FilmPosition, LinearDepth);
@@ -247,7 +252,7 @@ void Trace3DGSShadowRaygen ()
     // Write the result to the output buffer
     bool bHit = Payload.HitDist != 0;
     WriteRayTraceFlags(RayIndex, bHit, bHit ? Payload.HitDist : Ray.TMax);
-#ifdef PROBE_UPDATE_STOCHASTIC_RAY_TRACING
+#if defined(PROBE_UPDATE_STOCHASTIC_RAY_TRACING) || defined(REFLECTION_STOCHASTIC_RAY_TRACING)
     // Extra hit results
     if(bHit) {
         g_RWRayToTraceResultBuffer[RayIndex] = uint2(Payload.HitMaterial, Payload.HitNormal);
@@ -282,7 +287,7 @@ void Trace3DGSStochasticAnyHit (inout Trace3DGSStochasticRayPayload Payload, in 
         
         // No need to update the payload if we're not tracing shadow rays
         // stochastic ray hit data is decoded in the closest hit shader
-#ifndef PROBE_UPDATE_STOCHASTIC_RAY_TRACING
+#if !defined(PROBE_UPDATE_STOCHASTIC_RAY_TRACING) && !defined(REFLECTION_STOCHASTIC_RAY_TRACING)
         InPayload.HitDist     = RayTCurrent();
 #endif
         ShouldIgnore = false;
@@ -302,7 +307,7 @@ void Trace3DGSStochasticAnyHit (inout Trace3DGSStochasticRayPayload Payload, in 
         if(ShouldIgnore) {
             InPayload.Seed = (InPayload.Seed - Alpha) / (1 - Alpha);
         } else {
-#ifndef PROBE_UPDATE_STOCHASTIC_RAY_TRACING
+#if !defined(PROBE_UPDATE_STOCHASTIC_RAY_TRACING) && !defined(REFLECTION_STOCHASTIC_RAY_TRACING)
             InPayload.HitDist = RayT / max(1e-6, RayScaler); // Use the max response T as reply
 #endif
         }
@@ -331,9 +336,15 @@ void Trace3DGSStochasticClosestHit (inout Trace3DGSStochasticRayPayload Payload,
         float3 V2 = TransformPoint(ToWorld, g_VertexBuffer[I2].Position);
         float3 Normal = normalize(cross(V1 - V0, V2 - V0));
         Payload.HitDist     = RayTCurrent();
-#ifdef PROBE_UPDATE_STOCHASTIC_RAY_TRACING
+#if defined(PROBE_UPDATE_STOCHASTIC_RAY_TRACING) || defined(REFLECTION_STOCHASTIC_RAY_TRACING)
         Payload.HitNormal   = PackNormal(Normal);
+#endif
+#if defined(PROBE_UPDATE_STOCHASTIC_RAY_TRACING)
         Payload.HitMaterial = PackCachedMaterial(M.Albedo, M.Roughness);
+#endif
+#if defined(REFLECTION_STOCHASTIC_RAY_TRACING)
+        uint PackedEmission = PackRadianceU32(M.Emissive);
+        Payload.HitMaterial = PackedEmission;
 #endif
     } else {
         int  HitGaussianIndex = GetHitGaussianIndex(HitInstance, HitPrimitive, HitAttr);
@@ -348,8 +359,10 @@ void Trace3DGSStochasticClosestHit (inout Trace3DGSStochasticRayPayload Payload,
         );
         GaussianPBR Pbr = FetchGaussianPBR(HitGaussianIndex);
         Payload.HitDist = RayT / max(1e-6, RayScaler); // Use the max response T as reply
-#ifdef PROBE_UPDATE_STOCHASTIC_RAY_TRACING
+#if defined(PROBE_UPDATE_STOCHASTIC_RAY_TRACING) || defined(REFLECTION_STOCHASTIC_RAY_TRACING)
         Payload.HitNormal   = PackNormal(Pbr.Normal);
+#endif
+#if defined(PROBE_UPDATE_STOCHASTIC_RAY_TRACING)
         Payload.HitMaterial = PackCachedMaterial(Pbr.Albedo, Pbr.Roughness);
 #endif
     }

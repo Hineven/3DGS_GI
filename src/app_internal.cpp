@@ -130,7 +130,7 @@ int AppInternal::Run () {
         scene_.UpdateSceneBounds();
 
         scene_.SetDirectionalLight(LightData{
-            glm::vec3(-4.f, 2.5, -1.f),
+            glm::normalize(glm::vec3(-4.f, 2.5, -1.f)),
             {}, {},
             {7.f, 4.5f, 4.f}
         });

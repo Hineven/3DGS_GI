@@ -213,8 +213,16 @@ Texture2D<float4>        g_FilteredIndirectIllumination;
 RWTexture2D<float4>      g_RW_Radiance;
 Texture2D<float4>        g_Radiance;
 Texture2D<float4>        g_HistoryRadiance;
-RWTexture2D<float4>      g_RW_HistoryRadianceWithoutEmission;
-Texture2D<float4>        g_HistoryRadianceWithoutEmission;
+RWTexture2D<float4>      g_RW_HistoryDiffuseRadianceWithoutEmission;
+Texture2D<float4>        g_HistoryDiffuseRadianceWithoutEmission;
+
+RWTexture2D<float4>        g_RWReflectionTexture;
+RWTexture2D<float4>        g_RWFilteredReflectionTexture;
+RWTexture2D<uint>          g_RWReflectionDirectionTexture;
+RWTexture2D<float4>        g_RWReflectionSTDRayDepthTexture;
+RWTexture2D<float4>        g_RWFilteredReflectionSTDRayDepthTexture;
+Texture2D<float4>          g_HistoryReflectionTexture;
+RWTexture2D<float4>        g_RWFallbackReflectionTexture;
 
 // ZDepth for regular meshes
 Texture2D<float>         g_RasterizationDepthTexture;

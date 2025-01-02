@@ -307,7 +307,8 @@ int Scene::LoadGltf (std::filesystem::path path) {
             mat = {
                 materials[material_index].albedo,
                 materials[material_index].roughness, // padding
-                materials[material_index].emissivity,
+                // FIXME
+                glm::vec3(0),//materials[material_index].emissivity,
                 0
             };
         } else {
@@ -427,6 +428,7 @@ void Scene::SetLight (LightType type, const LightData & LD, int index, int insta
 }
 
 void Scene::SetDirectionalLight(const LightData &light) {
+    assert(glm::abs(glm::length(light.V1) - 1.f) < 1e-3);
     SetLight(LightType::eDirectional, light, 0);
 }
 

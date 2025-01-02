@@ -135,6 +135,11 @@ struct UniformBlock {
     uint   II_NoTemporalDenoising;
     float  II_Denoiser_TargetNumSamples;
     float  II_SecondaryVertexNormalOffset;
+    float  II_SecondaryVertexRadianceClamping;
+
+    uint   Padding000x;
+    uint   Padding001x;
+    uint   Padding002x;
     uint   SSRC_ProbeFiltering;
 
     uint   SSRC_NoImportanceSampling;
@@ -163,6 +168,11 @@ struct UniformBlock {
     uint   HashGrids_MaxNumEntriesSearchedPerBucket;
     float2 PreviousTAAJitterUV;
 
+    float  Reflection_MaxRoughness;
+    float  Reflection_FilterRadius;
+    float  Reflection_InvFilterRadius2;
+    float  Paddingxxxx1;
+
     int    DepthFilterRadius;
     float  GaussianClampingScale;
     // Mesh cards will be allocated according to this value (world space size). 
@@ -175,10 +185,10 @@ struct UniformBlock {
     float  Card_GaussianClampingScale;
     float  TonemapExposure;
 
-    uint   NoDirectIllumination;
-    uint   NoIndirectIllumination;
+    uint   NoDirectDiffuseIllumination;
+    uint   NoIndirectDiffuseIllumination;
+    uint   NoReflection;
     float  SSRT_RayContinuationBackwardBiasFactor;
-    uint Padding000;
     
     float  LightingSkyRadianceLOD;
     uint   Debug_VisualizeLightGridCascade;
@@ -334,7 +344,7 @@ struct Card {
 
 #define LIGHT_GRID_MAX_NUM_CASCADES 4
 
-#define LIGHT_GRID_MAX_NUM_GRID_LIGHTS 16
+#define LIGHT_GRID_MAX_NUM_GRID_LIGHTS 8
 
 #define LIGHT_GRID_MAX_GRID_SIZE 32
 

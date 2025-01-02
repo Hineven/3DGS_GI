@@ -55,7 +55,7 @@ float4 HashGrids_RecoverRadianceSampleCount (uint4 QuantilizedRadiance) {
 float HashGrids_GetCellSize (float3 WorldPosition) {
     float Distance = distance(UB.HashGrids_Center, WorldPosition);
     float CellSize = max(UB.HashGrids_InvCascadeRadius * Distance * UB.HashGrids_CellSize, UB.HashGrids_CellSize);
-    uint  L2CellSize = uint(log2(CellSize));
+    int   L2CellSize = int(floor(log2(CellSize)));
     return exp2(L2CellSize);
 }
 
@@ -74,7 +74,7 @@ HashGridsKey HashGrids_GetEntryKey (float3 WorldPosition, float3 ViewDirection, 
     // should get different values than queries from outside of the box
     // TODO: seems unworthy...
     bool bWithinTile = false;//TraveledDistance < TileSize;
-    uint4 Features0 = uint4(asuint(TileIndex), log2(CellSize) + (bWithinTile ? 4 : 0));
+    uint4 Features0 = uint4(asuint(TileIndex), uint(max(0, 100 + floor(log2(CellSize)))) + (bWithinTile ? 200 : 0));
     float3 QuantilizedViewDirection = floor(0.5f + 4 * (ViewDirection * 0.5 + 0.5));
     uint3 Features1 = QuantilizedViewDirection;
     uint BucketHash = pcgHash(uint4(Features1, pcgHash(Features0)));
@@ -132,7 +132,29 @@ uint HashGrids_FindAndAllocate (uint BucketHash, out bool bIsNewSlot) {
     return BucketSlotIndex;
 }
 
+// Find a slot in the hash table
+// Return the slot index in the hash table.
+uint HashGrids_Find (uint BucketHash) {
+    uint BucketIndex = BucketHash % UB.HashGrids_NumBuckets;
+    int TileRank = 0, BucketSlotIndex = 0;
+    uint PrevBucketHash = 0;
+    [unroll(HASHGRIDS_MAX_NUM_ENTRIES_SEARCHED_PER_BUCKET)]
+    for(; TileRank < UB.HashGrids_MaxNumEntriesSearchedPerBucket; TileRank ++) {
+        BucketSlotIndex = BucketIndex * UB.HashGrids_NumInterleavedEntriesPerBucket + TileRank;
+        // Try to allocate a tile (if it is empty)
+        PrevBucketHash = g_HashGrids_BucketHashBuffer[BucketSlotIndex];
+        if(PrevBucketHash == BucketHash) {
+            break; // Found existing tile
+        }
+        if(PrevBucketHash == 0) {
+            break; // Not found, terminate the search
+        }
+    }
+    return (PrevBucketHash == BucketHash) ? BucketSlotIndex : INVALID_U32;
+}
+
 // Return the cell index to index int the value buffer
+// ViewDirection is the view direction "watching" the cell
 uint HashGrids_AllocateTile (float3 WorldPosition, float3 ViewDirection) {
     HashGridsKey Key = HashGrids_GetEntryKey(WorldPosition, ViewDirection);
     bool bIsNewSlot = false;

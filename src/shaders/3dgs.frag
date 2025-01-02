@@ -139,10 +139,19 @@ float4 TonemapAndDraw (float4 InPosition : SV_Position) : SV_Target {
     } else if(UB.DebugMode == 5) {
         float Alpha = g_GColorTexture.Sample(g_LinearClampSampler, UV).a;
         Color = float4(Alpha.xxx, 1);
-    } else if(UB.DebugMode == 6) {
+    } else if(UB.DebugMode == 8) {
 		float3 VColor = g_DebugTexture.Sample(g_LinearClampSampler, UV).rgb;
 		Color = float4(VColor, 1);
-	}
+	} else if(UB.DebugMode == 6) {
+        int2 Coords = int2(UV * UB.ScreenDimensions);
+        float3 Reflection = g_RWReflectionTexture[Coords].rgb;
+        Color = float4(Reflection, 1);
+    } else if(UB.DebugMode == 7) {
+        int2 Coords = int2(UV * UB.ScreenDimensions);
+        float3 Reflection = g_RWFallbackReflectionTexture[Coords].rgb;
+        Color = float4(Reflection, 1);
+
+    }
     return Color;
 }
 

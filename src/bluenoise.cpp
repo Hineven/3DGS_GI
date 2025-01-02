@@ -13,7 +13,7 @@ BlueNoiseSampler::BlueNoiseSampler(GfxContext gfx) noexcept {
 
 BlueNoiseSampler::~BlueNoiseSampler() noexcept
 {
-    Destroy();
+    // Destroy();
 }
 
 bool BlueNoiseSampler::Initialize()
