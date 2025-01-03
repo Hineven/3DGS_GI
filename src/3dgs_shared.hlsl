@@ -137,9 +137,9 @@ struct UniformBlock {
     float  II_SecondaryVertexNormalOffset;
     float  II_SecondaryVertexRadianceClamping;
 
-    uint   Padding000x;
-    uint   Padding001x;
-    uint   Padding002x;
+    float  FallbackReflection_Denoiser_TargetNumSamples;
+    float  Reflection_InvFilterRadius;
+    float  DI_InvFilterGaussianRadius;
     uint   SSRC_ProbeFiltering;
 
     uint   SSRC_NoImportanceSampling;
@@ -171,7 +171,7 @@ struct UniformBlock {
     float  Reflection_MaxRoughness;
     float  Reflection_FilterRadius;
     float  Reflection_InvFilterRadius2;
-    float  Paddingxxxx1;
+    uint   FallbackReflection_NoTemporalDenoising;
 
     int    DepthFilterRadius;
     float  GaussianClampingScale;

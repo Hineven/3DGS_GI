@@ -1004,11 +1004,11 @@ float GetFilterPositionWeight(float NeighborLinearDepth, float LinearDepth)
 
 float NormalWeight (float3 NormalA, float3 NormalB) {
 	return pow(saturate(dot(NormalA, NormalB)), 4);
-
 }
 
-float DilatedConvolutionKernelWeight (float2 Offset, float InvRadius2) {
-	return exp(-dot(Offset, Offset) * InvRadius2);
+float DilatedConvolutionKernelWeight (float2 Offset, float InvRadius, float InvRadius2) {
+	// Modified Gaussian kernel (radius is the standard deviation)
+	return (1.f / sqrt(TWO_PI)) * InvRadius * exp(-dot(Offset, Offset) * (0.5f * InvRadius2));
 }
 
 [numthreads(TILE_SIZE, TILE_SIZE, 1)]
@@ -1049,7 +1049,7 @@ void SpatialFilterDirectIllumination (uint2 DispatchID : SV_DispatchThreadID) {
 			float3 NeighborRadiance = Input.Load(int3(TexelCoords, 0)).rgb;
 			float Weight = GetFilterPositionWeight(NeighborLinearDepth, PixelLinearDepth);
 			Weight *= NormalWeight(PixelNormal, NeighborNormal);
-			float GaussianKernelWeight = DilatedConvolutionKernelWeight(Offset, UB.DI_InvFilterGaussianRadius2);
+			float GaussianKernelWeight = DilatedConvolutionKernelWeight(Offset, UB.DI_InvFilterGaussianRadius, UB.DI_InvFilterGaussianRadius2);
 			Weight = min(Weight, GaussianKernelWeight);
 			Weight *= bIsNeightborTransparent ? 0 : 1;
 
@@ -1898,8 +1898,7 @@ void SSRC_ResolveHitLightingFromScreenHistory (uint DispatchID : SV_DispatchThre
 			// primary vertex to secondary vertex is less than hash grid cell size.
 			// (Avoid light leaking though cache filtering)
 			float CellSize = HashGrids_GetCellSize(Ray.Origin);
-			// FIXME
-			if(true || Ray.RayTMin < CellSize) {
+			if(Ray.RayTMin < CellSize) {
 				ProbeUpdateRayResult Result = FetchProbeUpdateRayResult(RayIndex);
 				Result.bBypass = true;
 				WriteProbeUpdateRayResult(RayIndex, Result);
@@ -2009,7 +2008,7 @@ void SSRC_SampleLightRays (uint DispatchID : SV_DispatchThreadID) {
 		// Okay we have a sample for each pixel. Now encode a shadow ray for visibility testing.
 		// Calculate the real sample contribution. (Picking 1 single light from a bunch of lights)
 		ReservedSample.Radiance *= GridReservoirWeight * SumResampleWeights /
-			ReservedSample.Pdf * SampledLightResampleWeight;
+			(ReservedSample.Pdf * SampledLightResampleWeight);
 
 		// Spawn shadow ray
 		float3 NewRayDirection = 0;
@@ -2069,16 +2068,16 @@ void SSRC_ClearNewHashGridTileCells (uint GroupID : SV_GroupID, uint LocalID : S
 	uint TileIndex = g_HashGrids_ActiveTileListBuffer[GroupID + g_HashGrids_ActiveTileCountBeforeAllocationBuffer[0]];
 	uint Start = TileIndex * HASHGRIDS_NUM_CELLS_PER_TILE * 2;
 	for(int BaseCellOffset = 0; BaseCellOffset < (HASHGRIDS_NUM_CELLS_PER_TILE * 2); BaseCellOffset += WAVE_SIZE) {
-		int DWordIndex = Start + BaseCellOffset + LocalID;
+		int DWordIndex = BaseCellOffset + LocalID;
 		if(DWordIndex < (HASHGRIDS_NUM_CELLS_PER_TILE * 2)) {
-			g_HashGrids_CellValueBuffer[DWordIndex] = 0;
+			g_HashGrids_CellValueBuffer[Start + DWordIndex] = 0;
 		}
 	}
 	Start = TileIndex * HASHGRIDS_TILE_CELL_MIP_OFFSET_1 * 4;
 	for(int BaseCellOffset = 0; BaseCellOffset < (HASHGRIDS_TILE_CELL_MIP_OFFSET_1 * 4); BaseCellOffset += WAVE_SIZE) {
-		int DWordIndex = Start + BaseCellOffset + LocalID;
+		int DWordIndex = BaseCellOffset + LocalID;
 		if(DWordIndex < (HASHGRIDS_TILE_CELL_MIP_OFFSET_1 * 4)) {
-			g_HashGrids_UpdateCellValueXBuffer[DWordIndex] = 0;
+			g_HashGrids_UpdateCellValueXBuffer[Start + DWordIndex] = 0;
 		}
 	}
 }
@@ -2112,7 +2111,7 @@ void SSRC_ResolveHitDirectLightingFromTraceResult (uint DispatchID : SV_Dispatch
 	if(!IsInvalid(HashCellIndex)) {
 		uint CompactCellIndex = HashGrids_CellIndexToCompactCellIndex(HashCellIndex);
 		// Clamp the outliers (due to inadequate light sampling)
-		Radiance = clamp(Radiance, 0, UB.II_SecondaryVertexRadianceClamping);
+		// Radiance = clamp(Radiance, 0, UB.II_SecondaryVertexRadianceClamping);
 		HashGrids_AccumulateSamplesToCell(CompactCellIndex, Radiance, 1);
 	}
 	// Bypass the hash grid cache for the probe update ray if required
@@ -2856,8 +2855,7 @@ void SSRC_Integrate (int2 GroupID : SV_GroupID, int LocalID : SV_GroupThreadID) 
 			float3 DirectIrradiance = GetRWDirectIlluminationTexture(C)[TexCoords].xyz;
 			// Approximate hemispherical incoming radiance by assuming it's a constant.
 			float3 DirectRadiance   = DirectIrradiance / PI;
-			// FIXME too noisy
-			// FallbackReflection.rgb += DirectRadiance;
+			FallbackReflection.rgb += DirectRadiance;
 			FallbackReflection.w   = 1;
 		} else {
             GetRWIndirectIlluminationTexture(C)[TexCoords] = 0.f.xxxx;
@@ -3012,9 +3010,9 @@ void SpatialFilterReflection (uint2 DispatchID : SV_DispatchThreadID) {
 	if(IsOutOfFilm(C, DispatchID)) return;
 	int2 PixelCoords = int2(DispatchID);
 	float3 Radiance = g_RWReflectionTexture[PixelCoords].xyz;
-	float  LinearDepth    = GetFilteredDepthTexture(C).Load(int3(PixelCoords, 0)).x;
+	float  LinearDepth = GetFilteredDepthTexture(C).Load(int3(PixelCoords, 0)).x;
 	if(LinearDepth == 0) return; // Transparent
-	float3 ViewDirection = NDC2ToCameraDirection(C, ScreenToNDC2(PixelCoords));
+	float3 ViewDirection = -NDC2ToCameraDirection(C, ScreenToNDC2(PixelCoords));
 	Material M = FetchMaterial(C, PixelCoords);
 	float RoughnessAlpha = squared(M.Roughness);
 	float3 Tangent, Bitangent;
@@ -3048,7 +3046,7 @@ void SpatialFilterReflection (uint2 DispatchID : SV_DispatchThreadID) {
 				float  DotNH                           = dot(M.Normal, HalfVector);
 				float  DotNV                           = dot(M.Normal, ViewDirection);
 				float  PdfWeight = sampleGGXPDF(RoughnessAlpha, DotNH, DotNV, LocalViewDirection);
-				float  GaussianWeight = DilatedConvolutionKernelWeight(Offset, UB.Reflection_InvFilterRadius2);
+				float  GaussianWeight = DilatedConvolutionKernelWeight(Offset, UB.Reflection_InvFilterRadius, UB.Reflection_InvFilterRadius2);
 				float  Weight = DepthWeight * PdfWeight * GaussianWeight * NeighborRadiance.w;
 				SumReflection += NeighborRadiance.rgb * Weight;
 #if FILTER_PASS == 0
@@ -3093,7 +3091,7 @@ void TemporalDenoiseReflection (uint2 DispatchID : SV_DispatchThreadID) {
 	float3 HitNDC   = float3(ScreenToNDC2(ScreenPosition), LinearToZDepth(C, HitLinearDepth));
 	float3 PreviousWorldNDC = ReprojectToPreviousNDCFromNDC(C, WorldNDC);
 	float3 PreviousHitNDC   = ReprojectToPreviousNDCFromNDC(C, HitNDC);
-	float3 ViewDirection = NDC2ToCameraDirection(C, WorldNDC.xy);
+	float3 ViewDirection = -NDC2ToCameraDirection(C, WorldNDC.xy);
 	float3 Normal = normalize(GetNormalTexture(C).Load(int3(PixelCoords, 0)).xyz - 0.5);
 	float4 OldWorldReflection = 0;
 	float4 OldHitReflection   = 0;
@@ -3216,6 +3214,7 @@ void TemporalDenoiseReflection (uint2 DispatchID : SV_DispatchThreadID) {
 	}
 	// Clamping and blending
 	float4 NewReflection        = g_RWReflectionTexture[PixelCoords];
+	NewReflection.a = min(NewReflection.a, 1.f); // Clamp to 1
 	float4 DenoisedReflection   = 0;
 	{
         float  luminance_diff_scale = -1e2f * exp2(UB.TonemapExposure);
@@ -3226,16 +3225,19 @@ void TemporalDenoiseReflection (uint2 DispatchID : SV_DispatchThreadID) {
 			HistoryHitW = 1;
 			HistoryWorldW = 1;
 		}
-		float  dual_weight   = max(HistoryHitW + HistoryWorldW, 1e-7f);
+		// FIXME
+		HistoryHitW = 0;
+		HistoryWorldW = 1;
+		float  DualWeight    = max(HistoryHitW + HistoryWorldW, 1e-7f);
 		float3 NeighborSTD   = STDRayDepth.xyz;
 		float  Scale = 1.f;
 		float3 NeighborMin   = NewReflection.rgb - NeighborSTD * Scale;
 		float3 NeighborMax   = NewReflection.rgb + NeighborSTD * Scale;
-        float3 dual_color           = (HistoryHitW * clamp(OldHitReflection.rgb,     NeighborMin, NeighborMax) +
-                                       HistoryWorldW * clamp(OldWorldReflection.rgb, NeighborMin, NeighborMax)) / dual_weight;
-        float  dual_count           = (HistoryHitW * OldHitReflection.w + HistoryWorldW * OldWorldReflection.w) / dual_weight;
+        float3 DualColor     = (HistoryHitW * clamp(OldHitReflection.rgb, NeighborMin, NeighborMax) +
+                                HistoryWorldW * clamp(OldWorldReflection.rgb, NeighborMin, NeighborMax)) / DualWeight;
+        float  DualCount     = (HistoryHitW * OldHitReflection.w + HistoryWorldW * OldWorldReflection.w) / DualWeight;
 		// Pre-multiply the sample count for later blending
-		DenoisedReflection = float4(dual_color * dual_count, dual_count);
+		DenoisedReflection = float4(DualColor * DualCount, DualCount);
 	}
 
 	DenoisedReflection += NewReflection;
@@ -3252,8 +3254,10 @@ void TemporalDenoiseReflection (uint2 DispatchID : SV_DispatchThreadID) {
 		DenoisedReflection.rgb *= Factor;
 		DenoisedReflection.a = MaxSampleCount;
 	}
-	// FIXME
-	g_RWReflectionTexture[PixelCoords] = NewReflection;//float4(DenoisedReflection.rgb / max(DenoisedReflection.a, 1e-6f), DenoisedReflection.a);
+	g_RWReflectionTexture[PixelCoords] = float4(
+		DenoisedReflection.rgb / max(DenoisedReflection.a, 0.5f), // A larger divisor to prevent fireflies
+		 DenoisedReflection.a
+	);
 }
 
 [numthreads(TILE_SIZE, TILE_SIZE, 1)]
@@ -3269,14 +3273,16 @@ void TemporalDenoiseLighting (uint2 DispatchID : SV_DispatchThreadID) {
 	float2 ScreenPosition = PixelCoords + 0.5f.xx;
 	float3 NDC = float3(ScreenToNDC2(ScreenPosition), PixelZDepth);
 	float3 PreviousNDC  = ReprojectToPreviousNDCFromNDC(C, NDC);
-	float3 ViewDirection = NDC2ToCameraDirection(C, NDC.xy);
+	float3 ViewDirection = -NDC2ToCameraDirection(C, NDC.xy);
 	float4 NewDirectIllumination_C  = GetDirectIlluminationTexture(C).Load(int3(PixelCoords, 0));
 	float4 NewIndirectIllumination_Diffuse_C = GetIndirectIlluminationTexture(C).Load(int3(PixelCoords, 0));
+	float4 NewFallbackReflection = g_RWFallbackReflectionTexture[PixelCoords];
 	// TODO: the normal should be a low frequency one.
 	// here the normal is not denoised. Maybe we should use the denoised normal.
 	float3 GeometryNormal = normalize(GetNormalTexture(C).Load(int3(PixelCoords, 0)).xyz - 0.5);
 	float4 DenoisedDI = NewDirectIllumination_C;
 	float4 DenoisedII_Diffuse = NewIndirectIllumination_Diffuse_C;
+	float4 DenoisedFallbackReflection = NewFallbackReflection;
 	if(all(PreviousNDC.xy >= -1) && all(PreviousNDC.xy <= 1)) {
 		float2 PreviousScreenPosition = NDC2ToScreen(PreviousNDC.xy);
 		// Make sure the billinear weights are consistent with gathered texels
@@ -3309,6 +3315,7 @@ void TemporalDenoiseLighting (uint2 DispatchID : SV_DispatchThreadID) {
 
 		float3 OldDirectIllumination = 0.f;
 		float3 OldIndirectIllumination_Diffuse = 0.f;
+		float3 OldFallbackReflection = 0.f;
 		Texture2D<float4> HistoryDI = GetHistoryDirectIlluminationTexture(C);
 		Texture2D<float4> HistoryII_Diffuse = GetHistoryIndirectIlluminationTexture(C);
 		{
@@ -3327,9 +3334,18 @@ void TemporalDenoiseLighting (uint2 DispatchID : SV_DispatchThreadID) {
 			float3 R11 = HistoryII_Diffuse.SampleLevel(g_PointClampSampler, BaseUV + C.FilmTexelSize, 0).rgb;
 			OldIndirectIllumination_Diffuse = R00 * Weights.x + R10 * Weights.y + R01 * Weights.z + R11 * Weights.w;
 		}
+			{
+			float2 BaseUV = ScreenToUV(HistoryBillinearPixel + 0.5f);
+			float3 R00 = g_HistoryFallbackReflectionTexture.SampleLevel(g_PointClampSampler, BaseUV, 0).rgb;
+			float3 R10 = g_HistoryFallbackReflectionTexture.SampleLevel(g_PointClampSampler, BaseUV + float2(C.FilmTexelSize.x, 0), 0).rgb;
+			float3 R01 = g_HistoryFallbackReflectionTexture.SampleLevel(g_PointClampSampler, BaseUV + float2(0, C.FilmTexelSize.y), 0).rgb;
+			float3 R11 = g_HistoryFallbackReflectionTexture.SampleLevel(g_PointClampSampler, BaseUV + C.FilmTexelSize, 0).rgb;
+			OldFallbackReflection = R00 * Weights.x + R10 * Weights.y + R01 * Weights.z + R11 * Weights.w;
+		}
 
 		float4 HistorySampleCounts_DI = HistoryDI.GatherAlpha(g_PointClampSampler, HistoryGatherUV).wzxy;
 		float4 HistorySampleCounts_II_Diffuse = HistoryII_Diffuse.GatherAlpha(g_PointClampSampler, HistoryGatherUV).wzxy;
+		float4 HistorySampleCounts_FallbackReflection = g_HistoryFallbackReflectionTexture.GatherAlpha(g_PointClampSampler, HistoryGatherUV).wzxy;
 		{
 			float NewSampleCount_DI = NewDirectIllumination_C.a;
 			float OldSampleCount = dot(HistorySampleCounts_DI * Weights, 1.f.xxxx);
@@ -3358,14 +3374,29 @@ void TemporalDenoiseLighting (uint2 DispatchID : SV_DispatchThreadID) {
 				SampleCount
 			);
 		}
+		{
+			float NewSampleCount_FallbackReflection = NewFallbackReflection.a;
+			float OldSampleCount = dot(HistorySampleCounts_FallbackReflection * Weights, 1.f.xxxx);
+			if(UB.FallbackReflection_NoTemporalDenoising) {
+				OldSampleCount = 0;
+			}
+			float ClampedOldSampleCount = min(OldSampleCount, max(UB.FallbackReflection_Denoiser_TargetNumSamples - NewSampleCount_FallbackReflection, 0));
+			float SampleCount = ClampedOldSampleCount + NewSampleCount_FallbackReflection;
+			float BlendingFactor = ClampedOldSampleCount / max(SampleCount, 1e-4f);
+			DenoisedFallbackReflection = float4(
+				lerp(NewFallbackReflection.rgb, OldFallbackReflection, BlendingFactor),
+				SampleCount
+			);
+		}
 	}
 	// Store the results back to the direct illumination buffer
 	GetRWFilteredDirectIlluminationTexture(C)[PixelCoords] = DenoisedDI;
 	GetRWFilteredIndirectIlluminationTexture(C)[PixelCoords] = DenoisedII_Diffuse;
+	g_RWFallbackReflectionTexture[PixelCoords] = DenoisedFallbackReflection;
 }
 
 // Temporal denoised DI and II are copied back to the DI & II buffers
-
+ 
 [numthreads(TILE_SIZE, TILE_SIZE, 1)]
 void FinalComposition (uint2 DispatchID : SV_DispatchThreadID) {
 	CameraDescription C = GetCameraDescription();

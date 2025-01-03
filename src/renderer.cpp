@@ -459,23 +459,27 @@ void Renderer::Render() {
 
         REGISTER_CVAR(UB.DI_FilterGaussianRadius, "Direct illumination spatial filter gaussian kernel multiplier.", 2.8f, 0.5f, 4.f);
         UB.DI_InvFilterGaussianRadius2 = 1.f / (UB.DI_FilterGaussianRadius * UB.DI_FilterGaussianRadius);
+        UB.DI_InvFilterGaussianRadius = 1.f / UB.DI_FilterGaussianRadius;
 
         REGISTER_CVAR(UB.DI_Denoiser_DepthThreshold, "Direct illumination relative depth difference threshold for depth occlusion rejection", 1e-3f);
         REGISTER_CVAR(UB.DI_NoTemporalDenoising, "Disable temporal denoising for direct illumination.", false);
 
         REGISTER_CVAR(UB.DI_NoSpatialDenoising, "Disable spatial denoising for direct illumination.", false);
-        REGISTER_CVAR(UB.DI_Denoiser_TargetNumSamples, "The target number of samples to achieve for direct illumination denoising.", 192, 1, 256);
+        REGISTER_CVAR(UB.DI_Denoiser_TargetNumSamples, "The target number of samples to achieve for direct illumination denoising.", 64, 1, 256);
 
         REGISTER_CVAR(UB.II_NoTemporalDenoising, "Disable temporal denoising for indirect illumination.", false);
-        REGISTER_CVAR(UB.II_Denoiser_TargetNumSamples, "The target number of samples to achieve for indirect illumination denoising.", 20, 1, 64);
+        REGISTER_CVAR(UB.II_Denoiser_TargetNumSamples, "The target number of samples to achieve for indirect illumination denoising.", 16, 1, 64);
         REGISTER_CVAR(UB.II_SecondaryVertexNormalOffset, "Offset along the normal of the secondary vertex when spawning shadow rays for direct illumination.", 1e-2f, 0.f, 0.5f);
         REGISTER_CVAR(UB.II_SecondaryVertexRadianceClamping, "Clamp radiance values of secondary vertices for indirect illumination. "
                                                              "Excluding outliers.", 100.f, 1.f, 200.f);
+
+        REGISTER_CVAR(UB.FallbackReflection_Denoiser_TargetNumSamples, "The target number of samples to achieve for fallback reflection denoising.", 16, 1, 64);
+
         REGISTER_CVAR(UB.SSRC_ProbeFiltering, "Enable probe filtering for SSRC.", true);
 
         REGISTER_CVAR(UB.SSRC_NoImportanceSampling, "Disable importance sampling for SSRC.", false);
         UB.SSRC_NumUniformScreenProbes = UB.TileDimensions.x * UB.TileDimensions.y;
-        REGISTER_CVAR(UB.SSRC_BaseUpdateRayWaves, "Number of probe update rays allocated for each probe, in waves.", 1, 1, SSRC_MAX_NUM_UPDATE_RAY_PER_PROBE / cfg_.wave_lane_count);
+        REGISTER_CVAR(UB.SSRC_BaseUpdateRayWaves, "Number of probe update rays allocated for each probe, in waves.", 1, 2, SSRC_MAX_NUM_UPDATE_RAY_PER_PROBE / cfg_.wave_lane_count);
         REGISTER_CVAR(UB.SSRC_ResetCache, "Reset SSRC probes at the begging of each frame.", false);
 
         UB.SSRC_MaxNumAdaptiveProbes = options_.SSRC_max_num_probes - UB.SSRC_NumUniformScreenProbes;
@@ -502,10 +506,11 @@ void Renderer::Render() {
         REGISTER_CVAR(UB.HashGrids_MaxNumEntriesSearchedPerBucket, "Maximum number of entries to search when query hash table for a tile.", 8, 1, HASHGRIDS_MAX_NUM_ENTRIES_SEARCHED_PER_BUCKET);
         UB.PreviousTAAJitterUV = history_UB_.TAAJitterUV;
 
-        // FIXME
-        REGISTER_CVAR(UB.Reflection_MaxRoughness, "Maximum roughness to spawn reflection rays.", 1.f);
+        REGISTER_CVAR(UB.Reflection_MaxRoughness, "Maximum roughness to spawn reflection rays.", 0.4f);
         REGISTER_CVAR(UB.Reflection_FilterRadius, "Gaussian filter radius for spatial reflection denoising.", 3.f, 1, 7);
         UB.Reflection_InvFilterRadius2 = 1.f / (UB.Reflection_FilterRadius * UB.Reflection_FilterRadius);
+        UB.Reflection_InvFilterRadius = 1.f / UB.Reflection_FilterRadius;
+        REGISTER_CVAR(UB.FallbackReflection_NoTemporalDenoising, "Disable temporal denoising for fallback reflection.", false);
 
         REGISTER_CVAR(UB.DepthFilterRadius, "Filter radius for depth reconstruction.", 1, 0, 3);
         REGISTER_CVAR(UB.GaussianClampingScale, "Magic number for clamping the gaussian 2D eigen value to a minimum value.",
@@ -762,7 +767,8 @@ void Renderer::Render() {
     gfxProgramSetParameter(gfx, program_, "g_RWReflectionSTDRayDepthTexture", tex_.reflection_STD_ray_depth);
     gfxProgramSetParameter(gfx, program_, "g_RWFilteredReflectionSTDRayDepthTexture", tex_.filtered_reflection_STD_ray_depth);
     gfxProgramSetParameter(gfx, program_, "g_HistoryReflectionTexture", tex_.reflection[(frame_index_ + 1) & 1]);
-    gfxProgramSetParameter(gfx, program_, "g_RWFallbackReflectionTexture", tex_.fallback_reflection);
+    gfxProgramSetParameter(gfx, program_, "g_RWFallbackReflectionTexture", tex_.fallback_reflection[frame_index_ & 1]);
+    gfxProgramSetParameter(gfx, program_, "g_HistoryFallbackReflectionTexture", tex_.fallback_reflection[(frame_index_ + 1) & 1]);
 
     // Cards
     gfxProgramSetParameter(gfx, program_, "g_CardSets", buf_.card_sets);

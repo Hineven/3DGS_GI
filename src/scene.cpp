@@ -307,8 +307,7 @@ int Scene::LoadGltf (std::filesystem::path path) {
             mat = {
                 materials[material_index].albedo,
                 materials[material_index].roughness, // padding
-                // FIXME
-                glm::vec3(0),//materials[material_index].emissivity,
+                materials[material_index].emissivity,
                 0
             };
         } else {
@@ -474,7 +473,6 @@ void Scene::UpdateBoundsForInstance (int instance) {
         for (int j = gsi_gs_index_offsets_[instance]; j < gsi_gs_index_offsets_[instance] + gsi_gs_counts_[instance]; j++) {
             auto & pos = gs_positions_[j];
             auto & scale = gs_scales_[j];
-            // TODO consider rotation
             float mscale = glm::max(scale.x, glm::max(scale.y, scale.z));
             auto mn = pos - mscale * scale_multiplier;
             auto mx = pos + mscale * scale_multiplier;

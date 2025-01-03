@@ -211,7 +211,7 @@ protected:
         GfxTexture reflection_direction;
         GfxTexture reflection_STD_ray_depth;
         GfxTexture filtered_reflection_STD_ray_depth;
-        GfxTexture fallback_reflection;
+        GfxTexture fallback_reflection[2];
 
         // RGBA8 (max card res)
         GfxTexture card_workspace_color_alpha;

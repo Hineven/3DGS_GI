@@ -95,7 +95,8 @@ int AppInternal::Run () {
         auto inst_x = scene_.LoadGaussians(root_path + "data/family/point_cloud/iteration_50000/point_cloud.ply", true);
         // auto inst_y = scene_.DuplicateInstance(inst_x);
         auto inst_z = scene_.LoadGaussians(root_path + "data/chair/point_cloud/iteration_50000/point_cloud.ply", true);
-        auto isnt_w = scene_.LoadGltf(root_path + "data/lighting_room/scene.gltf");
+        auto inst_w = scene_.LoadGltf(root_path + "data/lighting_room/scene.gltf");
+        // auto inst_nerf_chair = scene_.LoadGaussians(root_path + "data/nerf_chair/point_cloud/iteration_40000/point_cloud.ply", true);
         // scene_.LoadGaussians(root_path + "data/single_truck/point_cloud/iteration_50000/point_cloud.ply", true);
         // scene_.LoadGaussians(root_path + "data/caterpillar/point_cloud/iteration_50000/point_cloud.ply", true);
         // scene_.LoadGaussians(root_path + "data/chair/point_cloud/iteration_50000/point_cloud.ply", true);

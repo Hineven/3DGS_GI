@@ -223,6 +223,8 @@ RWTexture2D<float4>        g_RWReflectionSTDRayDepthTexture;
 RWTexture2D<float4>        g_RWFilteredReflectionSTDRayDepthTexture;
 Texture2D<float4>          g_HistoryReflectionTexture;
 RWTexture2D<float4>        g_RWFallbackReflectionTexture;
+Texture2D<float4>          g_HistoryFallbackReflectionTexture;
+
 
 // ZDepth for regular meshes
 Texture2D<float>         g_RasterizationDepthTexture;

@@ -300,8 +300,10 @@ bool Renderer::CreateResources () {
     tex_.reflection_STD_ray_depth.setName("ReflectionSTDRayDepth");
     tex_.filtered_reflection_STD_ray_depth = gfxCreateTexture2D(gfx, width, height, DXGI_FORMAT_R16G16B16A16_FLOAT, 1, zero_clear_value);
     tex_.filtered_reflection_STD_ray_depth.setName("FilteredReflectionSTDRayDepth");
-    tex_.fallback_reflection = gfxCreateTexture2D(gfx, width, height, DXGI_FORMAT_R16G16B16A16_FLOAT, 1, zero_clear_value);
-    tex_.fallback_reflection.setName("FallbackReflection");
+    tex_.fallback_reflection[0] = gfxCreateTexture2D(gfx, width, height, DXGI_FORMAT_R16G16B16A16_FLOAT, 1, zero_clear_value);
+    tex_.fallback_reflection[0].setName("FallbackReflection0");
+    tex_.fallback_reflection[1] = gfxCreateTexture2D(gfx, width, height, DXGI_FORMAT_R16G16B16A16_FLOAT, 1, zero_clear_value);
+    tex_.fallback_reflection[1].setName("FallbackReflection1");
 
     tex_.card_workspace_color_alpha = gfxCreateTexture2D(gfx, MAX_CARD_RESOLUTION, MAX_CARD_RESOLUTION, DXGI_FORMAT_R8G8B8A8_UNORM, 1, zero_clear_value);
     tex_.card_workspace_color_alpha.setName("CardWorkspaceColorAlpha");
@@ -485,7 +487,8 @@ void Renderer::DestroyResources() {
     gfxDestroyTexture(gfx, tex_.reflection_direction);
     gfxDestroyTexture(gfx, tex_.reflection_STD_ray_depth);
     gfxDestroyTexture(gfx, tex_.filtered_reflection_STD_ray_depth);
-    gfxDestroyTexture(gfx, tex_.fallback_reflection);
+    gfxDestroyTexture(gfx, tex_.fallback_reflection[0]);
+    gfxDestroyTexture(gfx, tex_.fallback_reflection[1]);
 
     gfxDestroyTexture(gfx, tex_.card_atlas_color);
     gfxDestroyTexture(gfx, tex_.card_atlas_alpha);
