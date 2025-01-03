@@ -194,11 +194,11 @@ void Renderer::RenderUI () {
                 is_instance_active_[i] = bv;
                 InstanceTransform model = scene.GetInstanceTransform(i);
                 bool changed = false;
-                changed |= ImGui::InputFloat3("Position", &model.position.x);
+                changed |= ImGui::SliderFloat3("Position", &model.position.x, -2.5f, 2.5f);
                 model.rotation = glm::degrees(model.rotation);
                 changed |= ImGui::SliderFloat3("Rotation", &model.rotation.x, -180, 180);
                 model.rotation = glm::radians(model.rotation);
-                changed |= ImGui::InputFloat3("Scale", &model.scale.x);
+                changed |= ImGui::SliderFloat3("Scale", &model.scale.x, 0.01f, 2.5f);
                 if (changed) {
                     scene.SetInstanceTransform(i, model);
                     should_update_transforms_ = true;
@@ -390,7 +390,7 @@ void Renderer::Render() {
 
         float MaxTraceDistance = camera.far;
         REGISTER_CVAR(UB.HWRT_StochasticRayTracingQuality, "The quality of stochastic ray tracing."
-                                                           "Lower values bring more biased but faster results.", 0.2f, 0.0f, 1.0f);
+                                                           "Lower values bring more biased but faster results.", 0.1f, 0.0f, 1.0f);
         UB.RT_MaxTraceDistance              = MaxTraceDistance;
         REGISTER_CVAR(UB.SSRT_MaxTraceDistance, "Normally, SSRT just helps to solve near field occlusions."
         "Due to the depth bias in rasterization, SSRT in 3DGS is not as reliable as it is in regular context.",
