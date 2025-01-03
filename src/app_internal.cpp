@@ -146,6 +146,13 @@ int AppInternal::Run () {
             scene_.SetInstanceTransform(inst_air_baloons, {position, rotation, scale});
         }
 
+        {
+            glm::vec3 position = glm::vec3(0.848, -0.860, -0.796);
+            glm::vec3 rotation = glm::radians(glm::vec3(0, -141, 0));
+            glm::vec3 scale = glm::vec3(0.7, 0.7, 0.7);
+            scene_.SetInstanceTransform(inst_single_truck, {position, rotation, scale});
+        }
+
         scene_.UpdateSceneBounds();
 
         scene_.SetDirectionalLight(LightData{

@@ -465,7 +465,7 @@ void Renderer::Render() {
         REGISTER_CVAR(UB.DI_NoTemporalDenoising, "Disable temporal denoising for direct illumination.", false);
 
         REGISTER_CVAR(UB.DI_NoSpatialDenoising, "Disable spatial denoising for direct illumination.", false);
-        REGISTER_CVAR(UB.DI_Denoiser_TargetNumSamples, "The target number of samples to achieve for direct illumination denoising.", 64, 1, 256);
+        REGISTER_CVAR(UB.DI_Denoiser_TargetNumSamples, "The target number of samples to achieve for direct illumination denoising.", 96, 1, 256);
 
         REGISTER_CVAR(UB.II_NoTemporalDenoising, "Disable temporal denoising for indirect illumination.", false);
         REGISTER_CVAR(UB.II_Denoiser_TargetNumSamples, "The target number of samples to achieve for indirect illumination denoising.", 16, 1, 64);
@@ -524,6 +524,9 @@ void Renderer::Render() {
                                                      "(upon rendering meshcards).",
             1e-3f);
         REGISTER_CVAR(UB.TonemapExposure, "Exposure", 1.0f, 0.1f, 10.0f);
+
+        REGISTER_CVAR(UB.Denoiser_Reflection_MaxSampleCount, "Maximum number of temporal samples to accumulate when denoising reflections.", 10, 1, 64);
+        REGISTER_CVAR(UB.Reflection_MaxSampleRoughness, "We want ray directions to be consistent when tracing reflection rays, so we clamp the roughness of the material", 0.1f, 0.001f, 1.f);
 
         REGISTER_CVAR(UB.NoDirectDiffuseIllumination, "Disable diffuse direct illumination in final composition.", false);
         REGISTER_CVAR(UB.NoIndirectDiffuseIllumination, "Disable diffuse indirect illumination in final composition.", false);

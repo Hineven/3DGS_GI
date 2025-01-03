@@ -185,6 +185,11 @@ struct UniformBlock {
     float  Card_GaussianClampingScale;
     float  TonemapExposure;
 
+    float  Denoiser_Reflection_MaxSampleCount;
+    float  Reflection_MaxSampleRoughness;
+    uint   Paddingxxx1;
+    uint   Paddingxxx2;
+
     uint   NoDirectDiffuseIllumination;
     uint   NoIndirectDiffuseIllumination;
     uint   NoReflection;

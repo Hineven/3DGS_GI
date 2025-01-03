@@ -2852,10 +2852,6 @@ void SSRC_Integrate (int2 GroupID : SV_GroupID, int LocalID : SV_GroupThreadID) 
             } else {
                 GetRWIndirectIlluminationTexture(C)[TexCoords] = 0.f.xxxx;
             }
-			float3 DirectIrradiance = GetRWDirectIlluminationTexture(C)[TexCoords].xyz;
-			// Approximate hemispherical incoming radiance by assuming it's a constant.
-			float3 DirectRadiance   = DirectIrradiance / PI;
-			FallbackReflection.rgb += DirectRadiance;
 			FallbackReflection.w   = 1;
 		} else {
             GetRWIndirectIlluminationTexture(C)[TexCoords] = 0.f.xxxx;
@@ -2892,8 +2888,7 @@ void SpawnReflectionRays (uint2 DispatchID : SV_DispatchThreadID) {
 			);
 			float2 U  = BlueNoise_Sample2D(PixelCoords, UB.FrameIndex, 3);
 			float  U3 = BlueNoise_Sample1D(PixelCoords, UB.FrameIndex, 5);
-			// FIXME	
-			M.Roughness = 0.0001f;
+			M.Roughness = min(M.Roughness, UB.Reflection_MaxSampleRoughness);
 			float3 LocalLightDirection = sampleGGX(squared(M.Roughness), LocalView, U);
 			float3 LightDirection = Tangent * LocalLightDirection.x + Bitangent * LocalLightDirection.y
 				+ Normal * LocalLightDirection.z;
@@ -3163,7 +3158,7 @@ void TemporalDenoiseReflection (uint2 DispatchID : SV_DispatchThreadID) {
 		float2 HistoryBillinearPixel = floor(HistoryBillinearPos);
 		float2 HistoryGatherUV = (HistoryBillinearPixel + 1.f) * C.InvFilmDimensions;
 		float4 HistoryZDepths = GetHistoryZDepthTexture(C).GatherRed(g_PointClampSampler, HistoryGatherUV).wzxy;
-		float  PrevLinearDepth = ZDepthToLinear(C, PreviousHitNDC.z);
+		float  PrevLinearDepth = WorldLinearDepth; // Just reuse current frame's depth
 		float4 HistoryLinearDepths = float4(
 			ZDepthToLinear(C, HistoryZDepths.x),
 			ZDepthToLinear(C, HistoryZDepths.y),
@@ -3217,17 +3212,14 @@ void TemporalDenoiseReflection (uint2 DispatchID : SV_DispatchThreadID) {
 	NewReflection.a = min(NewReflection.a, 1.f); // Clamp to 1
 	float4 DenoisedReflection   = 0;
 	{
-        float  luminance_diff_scale = -1e2f * exp2(UB.TonemapExposure);
-	    float  HistoryHitW   = (OldHitReflection.a   > 1e-1f ? 1.f : 0.f) * saturate(exp2(luminance_diff_scale * luminance(OldHitReflection.rgb   - NewReflection.rgb)));
-        float  HistoryWorldW = (OldWorldReflection.a > 1e-1f ? 1.f : 0.f) * saturate(exp2(luminance_diff_scale * luminance(OldWorldReflection.rgb - NewReflection.rgb)));
+        float  luminance_diff_scale = 1e-2f * exp2(UB.TonemapExposure);
+	    float  HistoryHitW   = OldHitReflection.a * saturate(exp2(-luminance_diff_scale * luminance(OldHitReflection.rgb - NewReflection.rgb)));
+        float  HistoryWorldW = OldWorldReflection.a * saturate(exp2(-luminance_diff_scale * luminance(OldWorldReflection.rgb - NewReflection.rgb)));
         if(NewReflection.w < 1e-1f) {
 			// Insufficient new samples found, drop dual blending heuristics from local reflection distribution
 			HistoryHitW = 1;
 			HistoryWorldW = 1;
 		}
-		// FIXME
-		HistoryHitW = 0;
-		HistoryWorldW = 1;
 		float  DualWeight    = max(HistoryHitW + HistoryWorldW, 1e-7f);
 		float3 NeighborSTD   = STDRayDepth.xyz;
 		float  Scale = 1.f;
@@ -3247,7 +3239,7 @@ void TemporalDenoiseReflection (uint2 DispatchID : SV_DispatchThreadID) {
 		float2 UV = (PixelCoords + 0.5f) / UB.ScreenDimensions;
 		float2 EdgeDistances = UV * (1.0f - UV.yx);
 		float  Vignette = pow(15.0f * EdgeDistances.x * EdgeDistances.y, 0.25f);
-		MaxSampleCount = max(8.0f * Vignette, 1.0f);
+		MaxSampleCount = clamp(8.0f * UB.Denoiser_Reflection_MaxSampleCount * Vignette, 1.0f, UB.Denoiser_Reflection_MaxSampleCount);
 	}
 	if(DenoisedReflection.a > MaxSampleCount) {
 		float Factor = MaxSampleCount / DenoisedReflection.a;
@@ -3452,6 +3444,13 @@ void FinalComposition (uint2 DispatchID : SV_DispatchThreadID) {
 		float  MidRoughessThresh  = 0.4f;
 		if(M.Roughness < MidRoughessThresh) {
 			float4 FallbackReflection = g_RWFallbackReflectionTexture[DispatchID];
+			{
+				// Approximate hemispherical incoming radiance by assuming it's a constant.
+				// It's a poor approximation...but I have no time to implement a proper one.
+				// Paper deardline is coming.
+				float3 DirectRadiance   = DirectIllumination / PI;
+				FallbackReflection.rgb += DirectRadiance;
+			}
 			float4 FineReflection     = g_RWReflectionTexture[DispatchID];
 			float MixFactor = saturate((M.Roughness - LowRoughnessThresh) / (MidRoughessThresh - LowRoughnessThresh));
 			float WX = saturate(FallbackReflection.w) * (1 - MixFactor);
