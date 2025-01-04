@@ -489,15 +489,18 @@ void UpdateLightHeaders (uint DispatchID : SV_DispatchThreadID) {
 	} else {
 		float3 WorldCenter = (LD.V1 + LD.V2 + LD.V3) / 3;
 		uint4 GridIndex = LightGrid_GetGridIndex(WorldCenter);
-		if(IsInvalid(GridIndex.w)) return ;
-		float  GridSize;
-		float3 GridMin = LightGrid_GetGridBounds(GridIndex, GridSize);
-		float3 LocalCenter = saturateDown((WorldCenter - GridMin) / GridSize);
-		float Area = length(cross(LD.V2 - LD.V1, LD.V3 - LD.V1)) * 0.5f;
-		L.Intensity = Luminance(LD.Radiance) * Area;
-		L.GridIndex = GridIndex;
-		L.LocalPosition = LocalCenter;
-		L.Normal = normalize(cross(LD.V2 - LD.V1, LD.V3 - LD.V1));
+		if(!IsInvalid(GridIndex.w)) {
+			float  GridSize;
+			float3 GridMin = LightGrid_GetGridBounds(GridIndex, GridSize);
+			float3 LocalCenter = saturateDown((WorldCenter - GridMin) / GridSize);
+			float Area = length(cross(LD.V2 - LD.V1, LD.V3 - LD.V1)) * 0.5f;
+			L.Intensity = Luminance(LD.Radiance) * Area;
+			L.GridIndex = GridIndex;
+			L.LocalPosition = LocalCenter;
+			L.Normal = normalize(cross(LD.V2 - LD.V1, LD.V3 - LD.V1));
+		} else {
+			L.bInvalid = true;
+		}
 	}
 	WriteLightHeader(LightIndex, L);
 }
@@ -510,64 +513,48 @@ void InjectLights (uint DispatchID : SV_DispatchThreadID) {
 	float3 GridMin; 
 	float GridSize;
 	GridMin = LightGrid_GetGridBounds(GridIndex, GridSize);
-	float GridLightWeight[LIGHT_GRID_MAX_NUM_GRID_LIGHTS];
+	float GridLightU[LIGHT_GRID_MAX_NUM_GRID_LIGHTS];
+	float GridLightWeightSum = 0.f;
 	uint  GridLightIndices[LIGHT_GRID_MAX_NUM_GRID_LIGHTS];
-	// Bias the initial weight to avoid precision issues
-	float GridLightWeightSum = 1e-7f;
-	float SampledReservoirsWeightSum = 0.f;
 	// Scatter random numbers for RIS.
 	Random rng = MakeRandom(9918293 + DispatchID, UB.FrameIndex);
-	int LastLight, AcceptedLightCount = 0;
-	for(LastLight = 0; LastLight < NumLights && AcceptedLightCount < LIGHT_GRID_MAX_NUM_GRID_LIGHTS; LastLight++) {
-		Light L = FetchLightHeader(LastLight);
-		float LightWeight = EstimateLightGridContribution(L, GridMin, GridSize);
-		if(LightWeight >= UB.LightGrid_MinLightContributionForInjection) {
-			GridLightWeight[AcceptedLightCount] = LightWeight;
-			GridLightIndices[AcceptedLightCount] = LastLight;
-			GridLightWeightSum += LightWeight;
-			AcceptedLightCount ++;
-		}
-	}
 	[unroll(LIGHT_GRID_MAX_NUM_GRID_LIGHTS)]
-	for(int i = AcceptedLightCount; i < LIGHT_GRID_MAX_NUM_GRID_LIGHTS; i++) {
-		GridLightWeight[i] = 0;
+	for(int i = 0; i < LIGHT_GRID_MAX_NUM_GRID_LIGHTS; i++) {
+		GridLightU[i] = saturateDown((i + rng.rand()) / LIGHT_GRID_MAX_NUM_GRID_LIGHTS);
 		GridLightIndices[i] = 0xffffffffu;
 	}
-	SampledReservoirsWeightSum = GridLightWeightSum;
-	// O(MxN) Brute force algorithm. Assume that there're not many lights
-	for(uint ItLightIndex = LastLight; ItLightIndex < NumLights; ItLightIndex ++) {
+	// Sampling using LightWeight / TotalWeight as target cdf.
+	// O(MxN) Brute force algorithm. Assume that there're not many lights.
+	int NumSamples = 0;
+	for(uint ItLightIndex = 0; ItLightIndex < NumLights; ItLightIndex ++) {
 		Light L = FetchLightHeader(ItLightIndex);
-		float LightWeight = EstimateLightGridContribution(L, GridMin, GridSize);
+		float LightWeight = log2(EstimateLightGridContribution(L, GridMin, GridSize) + 1);
+		if(L.bInvalid) LightWeight = 0;
+		// FIXME
+		if(L.Type == LIGHT_TYPE_DIRECTIONAL || L.Type == LIGHT_TYPE_SKY) {
+			LightWeight = 0;
+		}
 		if(LightWeight >= UB.LightGrid_MinLightContributionForInjection) {
 			float NewGridLightWeightSum = GridLightWeightSum + LightWeight;
 			float LightAcceptProbability = LightWeight / NewGridLightWeightSum;
-			float U = rng.rand();
-			if(LightAcceptProbability > U) {
-				U = (U - LightAcceptProbability) / (1 - LightAcceptProbability);
-				float P = U * SampledReservoirsWeightSum;
-				// Multi-reservoir sampling using LightWeight / TotalWeight as target cdf.
-				uint LightIndex = ItLightIndex;
-				for(int i = 0; i < LIGHT_GRID_MAX_NUM_GRID_LIGHTS; i++) {
-					P -= GridLightWeight[i];
-					if(P <= 0) {
-						SampledReservoirsWeightSum += LightWeight - GridLightWeight[i];
-						GridLightWeight[i] = LightWeight;
-						GridLightIndices[i] = LightIndex;
-						break;
-					}
+			uint LightIndex = ItLightIndex;
+			for(int i = 0; i < LIGHT_GRID_MAX_NUM_GRID_LIGHTS; i++) {
+				bool bPassThrough = GridLightIndices[i] == 0xffffffffu;
+				if(GridLightU[i] < LightAcceptProbability || bPassThrough) {
+					if(!bPassThrough) GridLightU[i] /= LightAcceptProbability;
+					GridLightIndices[i] = LightIndex;
+				} else {
+					GridLightU[i] = (GridLightU[i] - LightAcceptProbability) / max(1 - LightAcceptProbability, 1e-7f);
 				}
 			}
 			GridLightWeightSum = NewGridLightWeightSum;
+			NumSamples ++;
 		}
 	}
-	// Write back
-	g_LightGrid_GridReservoirWeightBuffer[DispatchID] = GridLightWeightSum / SampledReservoirsWeightSum;
-	int NumGridLights = 0;
-	for(int i = 0; i < LIGHT_GRID_MAX_NUM_GRID_LIGHTS; i++) {
-		if(GridLightIndices[i] != 0xffffffffu) {
-			NumGridLights ++;
-		} else break;
-	}
+	// Weight used to normalize the proposal distribution
+	g_LightGrid_GridReservoirWeightBuffer[DispatchID] = NumSamples / GridLightWeightSum;
+	// TODO (optimization)
+	int NumGridLights = LIGHT_GRID_MAX_NUM_GRID_LIGHTS;
 	int LightGridListIndexBase = 0;
 	InterlockedAdd(g_LightGrid_GridLightListAllocator[0], NumGridLights, LightGridListIndexBase);
 	g_LightGrid_GridLightListOffsetBuffer[DispatchID] = LightGridListIndexBase;
@@ -658,6 +645,7 @@ void SampleLightRays (uint2 DispatchID : SV_DispatchThreadID) {
 
 	uint  SampledLightIndex = 0xffffffffu;
 	float SampledLightResampleWeight = 0;
+	float SampledLightGridWeight = 0;
 	float SumResampleWeights = 0;
 	LightSample ReservedSample = (LightSample) 0;
 	uint  Seed = DispatchID.x + (DispatchID.y * C.FilmDimensions.x);
@@ -667,18 +655,10 @@ void SampleLightRays (uint2 DispatchID : SV_DispatchThreadID) {
 	bool bSampled = IsInvalid(GridIndex.w);
 	int Iteration = 0;
 
-	// Grid multi-reservoir weight (we're resampling from a multi-reservoir, 
-	// the previous reservoir's weight should be accumulated)
+	// 01.04: a simple approximation to compensate for the lights overflowing the grid.
 	float GridReservoirWeight = 0.f;
 
-	// float3 ReflectionDirection = calculateGGXSpecularDirection(M.Normal, ViewDirection, M.Roughness);
-	// float3 HalfVector_Spec = normalize(ReflectionDirection + ViewDirection);
-	// float  DotSpecHV = saturate(dot(HalfVector_Spec, ViewDirection));
-	// // Approximate the Fresnel term with the ReflectionDirection as light direction
-	// // which is the same approximation used by GI1.0
-	// float3 FresnelTerm = fresnel(M.F0, DotSpecHV);
-	// float3 DiffuseCompensation = diffuseCompensationTerm(FresnelTerm, DotSpecHV);
-
+	int NumSamples = 0;
 	// Cooperative sampling
 	while(Iteration < 16) {
 		uint MinGridIndex1 = WaveActiveMin(bSampled ? 0x7fffffffu : WaveGridIndex1);
@@ -705,7 +685,8 @@ void SampleLightRays (uint2 DispatchID : SV_DispatchThreadID) {
 				// low frequency nature)
 				if(L.Type == LIGHT_TYPE_SKY) Sample.Pdf = 0;
 				if(Sample.IsValid()) {
-					float LightGridWeight = EstimateLightGridContribution(L, GridMin, GridSize);
+					// 0104: Resampling results in poor visual quality. So no RIS.
+					float LightGridWeight = 1;//log2(EstimateLightGridContribution(L, GridMin, GridSize) + 1);
 					// Perception based weight (log (x + c))
 					float LightCurrWeight = log2(Luminance(Sample.Radiance / Sample.Pdf) + 1.f); 
 					// RIS
@@ -717,10 +698,12 @@ void SampleLightRays (uint2 DispatchID : SV_DispatchThreadID) {
 							U /= CurrentLightU;
 							ReservedSample = Sample;
 							SampledLightResampleWeight = ResampleWeight;
+							SampledLightGridWeight     = LightGridWeight;
 						} else {
-							U *= 1.f - CurrentLightU;
+							U = (U - CurrentLightU) / max(1 - CurrentLightU, 1e-7f);
 						}
 						SumResampleWeights = NewSumResampleWeights;
+						NumSamples ++;
 					}
 				}
 			}
@@ -737,14 +720,13 @@ void SampleLightRays (uint2 DispatchID : SV_DispatchThreadID) {
 	
 	if(ReservedSample.IsValid()) {
 
-		// Calculate the real sample contribution. (Picking 1 single light from a bunch of lights)
-		// float LightCdf = 1.f / SumResampleWeights;//SampledLightResampleWeight / SumResampleWeights;
-		// float LightCdf = 1.f / GetNumLights();
-		// float NormalizationFactor = Luminance(ReservedSample.Radiance / ReservedSample.Pdf);
-		ReservedSample.Radiance *= GridReservoirWeight * SumResampleWeights 
-			/ (ReservedSample.Pdf * SampledLightResampleWeight);
-
-		// ReservedSample.Radiance = normalize(ReservedSample.Radiance);
+		// Calculate the real sample contribution.
+		// 0104: Resampling results in poor visual quality. So no RIS.
+		// We just use a simple approximation (GridReservoirWeight) to compensate for all 
+		// the lights overflowing the grid.
+		float Norm = GridReservoirWeight * SumResampleWeights / SampledLightResampleWeight;
+		ReservedSample.Radiance *= Norm;
+		ReservedSample.Radiance /= ReservedSample.Pdf;
 
 		// Spawn shadow ray
 		float3 Direction = 0;
@@ -1951,13 +1933,14 @@ void SSRC_SampleLightRays (uint DispatchID : SV_DispatchThreadID) {
 	float GridReservoirWeight = g_LightGrid_GridReservoirWeightBuffer[GridIndex1];
 
 	uint  SampledLightIndex = 0xffffffffu;
-	float SampledLightResampleWeight = 0;
+	float SampledLightResampleWeightMulGridWeight = 0;
 	float SumResampleWeights = 0;
 	LightSample ReservedSample = (LightSample) 0;
 	uint  Seed = DispatchID.x;
 	Random rng = MakeRandom(Seed ^ 0xa18b71c0u, UB.FrameIndex);
 
 	float U = rng.rand();
+	int NumSamples = 0;
 	int NumGridLights = g_LightGrid_GridLightCountBuffer[GridIndex1];
 	int MaxNumGridLights = WaveActiveMax(NumGridLights);
 	int LightGridListOffset = g_LightGrid_GridLightListOffsetBuffer[GridIndex1];
@@ -1965,8 +1948,8 @@ void SSRC_SampleLightRays (uint DispatchID : SV_DispatchThreadID) {
 	[unroll(LIGHT_GRID_MAX_NUM_GRID_LIGHTS)]
 	for(int i = 0; i < MaxNumGridLights; i++) {
 		float2 u2 = rng.rand2();
-		int LightIndex = (i < NumGridLights) ? g_LightGrid_GridLightListBuffer[LightGridListOffset + i] : 0;
-		if(i < NumGridLights) {
+		uint LightIndex = (i < NumGridLights) ? g_LightGrid_GridLightListBuffer[LightGridListOffset + i] : 0;
+		if(!IsInvalid(LightIndex) && i < NumGridLights) {
 			Light L = FetchLightHeader(LightIndex);
 			// We have to produce a full sample of the light to accurately estimate the light contribution
 			LightData   Details = FetchLightDetails(LightIndex);
@@ -1974,7 +1957,7 @@ void SSRC_SampleLightRays (uint DispatchID : SV_DispatchThreadID) {
 			LightSample Sample  = SampleLightDiffuseWithCosineWeight(HitPosition, HitMaterial, L.Type, Details, u2);
 			// We assume that secondary vertices are always diffuse.
 			if(Sample.IsValid()) {
-				float LightGridWeight = EstimateLightGridContribution(L, GridMin, GridSize);
+				float LightGridWeight = log2(EstimateLightGridContribution(L, GridMin, GridSize) + 1);
 				// Perception based weight (log (x + c))
 				float LightCurrWeight = log2(Luminance(Sample.Radiance / Sample.Pdf) + 1.f); 
 				// RIS
@@ -1985,12 +1968,13 @@ void SSRC_SampleLightRays (uint DispatchID : SV_DispatchThreadID) {
 					if(CurrentLightU > U) {
 						U /= CurrentLightU;
 						ReservedSample = Sample;
-						SampledLightResampleWeight = ResampleWeight;
+						SampledLightResampleWeightMulGridWeight = ResampleWeight * LightGridWeight;
 					} else {
-						U *= 1.f - CurrentLightU;
+						U = (U - CurrentLightU) / max(1 - CurrentLightU, 1e-7f);
 					}
 					SumResampleWeights = NewSumResampleWeights;
 				}
+				NumSamples ++;
 			}
 		}
 	}
@@ -2008,7 +1992,7 @@ void SSRC_SampleLightRays (uint DispatchID : SV_DispatchThreadID) {
 		// Okay we have a sample for each pixel. Now encode a shadow ray for visibility testing.
 		// Calculate the real sample contribution. (Picking 1 single light from a bunch of lights)
 		ReservedSample.Radiance *= GridReservoirWeight * SumResampleWeights /
-			(ReservedSample.Pdf * SampledLightResampleWeight);
+			(ReservedSample.Pdf * SampledLightResampleWeightMulGridWeight * NumSamples);
 
 		// Spawn shadow ray
 		float3 NewRayDirection = 0;
@@ -3446,7 +3430,7 @@ void FinalComposition (uint2 DispatchID : SV_DispatchThreadID) {
 			float4 FallbackReflection = g_RWFallbackReflectionTexture[DispatchID];
 			{
 				// Approximate hemispherical incoming radiance by assuming it's a constant.
-				// It's a poor approximation...but I have no time to implement a proper one.
+				// It's dumb...but I have no time to implement a proper approximation. 
 				// Paper deardline is coming.
 				float3 DirectRadiance   = DirectIllumination / PI;
 				FallbackReflection.rgb += DirectRadiance;
@@ -3460,6 +3444,7 @@ void FinalComposition (uint2 DispatchID : SV_DispatchThreadID) {
 		} else {
 			Reflection = g_RWFallbackReflectionTexture[DispatchID].rgb;
 			// TODO mix between irradiance and fallback reflection (from SSRC)
+			// No time for that!
 		}
 		float2 LUT = g_ShadingLUTTexture.SampleLevel(g_LinearClampSampler, 
 			float2(saturate(dot(M.Normal, ViewDirection)), M.Roughness

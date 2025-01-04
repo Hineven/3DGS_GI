@@ -347,10 +347,10 @@ protected:
         // The width/height/depth of the light grid. should not exceed LIGHT_GRID_MAX_GRID_SIZE
         int light_grid_size {16};
 
-        int light_grid_max_num_entries {256 * 1024};
-
         // Number of cascades of the light grid, should not exceed LIGHT_GRID_MAX_NUM_CASCADES
         int light_grid_num_cascades {3};
+
+        int light_grid_max_num_entries {light_grid_num_cascades * light_grid_size * light_grid_size * light_grid_size * LIGHT_GRID_MAX_NUM_GRID_LIGHTS};
 
         // Maximum number of tiles in the hash grid
         // 1KB per tile, 64MB total memory

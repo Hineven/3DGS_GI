@@ -43,13 +43,14 @@ Light UnpackLightHeader (uint2 Packed) {
     // Light type: 2 bits
     L.Type = Packed.y & 0x3;
     // Light normal: 2 x 7 bits
-    float2 Oct01 = float2(
+    float2 Oct0128 = float2(
         (Packed.y >> 2) & 0x7f,
         (Packed.y >> 9) & 0x7f
     );
-    L.Normal = Octahedron01ToUnitVector((Oct01 + 0.5f) / 128.f);
+    L.Normal = Octahedron01ToUnitVector((Oct0128 + 0.5f) / 128.f);
     // Intensity: fp16
     L.Intensity = f16tof32(Packed.y >> 16);
+    L.bInvalid  = L.Intensity < 0;
     return L;
 }
 
@@ -78,7 +79,7 @@ RWStructuredBuffer<uint> g_LightGrid_GridLightListOffsetBuffer;
 // RWStructuredBuffer<float> g_LightGrid_GridLightSumWeightBuffer;
 // Light indices in each grid
 RWStructuredBuffer<uint> g_LightGrid_GridLightListBuffer;
-// The weight should be multiplied for each multi-reservoir light grid.
+// Sum of weights for all sampled lights with each light grid.
 RWStructuredBuffer<float> g_LightGrid_GridReservoirWeightBuffer;
 
 
@@ -115,7 +116,7 @@ uint2 PackLightHeader (Light L) {
     uint2 Oct01 = uint2(saturateDown(UnitVectorToOctahedron01(L.Normal)) * 128);
     Packed.y |= (Oct01.x << 2) | (Oct01.y << 9);
     // Intensity: fp16
-    Packed.y |= f32tof16(L.Intensity) << 16;
+    Packed.y |= f32tof16(L.bInvalid ? -1 : L.Intensity) << 16;
     return Packed;
 }
 
@@ -196,8 +197,8 @@ float EstimateLightGridContribution (Light L, float3 GridMin, float GridSize) {
         float3 LightPosition = GetLightWorldPosition(L);
         float3 GridCenter    = GridMin + GridSize * 0.5f;
         // Offset the light position according to the light normal for conservative estimation
-        float3 OffsetedLightPosition = LightPosition - L.Normal * GridSize * sqrt(3.f);
-        float  VolumeFactor = saturate((dot(GridCenter - LightPosition, L.Normal) + sqrt(0.75f)) / sqrt(3.f));
+        float3 OffsetedLightPosition = LightPosition;// - L.Normal * GridSize * sqrt(3.f);
+        float  VolumeFactor = 1.f;//saturate((dot(GridCenter - LightPosition, L.Normal) + sqrt(0.75f)) / sqrt(3.f));
         float3 Direction     = normalize(GridCenter - OffsetedLightPosition);
         float  Distance      = length(GridCenter - LightPosition);
 

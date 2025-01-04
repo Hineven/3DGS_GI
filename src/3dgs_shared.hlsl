@@ -295,6 +295,7 @@ struct Light {
     float3 LocalPosition;
     // Light normal / direction (low precision)
     float3 Normal;
+    bool bInvalid;
 };
 
 struct LightData {
