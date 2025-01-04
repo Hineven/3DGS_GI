@@ -598,6 +598,7 @@ bool Renderer::CreateKernels () {
         kernel_.SSRC_FilterProbes = gfxCreateComputeKernel(gfx, program_, "SSRC_FilterProbes", defines_c.data(), defines_c.size());
         kernel_.SSRC_PadProbeTextureEdges = gfxCreateComputeKernel(gfx, program_, "SSRC_PadProbeTextureEdges", defines_c.data(), defines_c.size());
         kernel_.SSRC_Integrate = gfxCreateComputeKernel(gfx, program_, "SSRC_Integrate", defines_c.data(), defines_c.size());
+        kernel_.FixupIndirectRadianceHoles = gfxCreateComputeKernel(gfx, program_, "FixupIndirectRadianceHoles", defines_c.data(), defines_c.size());
         kernel_.SpawnReflectionRays = gfxCreateComputeKernel(gfx, program_, "SpawnReflectionRays", defines_c.data(), defines_c.size());
         defines_c.push_back("REFLECTION_RAY_TRACING");
         kernel_.TraceRaysInScreenSpaceForReflection = gfxCreateComputeKernel(gfx, program_, "TraceRaysInScreenSpace", defines_c.data(), defines_c.size());
@@ -875,6 +876,7 @@ void Renderer::DestroyKernels () {
     gfxDestroyKernel(gfx, kernel_.SSRC_FilterProbes);
     gfxDestroyKernel(gfx, kernel_.SSRC_PadProbeTextureEdges);
     gfxDestroyKernel(gfx, kernel_.SSRC_Integrate);
+    gfxDestroyKernel(gfx, kernel_.FixupIndirectRadianceHoles);
     gfxDestroyKernel(gfx, kernel_.SpawnReflectionRays);
     gfxDestroyKernel(gfx, kernel_.TraceRaysInScreenSpaceForReflection);
     gfxDestroyKernel(gfx, kernel_.ResolveReflectionTraceResults);

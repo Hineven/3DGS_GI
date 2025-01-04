@@ -187,8 +187,8 @@ struct UniformBlock {
 
     float  Denoiser_Reflection_MaxSampleCount;
     float  Reflection_MaxSampleRoughness;
-    uint   Paddingxxx1;
-    uint   Paddingxxx2;
+    uint   UseReconstructedNormals;
+    float  OriginalNormalWeight;
 
     uint   NoDirectDiffuseIllumination;
     uint   NoIndirectDiffuseIllumination;

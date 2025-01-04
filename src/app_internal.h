@@ -32,6 +32,9 @@ public:
 
 protected:
 
+    void LoadTeaserScene ();
+    void LoadLightingComparisonScene (std::string model_name, std::string env_name) ;
+
     GfxWindow window_;
     GfxContext gfx_;
 

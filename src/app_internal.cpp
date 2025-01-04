@@ -89,78 +89,10 @@ int AppInternal::Run () {
 
     // Load scene
     {
-        scene_.LoadEnvironmentMap(root_path + "data/environment_maps/rogland_overcast_4k.exr");
-        // scene_.LoadGaussians(root_path + "data/barn/point_cloud/iteration_50000/point_cloud.ply", true);
-        // scene_.LoadGaussians(root_path + "data/hotdog/point_cloud/iteration_50000/point_cloud.ply", true);
-        auto inst_family = scene_.LoadGaussians(root_path + "data/family/point_cloud/iteration_50000/point_cloud.ply", true);
-        // auto inst_y = scene_.DuplicateInstance(inst_x);
-        auto inst_chair = scene_.LoadGaussians(root_path + "data/chair/point_cloud/iteration_50000/point_cloud.ply", true);
-        auto inst_w = scene_.LoadGltf(root_path + "data/lighting_room/scene.gltf");
-        auto inst_single_truck = scene_.LoadGaussians(root_path + "data/single_truck/point_cloud/iteration_50000/point_cloud.ply", true);
-        auto inst_air_baloons = scene_.LoadGaussians(root_path + "data/air_baloons/point_cloud/iteration_50000/point_cloud.ply", true);
-        auto inst_jugs = scene_.LoadGaussians(root_path + "data/jugs/point_cloud/iteration_50000/point_cloud.ply", true);
-        // auto inst_nerf_chair = scene_.LoadGaussians(root_path + "data/nerf_chair/point_cloud/iteration_40000/point_cloud.ply", true);
-        // scene_.LoadGaussians(root_path + "data/single_truck/point_cloud/iteration_50000/point_cloud.ply", true);
-        // scene_.LoadGaussians(root_path + "data/caterpillar/point_cloud/iteration_50000/point_cloud.ply", true);
-        // scene_.LoadGaussians(root_path + "data/chair/point_cloud/iteration_50000/point_cloud.ply", true);
-        // scene_.LoadGaussians(root_path + "data/garden/point_cloud/iteration_7000/point_cloud.ply", true);
-        // scene_.LoadGaussians(root_path + "data/counter/point_cloud/iteration_7000/point_cloud.ply", true);
-
-        {
-            glm::vec3 position = glm::vec3(-1.786, 0.01, -0.092);
-            glm::vec3 rotation = glm::radians(glm::vec3(3, 106, 180));
-            glm::vec3 scale = glm::vec3(0.8, 0.8, 0.8);
-            scene_.SetInstanceTransform(inst_family, {position, rotation, scale});
-        }
-
-        // {
-        //     glm::vec3 position = glm::vec3(5, 0, 0);
-        //     glm::vec3 rotation = glm::vec3(glm::radians(45.f), glm::radians(30.f), glm::radians(8.f));
-        //     glm::vec3 scale = glm::vec3(1.3, 0.6, 0.8);
-        //
-        //     glm::mat4x3 transform = glm::mat4x3(
-        //         glm::translate(glm::mat4(1.f), position)
-        //         * glm::toMat4(glm::quat(rotation))
-        //         * glm::scale(glm::mat4(1.f), scale)
-        //     );
-        //     scene_.SetInstanceTransform(inst_y, {position, rotation, scale});
-        // }
-        {
-            glm::vec3 position = glm::vec3(-0.938, -1.3, 1.969);
-            glm::vec3 rotation = glm::radians(glm::vec3(-90, 32, 0));
-            glm::vec3 scale = glm::vec3(0.5, 0.5, 0.5);
-            scene_.SetInstanceTransform(inst_chair, {position, rotation, scale});
-        }
-
-        {
-            glm::vec3 position = glm::vec3(1.651, -1.49, 1.372);
-            glm::vec3 rotation = glm::radians(glm::vec3(-90, -15, 0));
-            glm::vec3 scale = glm::vec3(0.6, 0.6, 0.6);
-            scene_.SetInstanceTransform(inst_jugs, {position, rotation, scale});
-        }
-
-        {
-            glm::vec3 position = glm::vec3(1.83, 0.491, -1.261);
-            glm::vec3 rotation = glm::radians(glm::vec3(-90, -22, 0));
-            glm::vec3 scale = glm::vec3(0.7, 0.7, 0.7);
-            scene_.SetInstanceTransform(inst_air_baloons, {position, rotation, scale});
-        }
-
-        {
-            glm::vec3 position = glm::vec3(0.848, -0.860, -0.796);
-            glm::vec3 rotation = glm::radians(glm::vec3(0, -141, 0));
-            glm::vec3 scale = glm::vec3(0.7, 0.7, 0.7);
-            scene_.SetInstanceTransform(inst_single_truck, {position, rotation, scale});
-        }
+        LoadTeaserScene();
+        // LoadLightingComparisonScene("chair", "qwantani_dusk_2_4k.exr");
 
         scene_.UpdateSceneBounds();
-
-        scene_.SetDirectionalLight(LightData{
-            glm::normalize(glm::vec3(-4.7f, 2.5, -1.f)),
-            {}, {},
-            {7.f, 4.5f, 4.f}
-        });
-
         scene_.UpdateDeviceScene();
     }
 

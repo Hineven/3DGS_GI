@@ -527,9 +527,12 @@ void Renderer::Render() {
 
         REGISTER_CVAR(UB.Denoiser_Reflection_MaxSampleCount, "Maximum number of temporal samples to accumulate when denoising reflections.", 10, 1, 64);
         REGISTER_CVAR(UB.Reflection_MaxSampleRoughness, "We want ray directions to be consistent when tracing reflection rays, so we clamp the roughness of the material", 0.1f, 0.001f, 1.f);
+        UB.UseReconstructedNormals = options_.reconstruct_normals;
+        REGISTER_CVAR(UB.OriginalNormalWeight, "How likely we're gonna use the rasterized normals instead of reconstructed normals", 6.f, 0.f, 10.f);
 
         REGISTER_CVAR(UB.NoDirectDiffuseIllumination, "Disable diffuse direct illumination in final composition.", false);
         REGISTER_CVAR(UB.NoIndirectDiffuseIllumination, "Disable diffuse indirect illumination in final composition.", false);
+        REGISTER_CVAR(UB.NoReflection, "Disable reflection in final composition.", false);
         REGISTER_CVAR(UB.SSRT_RayContinuationBackwardBiasFactor,
             "Move back the origin along the ray before HWRT ray continuation.", 8e-3f, 5e-3f, 2e-2f);
 
@@ -1464,7 +1467,7 @@ void Renderer::Render() {
             }
         }
 
-        if (options_.reconstruct_normals) {
+        {
             // Reconstruct normals from depth buffer if required
             auto section = TimedSection(*this, "ReconstructNormals");
             gfxCommandBindKernel(gfx, kernel_.ReconstructNormals);
@@ -1839,6 +1842,20 @@ void Renderer::Render() {
             auto section = TimedSection(*this, "SSRC_Integrate");
             gfxCommandBindKernel(gfx, kernel_.SSRC_Integrate);
             gfxCommandDispatch(gfx, UB.TileDimensions.x, UB.TileDimensions.y, 1);
+        }
+
+        // Fixup holes without screen probe coverage
+        {
+            auto section = TimedSection(*this, "FixupIndirectRadianceHoles");
+            // Repeat 3 times
+            gfxCommandBindKernel(gfx, kernel_.FixupIndirectRadianceHoles);
+            gfxCommandCopyTexture(gfx, tex_.filtered_indirect_illumination, tex_.indirect_illumination[frame_index_ & 1]);
+            gfxCommandDispatch(gfx, UB.SmallTileDimensions.x, UB.SmallTileDimensions.y, 1);
+            gfxCommandCopyTexture(gfx, tex_.indirect_illumination[frame_index_ & 1], tex_.filtered_indirect_illumination);
+            gfxCommandDispatch(gfx, UB.SmallTileDimensions.x, UB.SmallTileDimensions.y, 1);
+            gfxCommandCopyTexture(gfx, tex_.indirect_illumination[frame_index_ & 1], tex_.filtered_indirect_illumination);
+            gfxCommandDispatch(gfx, UB.SmallTileDimensions.x, UB.SmallTileDimensions.y, 1);
+            gfxCommandCopyTexture(gfx, tex_.indirect_illumination[frame_index_ & 1], tex_.filtered_indirect_illumination);
         }
 
         // Reflection

@@ -295,6 +295,7 @@ protected:
         GfxKernel SSRC_FilterProbes;
         GfxKernel SSRC_PadProbeTextureEdges;
         GfxKernel SSRC_Integrate;
+        GfxKernel FixupIndirectRadianceHoles;
         GfxKernel SpawnReflectionRays;
         GfxKernel TraceRaysInScreenSpaceForReflection;
         GfxKernel ResolveReflectionTraceResults;

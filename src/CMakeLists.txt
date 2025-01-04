@@ -10,6 +10,7 @@ add_executable(3DGS_AdvGI
         timed.cpp
         lut.cpp
         bluenoise.cpp
+        presets.cpp
 )
 target_link_libraries(3DGS_AdvGI PUBLIC gfx glm)
 

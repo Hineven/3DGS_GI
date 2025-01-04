@@ -21,7 +21,7 @@
 
 // Use constant gaussian depths instead of the "max response plane" when reconstructing depths
 // This helps mitigates some artifacts raised by precision issues.
-// #define CONSTANT_GAUSSIAN_DEPTH
+#define CONSTANT_GAUSSIAN_DEPTH
 
 // Bitpack the vertex attributes when transfering them to the fragment shader
 // #define BITPACK_VERTEX_ATTRIBUTES

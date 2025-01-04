@@ -288,6 +288,8 @@ void FilterDepth (uint2 DispatchID : SV_DispatchThreadID) {
 			float Depth  = TapDepth(C, TapCoords);
 			float Opacity = GetColorTexture(C).Load(int3(TapCoords, 0)).w;
 			if(Opacity < UB.OpaqueThreshold) {
+				// 0104: do not let semi-transparent pixels with large error leak into the depth buffer
+				Opacity = 0;
 				if(dx == 0 && dy == 0) {
 					bTransparent = true;
 				}
@@ -399,7 +401,6 @@ void ReconstructNormals (uint2 DispatchID : SV_DispatchThreadID) {
 	if(dot(Normal, CameraDirection) > 0) {
 		Normal = -Normal;
 	}
-	GetRWNormalTexture(C)[DispatchID] = float4(Normal * 0.5 + 0.5, 1);
 #else
 
 	// Reference: https://atyuwen.github.io/posts/normal-reconstruction/
@@ -443,8 +444,16 @@ void ReconstructNormals (uint2 DispatchID : SV_DispatchThreadID) {
 	if(dot(Normal, CameraDirection) > 0) {
 		Normal = -Normal;
 	}
-	GetRWNormalTexture(C)[DispatchID] = float4(Normal * 0.5 + 0.5, 1);
 #endif
+	if(UB.UseReconstructedNormals) {
+		GetRWNormalTexture(C)[DispatchID] = float4(Normal * 0.5 + 0.5, 1);
+	} else {
+		// Just fine tune the normal in case it's broken
+		float3 OriginalNormal  = normalize(GetRWNormalTexture(C)[DispatchID].xyz * 2 - 1);
+		float OriginalNormalTrust = UB.OriginalNormalWeight * sqrt(saturate(10.f * dot(OriginalNormal, -CameraDirection)));
+		float3 CompisiteNormal = normalize(OriginalNormalTrust * OriginalNormal + Normal);
+		GetRWNormalTexture(C)[DispatchID] = float4(CompisiteNormal * 0.5 + 0.5, 1);	
+	}
 }
 
 // [numthreads(TILE_SIZE, TILE_SIZE, 1)]
@@ -984,11 +993,11 @@ void ResolveDirectLighting (uint DispatchID : SV_DispatchThreadID) {
 }
 
 // Similar to Lumen
-float GetFilterPositionWeight(float NeighborLinearDepth, float LinearDepth)
+float GetFilterPositionWeight(float NeighborLinearDepth, float LinearDepth, float Factor = 1000.f)
 {
 	float DepthDifference = abs(NeighborLinearDepth - LinearDepth);
 	float RelativeDepthDifference = DepthDifference / LinearDepth;
-	return exp2(-2000.f * (RelativeDepthDifference * RelativeDepthDifference));
+	return exp2(-Factor * (RelativeDepthDifference * RelativeDepthDifference));
 }
 
 // Used to specify the filter pass
@@ -1001,8 +1010,8 @@ float GetFilterPositionWeight(float NeighborLinearDepth, float LinearDepth)
 #define FILTER_RADIUS 2
 #endif
 
-float NormalWeight (float3 NormalA, float3 NormalB) {
-	return pow(saturate(dot(NormalA, NormalB)), 4);
+float NormalWeight (float3 NormalA, float3 NormalB, float Factor = 4) {
+	return pow(saturate(dot(NormalA, NormalB)), Factor);
 }
 
 float DilatedConvolutionKernelWeight (float2 Offset, float InvRadius, float InvRadius2) {
@@ -1236,6 +1245,17 @@ void CalculateSSRCSampleWeightsForUniformScreenProbes (
         0.0
     );
     Weights *= DepthWeights;
+	#if false
+	// Introduce normal weights to get rid of the impact of normal artifacts from
+	// gaussians. (Let the hole fixing algorithm to handle this)
+	float4 NormalWeights = float4(
+		NormalWeight(Normal, GetScreenProbeNormal(TileCoordsX00 + int2(0, 0), bPrevious), 20),
+		NormalWeight(Normal, GetScreenProbeNormal(TileCoordsX00 + int2(1, 0), bPrevious), 20),
+		NormalWeight(Normal, GetScreenProbeNormal(TileCoordsX00 + int2(0, 1), bPrevious), 20),
+		NormalWeight(Normal, GetScreenProbeNormal(TileCoordsX00 + int2(1, 1), bPrevious), 20)
+	);
+	Weights *= NormalWeights;
+	#endif
 }
 
 void CalculateSSRCSampleWeights (
@@ -1294,9 +1314,16 @@ void CalculateSSRCSampleWeights (
                     float RelativeDepthDifference = PlaneDistance / ProbeLinearDepth;
                     NewDepthWeight = exp2(-10000.0f * (RelativeDepthDifference * RelativeDepthDifference));
 
+					float NewNormalWeight = 1.f;
+					#if false
+					// Introduce normal weights to get rid of the impact of normal artifacts from
+					// gaussians. (Let the hole fixing algorithm to handle this)
+					NewNormalWeight = NormalWeight(Normal, Header.Normal, 20);
+					#endif
+
 					float2 DistanceToScreenProbe = abs(ProbeScreenPosition - ScreenPosition);
 					float NewCornerWeight = 1.0f - saturate(min(DistanceToScreenProbe.x, DistanceToScreenProbe.y) / (float)(TILE_SIZE));
-					float NewInterpolationWeight = NewDepthWeight * (bScreenSpaceWeight ? NewCornerWeight : 1.f);
+					float NewInterpolationWeight = NewNormalWeight * NewDepthWeight * (bScreenSpaceWeight ? NewCornerWeight : 1.f);
 
 					if (NewInterpolationWeight > Sample.Weights[CornerIndex])
 					{
@@ -1859,7 +1886,6 @@ void SSRC_ResolveHitLightingFromScreenHistory (uint DispatchID : SV_DispatchThre
 							/ max(PreviousDepth, HistoryDepth) < 5e-2f;
 				if(bNormalVisible && bDepthVisible) {
 					// The irradiance is directly attained from reprojected history radiance
-					// TODO: exclude specular radiance
 					float3 HistoryRadiance = g_HistoryDiffuseRadianceWithoutEmission.Load(int3(HistoryScreenCoords, 0)).xyz;
 					// The radiance has been multiplied by BRDF. So no need to do shading again.
 					ProbeUpdateRayResult Result = FetchProbeUpdateRayResult(RayIndex);
@@ -2002,9 +2028,11 @@ void SSRC_SampleLightRays (uint DispatchID : SV_DispatchThreadID) {
 	g_RWProbeUpdateRayResolveHashCellIndexBuffer[ProbeUpdateRayIndex] = HashCellIndex;
 
 	if(ReservedSample.IsValid()) {
-
-		// Okay we have a sample for each pixel. Now encode a shadow ray for visibility testing.
-		// Calculate the real sample contribution. (Picking 1 single light from a bunch of lights)
+		
+		// Calculate the real sample contribution.
+		// 0104: Resampling results in poor visual quality. So no RIS.
+		// We just use a simple approximation (GridReservoirWeight) to compensate for all 
+		// the lights overflowing the grid.
 		ReservedSample.Radiance *= GridReservoirWeight * SumResampleWeights /
 			(ReservedSample.Pdf * SampledLightResampleWeight);
 
@@ -2748,114 +2776,182 @@ float4 SampleScreenProbeRadianceDepth (int2 ProbeIndex, float3 LocalDirection) {
     return g_ProbeSampleColorTexture.SampleLevel(g_LinearClampSampler, AtlasUV, 0);
 }
 
-[numthreads(WAVE_SIZE, 1, 1)]
-void SSRC_Integrate (int2 GroupID : SV_GroupID, int LocalID : SV_GroupThreadID) {
-    int TileID = GroupID.x + GroupID.y * UB.TileDimensions.x;
-    int2 TileTextureBaseOffset = int2(GroupID) * TILE_SIZE;
-    const int PIXEL_PER_THREAD = TILE_SIZE * TILE_SIZE / WAVE_SIZE;
+[numthreads(TILE_SIZE, TILE_SIZE, 1)]
+void SSRC_Integrate (uint2 DispatchID : SV_DispatchThreadID) {
 	CameraDescription C = GetCameraDescription();
-    Random rng = MakeRandom(TileID, LocalID);
-    for(int i = 0; i< PIXEL_PER_THREAD; i++) {
-		float4 FallbackReflection = 0.f.xxxx;
-        int PixelIndex = i * WAVE_SIZE + LocalID;
-        // Operate in subtiles (8x8) to get better coherency in loop branching
-        // with the more likely the same number of basis to access for each thread
-        int SubtileIndex  = PixelIndex / (SMALL_TILE_SIZE * SMALL_TILE_SIZE);
-        int SubPixelIndex = PixelIndex % (SMALL_TILE_SIZE * SMALL_TILE_SIZE);
-        int PixelX = SMALL_TILE_SIZE * (SubtileIndex % 2) + SubPixelIndex % SMALL_TILE_SIZE;
-        int PixelY = SMALL_TILE_SIZE * (SubtileIndex / 2) + SubPixelIndex / SMALL_TILE_SIZE;
-        int2 TexCoords = TileTextureBaseOffset + int2(PixelX, PixelY);
-        float2 UV = (TexCoords + 0.5f) / UB.ScreenDimensions;
-        float LinearDepth = GetFilteredDepthTexture(C).Load(int3(TexCoords, 0)).x;
-        if(LinearDepth > 0) {
-            
-            // Frame
-            float3 WorldPosition = RecoverWorldSpacePosition(C, TexCoords + 0.5f, LinearDepth);
-            float3 Normal        = normalize(2.f * GetNormalTexture(C).Load(int3(TexCoords, 0)).xyz - 1.f);
+    int PixelIndex = DispatchID.x + DispatchID.y * UB.ScreenDimensions.x;
+	// Random rng = MakeRandom(PixelIndex ^ 0x61839948u, UB.FrameIndex);
+	float4 FallbackReflection = 0;
 
-            Material M = FetchMaterial(C, TexCoords);
-            
-            float3 ViewDirection = normalize(C.Position - WorldPosition);
-            float DotNV = saturate(dot(Normal, ViewDirection));
+	int2 TexCoords = DispatchID;
+	float2 UV = (TexCoords + 0.5f) / UB.ScreenDimensions;
+	float LinearDepth = GetFilteredDepthTexture(C).Load(int3(TexCoords, 0)).x;
+	if(LinearDepth > 0) {
+		// Frame
+		float3 WorldPosition = RecoverWorldSpacePosition(C, TexCoords + 0.5f, LinearDepth);
+		float3 Normal        = normalize(2.f * GetNormalTexture(C).Load(int3(TexCoords, 0)).xyz - 1.f);
+		Material M = FetchMaterial(C, TexCoords);
+		float3 ViewDirection = normalize(C.Position - WorldPosition);
+		float DotNV = saturate(dot(Normal, ViewDirection));
 
-            SSRC_SampleData Sample;
-            CalculateSSRCSampleWeights(
-                TexCoords + 0.5f,
-                WorldPosition,
-                LinearDepth, 
-                Normal,
-                true,
-                Sample
-            );
+		SSRC_SampleData Sample;
+		CalculateSSRCSampleWeights(
+			TexCoords + 0.5f,
+			WorldPosition,
+			LinearDepth, 
+			Normal,
+			true,
+			Sample
+		);
 
-            ProbeHeader Headers[4];
-            Headers[0] = GetScreenProbeHeader(Sample.Index[0]);
-            Headers[1] = GetScreenProbeHeader(Sample.Index[1]);
-            Headers[2] = GetScreenProbeHeader(Sample.Index[2]);
-            Headers[3] = GetScreenProbeHeader(Sample.Index[3]);
-            float3 ProbeTangents[4];
-            float3 ProbeBitangents[4];
-            for(int i = 0; i < 4; i++) {
-                GetOrthoVectors(Headers[i].Normal, ProbeTangents[i], ProbeBitangents[i]);
-            }
-            // Normalize weights
-            Sample.Weights /= max(dot(Sample.Weights, 1.f.xxxx), 0.01f);
-            if(dot(Sample.Weights, 1.f.xxxx) > 0.99f) {
-				// TODO: SSAO for enhanced visual quality
-                float  AO = 1.f;
-                float3 ReflectionDirection = calculateGGXSpecularDirection(Normal, ViewDirection, M.Roughness);
-                // LowFreq-Diffuse shading
-                float3 LowFreq_Diffuse = 0.f.xxx;
-                [unroll(4)]
-                for(int CornerIndex = 0; CornerIndex < 4; CornerIndex ++) {
-                    if(Sample.Weights[CornerIndex] > 0.f) { 
-                        float3 Irradiance = ProbeIntegrateBentCone(Normal, AO, Sample.Index[CornerIndex]);
-                        float3 WeightedIrradiance = Irradiance * Sample.Weights[CornerIndex];
-                        LowFreq_Diffuse += WeightedIrradiance * AO;
-                    }
-                }
-                
-                float3 LowFreq_Specular = 0.f.xxx;
-                // Use radiance values from probes directly for low frequency specular
-                
-                // float2 LUT = g_ShadingLUTTexture.SampleLevel(g_LinearClampSampler, float2(saturate(dot(Normal, ViewDirection)), M.Roughness), 0.0f).xy;
-                // float3 SpecularAlbedo = saturate(M.F0 * LUT.x + (1.0f - M.F0) * LUT.y);
-                
-                for(int CornerIndex = 0; CornerIndex < 4; CornerIndex ++) {
-                    if(Sample.Weights[CornerIndex] > 0.f) {
-                        float3 LocalReflectionDirection = float3(
-                            dot(ProbeTangents[CornerIndex],   ReflectionDirection),
-                            dot(ProbeBitangents[CornerIndex], ReflectionDirection),
-                            dot(Headers[CornerIndex].Normal, ReflectionDirection)
-                        );
-                        if(LocalReflectionDirection.z > 0.f) {
-                            float4 RadianceDepth = SampleScreenProbeRadianceDepth(Sample.Index[CornerIndex], LocalReflectionDirection);
-                            LowFreq_Specular += RadianceDepth.xyz * Sample.Weights[CornerIndex];
-                        }
-                    }
-                }
-                // LowFreq_Specular = LowFreq_Specular;
-                
-				
-                float3 HighFreq_Diffuse = 0.f.xxx;
-                float3 HighFreq_Glossy  = 0.f.xxx;
+		ProbeHeader Headers[4];
+		Headers[0] = GetScreenProbeHeader(Sample.Index[0]);
+		Headers[1] = GetScreenProbeHeader(Sample.Index[1]);
+		Headers[2] = GetScreenProbeHeader(Sample.Index[2]);
+		Headers[3] = GetScreenProbeHeader(Sample.Index[3]);
+		float3 ProbeTangents[4];
+		float3 ProbeBitangents[4];
+		for(int i = 0; i < 4; i++) {
+			GetOrthoVectors(Headers[i].Normal, ProbeTangents[i], ProbeBitangents[i]);
+		}
+		// Normalize weights
+		Sample.Weights /= max(dot(Sample.Weights, 1.f.xxxx), 0.01f);
+		if(dot(Sample.Weights, 1.f.xxxx) > 0.99f) {
+			// TODO: SSAO for enhanced visual quality
+			float  AO = 1.f;
+			float3 ReflectionDirection = calculateGGXSpecularDirection(Normal, ViewDirection, M.Roughness);
+			// LowFreq-Diffuse shading
+			float3 LowFreq_Diffuse = 0.f.xxx;
+			[unroll(4)]
+			for(int CornerIndex = 0; CornerIndex < 4; CornerIndex ++) {
+				if(Sample.Weights[CornerIndex] > 0.f) { 
+					float3 Irradiance = ProbeIntegrateBentCone(Normal, AO, Sample.Index[CornerIndex]);
+					float3 WeightedIrradiance = Irradiance * Sample.Weights[CornerIndex];
+					LowFreq_Diffuse += WeightedIrradiance * AO;
+				}
+			}
+			
+			float3 LowFreq_Specular = 0.f.xxx;
+			// Use radiance values from probes directly for low frequency specular
+			
+			// float2 LUT = g_ShadingLUTTexture.SampleLevel(g_LinearClampSampler, float2(saturate(dot(Normal, ViewDirection)), M.Roughness), 0.0f).xy;
+			// float3 SpecularAlbedo = saturate(M.F0 * LUT.x + (1.0f - M.F0) * LUT.y);
+			
+			for(int CornerIndex = 0; CornerIndex < 4; CornerIndex ++) {
+				if(Sample.Weights[CornerIndex] > 0.f) {
+					float3 LocalReflectionDirection = float3(
+						dot(ProbeTangents[CornerIndex],   ReflectionDirection),
+						dot(ProbeBitangents[CornerIndex], ReflectionDirection),
+						dot(Headers[CornerIndex].Normal, ReflectionDirection)
+					);
+					if(LocalReflectionDirection.z > 0.f) {
+						float4 RadianceDepth = SampleScreenProbeRadianceDepth(Sample.Index[CornerIndex], LocalReflectionDirection);
+						LowFreq_Specular += RadianceDepth.xyz * Sample.Weights[CornerIndex];
+					}
+				}
+			}
+			// LowFreq_Specular = LowFreq_Specular;
+			
+			
+			float3 HighFreq_Diffuse = 0.f.xxx;
+			float3 HighFreq_Glossy  = 0.f.xxx;
 
-                // Composite final lighting
-                float3 FarFieldIrradiance  = (HighFreq_Diffuse + LowFreq_Diffuse);
-                float3 NearFieldIrradiance = 0.f;
-                FallbackReflection = float4(LowFreq_Specular * AO, 1);
+			// Composite final lighting
+			float3 FarFieldIrradiance  = (HighFreq_Diffuse + LowFreq_Diffuse);
+			float3 NearFieldIrradiance = 0.f;
+			FallbackReflection = float4(LowFreq_Specular * AO, 1);
 
-                // Write to output                
-                GetRWIndirectIlluminationTexture(C)[TexCoords] = float4(FarFieldIrradiance + NearFieldIrradiance,  1.f);
-            } else {
-                GetRWIndirectIlluminationTexture(C)[TexCoords] = 0.f.xxxx;
-            }
-			FallbackReflection.w   = 1;
+			// Write to output                
+			GetRWIndirectIlluminationTexture(C)[TexCoords] = float4(FarFieldIrradiance + NearFieldIrradiance,  1.f);
 		} else {
-            GetRWIndirectIlluminationTexture(C)[TexCoords] = 0.f.xxxx;
-        }
-		g_RWFallbackReflectionTexture[TexCoords] = FallbackReflection;
-    }
+			// Failed, we need a fallback
+			GetRWIndirectIlluminationTexture(C)[TexCoords] = 0.f.xxxx;
+		}
+		FallbackReflection.w   = 1;
+	} else {
+		GetRWIndirectIlluminationTexture(C)[TexCoords] = 0.f.xxxx;
+	}
+	g_RWFallbackReflectionTexture[TexCoords] = FallbackReflection;
+}
+
+// Fill holes where probes are fully occluded
+[numthreads(SMALL_TILE_SIZE, SMALL_TILE_SIZE, 1)]
+void FixupIndirectRadianceHoles (uint2 DispatchID : SV_DispatchThreadID) {
+	CameraDescription C = GetCameraDescription();
+	float Depth = GetFilteredDepthTexture(C).Load(int3(DispatchID, 0)).x;
+	if(Depth == 0) return ;
+	float4 OriginalRadiance = GetIndirectIlluminationTexture(C).Load(int3(DispatchID, 0));
+	if(OriginalRadiance.w > 0.f) return ; // No need to fixup
+	int2 PixelCoords = int2(DispatchID);
+	float4 FixupRadiance = 0;
+	float  SumWeight = 0;
+	// Set a loose threshold for depth difference
+	float DiffScale = 2.f;
+	// Left
+	{
+		int2 NeighborCoords = PixelCoords + int2(-1, 0);
+		if(NeighborCoords.x >= 0) {
+			float NeighborDepth = GetFilteredDepthTexture(C).Load(int3(NeighborCoords, 0)).x;
+			if(NeighborDepth > 0) {
+				float DepthDistance = GetFilterPositionWeight(NeighborDepth, Depth, DiffScale);
+				float Weight = DepthDistance;
+				float4 NeighborRadiance = GetIndirectIlluminationTexture(C).Load(int3(NeighborCoords, 0));
+				FixupRadiance += Weight * float4(NeighborRadiance.w * NeighborRadiance.rgb, NeighborRadiance.w);
+				SumWeight += Weight;
+			}
+		}
+	}
+	// Right
+	{
+		int2 NeighborCoords = PixelCoords + int2(1, 0);
+		if(NeighborCoords.x < C.FilmDimensions.x) {
+			float NeighborDepth = GetFilteredDepthTexture(C).Load(int3(NeighborCoords, 0)).x;
+			if(NeighborDepth > 0) {
+				float DepthDistance = GetFilterPositionWeight(NeighborDepth, Depth, DiffScale);
+				float Weight = DepthDistance;
+				float4 NeighborRadiance = GetIndirectIlluminationTexture(C).Load(int3(NeighborCoords, 0));
+				FixupRadiance += Weight * float4(NeighborRadiance.w * NeighborRadiance.rgb, NeighborRadiance.w);
+				SumWeight += Weight;
+			}
+		}
+	}
+	// Up
+	{
+		int2 NeighborCoords = PixelCoords + int2(0, -1);
+		if(NeighborCoords.y >= 0) {
+			float NeighborDepth = GetFilteredDepthTexture(C).Load(int3(NeighborCoords, 0)).x;
+			if(NeighborDepth > 0) {
+				float DepthDistance = GetFilterPositionWeight(NeighborDepth, Depth, DiffScale);
+				float Weight = DepthDistance;
+				float4 NeighborRadiance = GetIndirectIlluminationTexture(C).Load(int3(NeighborCoords, 0));
+				FixupRadiance += Weight * float4(NeighborRadiance.w * NeighborRadiance.rgb, NeighborRadiance.w);
+				SumWeight += Weight;
+			}
+		}
+	}
+	// Down
+	{
+		int2 NeighborCoords = PixelCoords + int2(0, 1);
+		if(NeighborCoords.y < C.FilmDimensions.y) {
+			float NeighborDepth = GetFilteredDepthTexture(C).Load(int3(NeighborCoords, 0)).x;
+			if(NeighborDepth > 0) {
+				float DepthDistance = GetFilterPositionWeight(NeighborDepth, Depth, DiffScale);
+				float Weight = DepthDistance;
+				float4 NeighborRadiance = GetIndirectIlluminationTexture(C).Load(int3(NeighborCoords, 0));
+				FixupRadiance += Weight * float4(NeighborRadiance.w * NeighborRadiance.rgb, NeighborRadiance.w);
+				SumWeight += Weight;
+			}
+		}
+	}
+	// Fixup if possible
+	if(SumWeight > 1e-3f && FixupRadiance.w > 1e-3f) {
+		float FixupSampleCount = FixupRadiance.w / SumWeight;
+		FixupRadiance.rgb /= FixupRadiance.w;
+		// Decay the sample count to less than 1/2 as we dont want it to be kept a long time with temporal denoising
+		FixupRadiance.w = min(FixupSampleCount, 2.f) * 0.25f;
+		// Write to output
+		g_RW_FilteredIndirectIllumination[PixelCoords] = FixupRadiance;
+	}
 }
 
 bool ShouldTraceReflectionRay (uint2 PixelCoords, Material M) {
