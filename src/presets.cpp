@@ -79,6 +79,14 @@ void AppInternal::LoadTeaserScene () {
         {}, {},
         {7.f, 4.5f, 4.f}
     });
+
+    {
+        auto & camera = scene_.GetCamera();
+        camera.direction = glm::normalize(glm::vec3{0, 0, -1.f});
+        camera.position  = glm::vec3{0, -0.40, 7.8};
+        // auto right = glm::normalize(glm::cross(camera.direction, abs_up));
+        // camera.up = glm::normalize(glm::cross(right, camera.direction));
+    }
 }
 
 void AppInternal::LoadLightingComparisonScene (std::string model_name, std::string env_name) {
@@ -89,7 +97,7 @@ void AppInternal::LoadLightingComparisonScene (std::string model_name, std::stri
     {
         glm::vec3 position = glm::vec3(0);
         glm::vec3 rotation = glm::radians(glm::vec3(-90, 0, 0));
-        glm::vec3 scale = glm::vec3(1);
+        glm::vec3 scale = glm::vec3(1, 1, 1);
         scene_.SetInstanceTransform(inst_obj, {position, rotation, scale});
     }
 
@@ -99,23 +107,39 @@ void AppInternal::LoadLightingComparisonScene (std::string model_name, std::stri
         {0.f, 0.f, 0.f}
     });
 
+    {
+        auto & camera = scene_.GetCamera();
+        camera.direction = glm::normalize(glm::vec3{0.6, -0.41, -0.69});
+        camera.position  = glm::vec3{-2.46, 1.78, 2.86};
+        camera.fov_y = 0.6911112070083618;
+//        camera.direction = glm::normalize(glm::vec3{0, 0, -1.f});
+//        camera.position  = glm::vec3{0, 0, 3};
+        glm::mat4 View = camera.GetViewMatrix();
+        for(int i = 0; i < 4; i++)
+          for(int j = 0; j < 4; j++)
+            std::cout << View[j][i] << ", ";
+    }
+
 //    float camera_transform_mat [] = {
-//        9.7814757e-01,
-//        -2.0791169e-01,
-//        -6.9062267e-10,
-//        -1.8319818e-01,
-//        -4.1450925e-02,
-//        -1.9501127e-01,
-//        -9.7992474e-01,
-//        -2.7414584e-01,
-//        2.0373780e-01,
-//        9.5851099e-01,
-//        -1.9936794e-01,
-//        5.8470416e+00,
-//        0.0000000e+00,
-//        0.0000000e+00,
-//        0.0000000e+00,
-//        -1.0000000e+00
+//        0.97814757,
+//        -0.20791169,
+//        0,
+//        -0.18319818,
+
+//        -0.041450925,
+//        -0.19501127,
+//        -0.97992474,
+//        -0.27414584,
+
+//        0.20373780,
+//        0.95851099e,
+//        -0.19936794,
+//        5.8470416,
+
+//        0.0000000,
+//        0.0000000,
+//        0.0000000,
+//        -1.0000000
 //    };
 //    glm::mat4x4 camera_viewproj = glm::make_mat4(camera_transform_mat);
     // Z axis inverted for my coordinate system (OpenGL lhs vs D3D rhs)

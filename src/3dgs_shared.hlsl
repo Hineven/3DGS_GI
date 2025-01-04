@@ -195,6 +195,11 @@ struct UniformBlock {
     uint   NoReflection;
     float  SSRT_RayContinuationBackwardBiasFactor;
     
+    float ProbeNormalWeightFactor;
+    uint Padding00a;
+    uint Padding00b;
+    uint Padding00c;
+    
     float  LightingSkyRadianceLOD;
     uint   Debug_VisualizeLightGridCascade;
     int2   Debug_CursorPixelCoords;
@@ -211,7 +216,7 @@ struct UniformBlock {
     uint   Debug_SSRC_VisualizeProbes;
     uint   SSRC_ProbeUpdateRaySampleSeed;
     uint   SSRC_FixedProbeUpdateRaySampleSeed;
-    uint Padding002;
+    uint   TonemapMode;
 
     DeviceVirtualAddressRange RT_RayGenerationShaderRecord;
     

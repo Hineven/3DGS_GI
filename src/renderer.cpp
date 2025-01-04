@@ -536,6 +536,8 @@ void Renderer::Render() {
         REGISTER_CVAR(UB.SSRT_RayContinuationBackwardBiasFactor,
             "Move back the origin along the ray before HWRT ray continuation.", 8e-3f, 5e-3f, 2e-2f);
 
+        REGISTER_CVAR(UB.ProbeNormalWeightFactor, "How normals affect probe weights when sampling from SSRC probes.", 2.f, 1.f, 10.f);
+
         REGISTER_CVAR(UB.LightingSkyRadianceLOD, "LOD when sampling lighting from the sky.", 0, 0, 5);
         REGISTER_CVAR(UB.Debug_VisualizeLightGridCascade, "", false);
         auto im_mouse_pos = ImGui::GetMousePos();
@@ -556,6 +558,10 @@ void Renderer::Render() {
         if (UB.SSRC_FixedProbeUpdateRaySampleSeed) {
             UB.SSRC_ProbeUpdateRaySampleSeed = 0;
         }
+        REGISTER_CVAR(UB.TonemapMode, "Tonemap mode. "
+                                      "0 for gamma correction,"
+                                      "1 for ACEST,"
+                                      "2 for consistent behavior with Relightable 3DGS.", 0, 0, 2);
 
         REGISTER_CVAR(UB.Debug_VisualizeMeshCardAtlasOffset, "Offset", glm::vec2(0, 0), 0, CARD_ATLAS_RESOLUTION);
 

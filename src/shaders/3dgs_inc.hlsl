@@ -26,6 +26,9 @@
 // Bitpack the vertex attributes when transfering them to the fragment shader
 // #define BITPACK_VERTEX_ATTRIBUTES
 
+// Probe normals will affect weights
+#define PROBE_NORMAL_WEIGTHS
+
 // Output full G-Buffers for PBR rendering
 // Controlled by the renderer. Otherwise, output colored gaussians to the albedo channel.
 // #define OUTPUT_PBR_G_BUFFER

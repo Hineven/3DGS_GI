@@ -89,8 +89,8 @@ int AppInternal::Run () {
 
     // Load scene
     {
-        LoadTeaserScene();
-        // LoadLightingComparisonScene("chair", "qwantani_dusk_2_4k.exr");
+        // LoadTeaserScene();
+        LoadLightingComparisonScene("chair", "qwantani_dusk_2_4k.exr");
 
         scene_.UpdateSceneBounds();
         scene_.UpdateDeviceScene();
@@ -109,13 +109,7 @@ int AppInternal::Run () {
     std::vector<std::pair<std::string, float>> last_frame_timed_sections;
     std::vector<float> frame_latency_history;
 
-    {
-        auto & camera = scene_.GetCamera();
-        camera.direction = glm::normalize(glm::vec3{0, 0, -1.f});
-        camera.position  = glm::vec3{0, -0.40, 7.8};
-        // auto right = glm::normalize(glm::cross(camera.direction, abs_up));
-        // camera.up = glm::normalize(glm::cross(right, camera.direction));
-    }
+    bool show_ui = true;
 
     // Main loop
     while(!gfxWindowIsCloseRequested(window_)) {
@@ -124,8 +118,22 @@ int AppInternal::Run () {
         // Op flags
         bool need_reload_shaders = false;
 
-        // UI (Logic)
+        // Timer
+        float frame_total_time = 0.f;
         {
+            {
+                for(auto & section : last_frame_timed_sections) {
+                    frame_total_time += section.second;
+                }
+                frame_latency_history.push_back(frame_total_time);
+                if (frame_latency_history.size() > 100) {
+                    frame_latency_history.erase(frame_latency_history.begin());
+                }
+            }
+        }
+
+        // UI (Logic)
+        if (show_ui) {
             ImGui::Begin("3DGS AdvGI");
             if(ImGui::CollapsingHeader("Camera", ImGuiTreeNodeFlags_DefaultOpen)) {
                 auto & camera = scene_.GetCamera();
@@ -139,16 +147,6 @@ int AppInternal::Run () {
             ImGui::Separator();
             if(ImGui::Button("Reload shaders (F5)")) {
                 need_reload_shaders = true;
-            }
-            float frame_total_time = 0.f;
-            {
-                for(auto & section : last_frame_timed_sections) {
-                    frame_total_time += section.second;
-                }
-                frame_latency_history.push_back(frame_total_time);
-                if (frame_latency_history.size() > 100) {
-                    frame_latency_history.erase(frame_latency_history.begin());
-                }
             }
             if(ImGui::CollapsingHeader("Profile")) {
                 for(auto & section : last_frame_timed_sections) {
@@ -292,6 +290,10 @@ int AppInternal::Run () {
             renderer->Destroy();
             app_assert(renderer->Initialize());
             std::cout << "Shaders reloaded" << std::endl;
+        }
+
+        if (gfxWindowIsKeyReleased(window_, VK_F3)) {
+            show_ui = !show_ui;
         }
     }
 

@@ -1245,17 +1245,17 @@ void CalculateSSRCSampleWeightsForUniformScreenProbes (
         0.0
     );
     Weights *= DepthWeights;
-	#if false
+#ifdef PROBE_NORMAL_WEIGTHS
 	// Introduce normal weights to get rid of the impact of normal artifacts from
 	// gaussians. (Let the hole fixing algorithm to handle this)
 	float4 NormalWeights = float4(
-		NormalWeight(Normal, GetScreenProbeNormal(TileCoordsX00 + int2(0, 0), bPrevious), 20),
-		NormalWeight(Normal, GetScreenProbeNormal(TileCoordsX00 + int2(1, 0), bPrevious), 20),
-		NormalWeight(Normal, GetScreenProbeNormal(TileCoordsX00 + int2(0, 1), bPrevious), 20),
-		NormalWeight(Normal, GetScreenProbeNormal(TileCoordsX00 + int2(1, 1), bPrevious), 20)
+		NormalWeight(Normal, GetScreenProbeNormal(TileCoordsX00 + int2(0, 0), bPrevious), UB.ProbeNormalWeightFactor),
+		NormalWeight(Normal, GetScreenProbeNormal(TileCoordsX00 + int2(1, 0), bPrevious), UB.ProbeNormalWeightFactor),
+		NormalWeight(Normal, GetScreenProbeNormal(TileCoordsX00 + int2(0, 1), bPrevious), UB.ProbeNormalWeightFactor),
+		NormalWeight(Normal, GetScreenProbeNormal(TileCoordsX00 + int2(1, 1), bPrevious), UB.ProbeNormalWeightFactor)
 	);
 	Weights *= NormalWeights;
-	#endif
+#endif
 }
 
 void CalculateSSRCSampleWeights (
@@ -1315,11 +1315,11 @@ void CalculateSSRCSampleWeights (
                     NewDepthWeight = exp2(-10000.0f * (RelativeDepthDifference * RelativeDepthDifference));
 
 					float NewNormalWeight = 1.f;
-					#if false
+#ifdef PROBE_NORMAL_WEIGTHS
 					// Introduce normal weights to get rid of the impact of normal artifacts from
 					// gaussians. (Let the hole fixing algorithm to handle this)
-					NewNormalWeight = NormalWeight(Normal, Header.Normal, 20);
-					#endif
+					NewNormalWeight = NormalWeight(Normal, Header.Normal, UB.ProbeNormalWeightFactor);
+#endif
 
 					float2 DistanceToScreenProbe = abs(ProbeScreenPosition - ScreenPosition);
 					float NewCornerWeight = 1.0f - saturate(min(DistanceToScreenProbe.x, DistanceToScreenProbe.y) / (float)(TILE_SIZE));
@@ -3506,8 +3506,7 @@ void FinalComposition (uint2 DispatchID : SV_DispatchThreadID) {
 	float4 RadianceW = 0;
 
 	// Alpha
-	// Slightly increases the alpha value to prevent skylight leaking from the background
-	RadianceW.w = saturate(g_GColorTexture.Load(int3(DispatchID, 0)).a + 0.03f);
+	RadianceW.w = g_GColorTexture.Load(int3(DispatchID, 0)).a ;
 	float4 VisualizeRadianceW = RadianceW;
 
 	// 1. Direct diffuse illumination

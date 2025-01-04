@@ -110,22 +110,33 @@ GBufferOutput_RegularMesh DrawRegularMeshes (DrawRegulareMeshes_PSInput Input) {
     return Result;
 }
 
-float3 ACESToneMapping(float3 color, float Exposure)
+float3 ACESToneMapping(float3 Color, float Exposure)
 {
 	float A = 2.51f;
 	float B = 0.03f;
 	float C = 2.43f;
 	float D = 0.59f;
 	float E = 0.14f;
-	color *= Exposure;
-	return (color * (A * color + B)) / (color * (C * color + D) + E);
+	Color *= Exposure;
+	return (Color * (A * Color + B)) / (Color * (C * Color + D) + E);
+}
+
+float3 Relightable3DGSToneMapping (float3 Color) {
+    float3 Low = 12.92f * Color;
+    float3 High = pow(max(Color, 0.0031308f), 1.0f / 2.4f) * 1.055f - 0.055f;
+    return select(Color > 0.0031308, High, Low);
 }
 
 float4 TonemapAndDraw (float4 InPosition : SV_Position) : SV_Target {
     float2 UV = InPosition.xy / UB.ScreenDimensions;
     float4 Color = g_Radiance.Sample(g_LinearClampSampler, UV);
-    // Color.rgb = ACESToneMapping(Color.rgb, UB.TonemapExposure);
-    Color.rgb = RadianceToColor(Color.rgb * UB.TonemapExposure);
+    if(UB.TonemapMode == 0) {
+        Color.rgb = ACESToneMapping(Color.rgb, UB.TonemapExposure);
+    } else if(UB.TonemapMode == 1) {
+        Color.rgb = RadianceToColor(Color.rgb * UB.TonemapExposure);
+    } else {
+        Color.rgb = Relightable3DGSToneMapping(Color.rgb);
+    }
 	// Debugging
 	if(UB.DebugMode == 1) {
 		Color.rgb = ColorToRadiance(g_GColorTexture.Sample(g_LinearClampSampler, UV).rgb);
