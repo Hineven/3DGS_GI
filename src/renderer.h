@@ -27,12 +27,16 @@ public:
 
     void RenderUI();
 
+    void ScreenShot(std::string file_name);
+
 protected:
     bool InitializeConfig ();
     bool CreateResources ();
     bool CreateKernels ();
     void DestroyResources ();
     void DestroyKernels ();
+
+    void SaveImage(std::string file_name, void * data, int width, int height);
 
     void ComputeShadingLUT ();
 
@@ -204,6 +208,10 @@ protected:
         GfxTexture filtered_indirect_illumination;
         // fp16x4
         GfxTexture radiance[2];
+        // Tonemapped radiance
+        GfxTexture mapped_rgba;
+        // Final image to draw to the screen
+        GfxTexture final_rgba;
         GfxTexture history_diffuse_radiance_without_emission;
 
         GfxTexture reflection[2];
@@ -303,6 +311,9 @@ protected:
         GfxKernel TemporalDenoiseReflection;
         GfxKernel TemporalDenoiseLighting;
         GfxKernel FinalComposition;
+        GfxKernel ToneMap;
+        GfxKernel AntiAliasing;
+        GfxKernel DrawToBackBuffer;
 
         GfxKernel ClearCard;
         GfxKernel FilterActiveGaussiansForCard;
@@ -319,13 +330,13 @@ protected:
         GfxKernel DirectIlluminationTrace3DGSShadowRays;
         GfxKernel Trace3DGSProbeUpdateRays;
         GfxKernel Trace3DGSReflectionRays;
+        GfxKernel Trace3DGSStochasticRays;
 
         GfxKernel SpawnCameraRays;
         GfxKernel DisplayCameraRays;
         GfxKernel VisualizeMeshCardScene;
         GfxKernel VisualizeMeshCardAtlas;
 
-        GfxKernel TonemapAndDraw;
 
         GfxKernel Debug_SSRC_VisualizeProbes;
         GfxKernel Debug_SSRC_PrepareVisualizeProbeUpdateRays;
@@ -417,7 +428,10 @@ protected:
     bool should_rebuild_TLAS_ {true};
     bool should_reset_hash_grids_ {true};
     bool should_update_transforms_ {false};
+    bool should_update_materials_ {false};
     bool need_reload_shaders_ {false};
+
+    std::vector<std::string> requested_screen_shots_;
 
     struct {
         glm::vec3 directional_light_dir;

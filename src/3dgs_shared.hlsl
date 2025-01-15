@@ -93,7 +93,7 @@ struct UniformBlock {
     uint DebugMode;
     // whether we're tracing and visualizing shading rays (started from the camera) 
     // Otherwise only shadow ray depths are (possibly) visualized.
-    uint VisualizeShadingRays;
+    uint HWRT_VisualizeShadingRays;
     // Pixels with alpha values larger or equal to this threshold will be considered opaque.
     float OpaqueThreshold;
     // Alphas for blending depth values are reduced by a factor of this value.
@@ -196,9 +196,14 @@ struct UniformBlock {
     float  SSRT_RayContinuationBackwardBiasFactor;
     
     float ProbeNormalWeightFactor;
-    uint Padding00a;
-    uint Padding00b;
-    uint Padding00c;
+    float GaussianExpandFactor;
+    float SSRC_ProbeTemporalBlendFactor;
+    uint  II_EnvironmentOnly;
+
+    uint  HWRT_VisualizeStochasticRays;
+    uint  HWRT_ShadeWithSphericalHarmonics;
+    uint  Paddingx01;
+    uint  Paddingx02;
     
     float  LightingSkyRadianceLOD;
     uint   Debug_VisualizeLightGridCascade;
@@ -217,6 +222,11 @@ struct UniformBlock {
     uint   SSRC_ProbeUpdateRaySampleSeed;
     uint   SSRC_FixedProbeUpdateRaySampleSeed;
     uint   TonemapMode;
+
+    uint   EnableAA;
+    float  SkyLightMultiplier;
+    uint   Padding1;
+    uint   Padding2;
 
     DeviceVirtualAddressRange RT_RayGenerationShaderRecord;
     

@@ -112,8 +112,12 @@ public:
 
     void UpdateDeviceLights ();
     void UpdateDeviceTransforms ();
+    void UpdateDeviceMaterials ();
 
     void SetLight (LightType type, const LightData & LD, int index = 0, int instance_index = -1) ;
+
+    void OverwriteGaussianAlbedo (int instance_id, glm::vec3 albedo) ;
+    void OverwriteGaussianRoughness (int instance_id, float roughness) ;
 
     LightData GetDirectionalLight ();
     LightData GetSkyLight ();
@@ -121,6 +125,14 @@ public:
     void SetDirectionalLight (const LightData & light);
     void SetSkyLight (const LightData & light);
     void SetAreaLight (int area_light_index, const LightData & light, int instance_index = -1);
+
+    inline SimpleMaterial GetInstanceMaterial(int index) {
+        return gsi_materials_[index];
+    }
+
+    inline bool IsGaussianInstance (int index) {
+        return gsi_types_[index] == InstanceType::eGaussians;
+    }
 
     LightData GetLight (int index) ;
 
@@ -177,6 +189,14 @@ public:
     void SetInstanceTransform (int instance, InstanceTransform transform);
     inline InstanceTransform GetInstanceTransform (int instance) {
         return {gsi_positions_[instance], gsi_rotations_[instance], gsi_scales_[instance]};
+    }
+
+    inline void SetInstanceMaterial (int instance, SimpleMaterial M) {
+        gsi_materials_[instance] = M;
+    }
+
+    void SetInstanceActive (int instance, bool active) {
+        gsi_active_[instance] = active;
     }
 
     void UpdateSceneBounds ();
@@ -238,6 +258,8 @@ protected:
     std::vector<glm::vec3> gsi_positions_;
     std::vector<glm::vec3> gsi_rotations_;
     std::vector<glm::vec3> gsi_scales_;
+
+    std::vector<bool> gsi_active_;
 
     std::unique_ptr<DeviceScene> device_scene_;
 

@@ -166,7 +166,7 @@ bool Renderer::CreateResources () {
     buf_.cards = gfxCreateBuffer<uint>(gfx, CARD_ATLAS_RESOLUTION  * CARD_ATLAS_RESOLUTION * NUM_CARD_ATLAS / MIN_CARD_RESOLUTION / MIN_CARD_RESOLUTION);
     buf_.cards.setName("Cards");
 
-#ifndef _NDEBUG
+#ifndef NDEBUG
     buf_.Debug_SSRC_probe_index = gfxCreateBuffer<uint2>(gfx, 1);
 
     buf_.Debug_direct_illumination_pixel_ray_index = gfxCreateBuffer<uint>(gfx, max_num_pixels);
@@ -284,6 +284,10 @@ bool Renderer::CreateResources () {
     tex_.radiance[0].setName("Radiance0");
     tex_.radiance[1] = gfxCreateTexture2D(gfx, width, height, DXGI_FORMAT_R16G16B16A16_FLOAT, 1, zero_clear_value);
     tex_.radiance[1].setName("Radiance1");
+    tex_.mapped_rgba = gfxCreateTexture2D(gfx, width, height, DXGI_FORMAT_R8G8B8A8_UNORM, 1, zero_clear_value);
+    tex_.mapped_rgba.setName("MappedRGBA");
+    tex_.final_rgba = gfxCreateTexture2D(gfx, width, height, DXGI_FORMAT_R8G8B8A8_UNORM, 1, zero_clear_value);
+    tex_.final_rgba.setName("FinalRGBA");
 
     tex_.history_diffuse_radiance_without_emission = gfxCreateTexture2D(gfx, width, height, DXGI_FORMAT_R16G16B16A16_FLOAT, 1, zero_clear_value);
     tex_.history_diffuse_radiance_without_emission.setName("HistoryRadianceWithoutEmission");
@@ -480,6 +484,8 @@ void Renderer::DestroyResources() {
     gfxDestroyTexture(gfx, tex_.filtered_indirect_illumination);
     gfxDestroyTexture(gfx, tex_.radiance[0]);
     gfxDestroyTexture(gfx, tex_.radiance[1]);
+    gfxDestroyTexture(gfx, tex_.mapped_rgba);
+    gfxDestroyTexture(gfx, tex_.final_rgba);
     gfxDestroyTexture(gfx, tex_.history_diffuse_radiance_without_emission);
     gfxDestroyTexture(gfx, tex_.reflection[0]);
     gfxDestroyTexture(gfx, tex_.reflection[1]);
@@ -616,6 +622,7 @@ bool Renderer::CreateKernels () {
         kernel_.TemporalDenoiseReflection = gfxCreateComputeKernel(gfx, program_, "TemporalDenoiseReflection", defines_c.data(), defines_c.size());
         kernel_.TemporalDenoiseLighting = gfxCreateComputeKernel(gfx, program_, "TemporalDenoiseLighting", defines_c.data(), defines_c.size());
         kernel_.FinalComposition = gfxCreateComputeKernel(gfx, program_, "FinalComposition", defines_c.data(), defines_c.size());
+        kernel_.ToneMap = gfxCreateComputeKernel(gfx, program_, "ToneMap", defines_c.data(), defines_c.size());
 
         defines_c.push_back("CARD_SHADERS");
         kernel_.ClearCard = gfxCreateComputeKernel(gfx, program_, "ClearCard", defines_c.data(), defines_c.size());
@@ -730,6 +737,22 @@ bool Renderer::CreateKernels () {
         );
         defines_c.pop_back();
 
+        std::vector<char const *> Trace3DGSStochasticRays_kernel_exports;
+        Trace3DGSStochasticRays_kernel_exports.push_back("Trace3DGSStochasticRaysRaygen");
+        Trace3DGSStochasticRays_kernel_exports.push_back("Trace3DGSStochasticAnyHit");
+        Trace3DGSStochasticRays_kernel_exports.push_back("Trace3DGSStochasticClosestHit");
+        Trace3DGSStochasticRays_kernel_exports.push_back("Trace3DGSStochasticMiss");
+        std::vector<char const *> Trace3DGSStochasticRays_kernel_subobjects = base_subobjects;
+        Trace3DGSStochasticRays_kernel_subobjects.push_back("Trace3DGSStochasticHitGroup");
+        Trace3DGSStochasticRays_kernel_subobjects.push_back("Trace3DGSStochasticRayShaderConfig");
+        defines_c.push_back("STOCHASTIC_RAY_TRACING");
+        kernel_.Trace3DGSStochasticRays = gfxCreateRaytracingKernel(gfx, program_, nullptr, 0,
+            Trace3DGSStochasticRays_kernel_exports.data(), (uint32_t)Trace3DGSStochasticRays_kernel_exports.size(),
+            Trace3DGSStochasticRays_kernel_subobjects.data(), (uint32_t)Trace3DGSStochasticRays_kernel_subobjects.size(),
+            defines_c.data(), defines_c.size()
+        );
+        defines_c.pop_back();
+
         uint32_t entry_count[kGfxShaderGroupType_Count] {
                 1, // 1 raygen record
                 1, // 1 hitgroups
@@ -737,10 +760,13 @@ bool Renderer::CreateKernels () {
                 1 // Actually we have no callables... but leave 1 here.
         };
         GfxKernel sbt_kernels[] {
-            kernel_.Trace3DGSRays, kernel_.Trace3DGSShadowRays, kernel_.Trace3DGSShadowRaysWithoutIndirectionList,
+            kernel_.Trace3DGSRays,
+            kernel_.Trace3DGSShadowRays,
+            kernel_.Trace3DGSShadowRaysWithoutIndirectionList,
             kernel_.DirectIlluminationTrace3DGSShadowRays,
             kernel_.Trace3DGSProbeUpdateRays,
-            kernel_.Trace3DGSReflectionRays
+            kernel_.Trace3DGSReflectionRays,
+            kernel_.Trace3DGSStochasticRays
         };
         sbt_ = gfxCreateSbt(gfx, sbt_kernels, ARRAYSIZE(sbt_kernels), entry_count);
     }
@@ -808,8 +834,15 @@ bool Renderer::CreateKernels () {
     {
         GfxDrawState draw_state = {};
         gfxDrawStateDisableGeometryShader(draw_state);
-        kernel_.TonemapAndDraw = gfxCreateGraphicsKernel(
-                gfx, program_, draw_state, "TonemapAndDraw", defines_c.data(), defines_c.size());
+        gfxDrawStateSetColorTarget(draw_state, 0, tex_.final_rgba.getFormat());
+        kernel_.AntiAliasing = gfxCreateGraphicsKernel(
+                gfx, program_, draw_state, "AntiAliasing", defines_c.data(), defines_c.size());
+    }
+    {
+        GfxDrawState draw_state = {};
+        gfxDrawStateDisableGeometryShader(draw_state);
+        kernel_.DrawToBackBuffer = gfxCreateGraphicsKernel(
+                gfx, program_, draw_state, "DrawToBackBuffer", defines_c.data(), defines_c.size());
     }
 
     {
@@ -886,6 +919,7 @@ void Renderer::DestroyKernels () {
     gfxDestroyKernel(gfx, kernel_.TemporalDenoiseReflection);
     gfxDestroyKernel(gfx, kernel_.TemporalDenoiseLighting);
     gfxDestroyKernel(gfx, kernel_.FinalComposition);
+    gfxDestroyKernel(gfx, kernel_.ToneMap);
 
     gfxDestroyKernel(gfx, kernel_.ClearCard);
     gfxDestroyKernel(gfx, kernel_.FilterActiveGaussiansForCard);
@@ -900,6 +934,7 @@ void Renderer::DestroyKernels () {
     gfxDestroyKernel(gfx, kernel_.DirectIlluminationTrace3DGSShadowRays);
     gfxDestroyKernel(gfx, kernel_.Trace3DGSProbeUpdateRays);
     gfxDestroyKernel(gfx, kernel_.Trace3DGSReflectionRays);
+    gfxDestroyKernel(gfx, kernel_.Trace3DGSStochasticRays);
 
     gfxDestroyKernel(gfx, kernel_.SpawnCameraRays);
     gfxDestroyKernel(gfx, kernel_.DisplayCameraRays);
@@ -908,7 +943,8 @@ void Renderer::DestroyKernels () {
 
     gfxDestroyKernel(gfx, kernel_.DrawRegularMeshes);
     gfxDestroyKernel(gfx, kernel_.DrawActiveGaussians);
-    gfxDestroyKernel(gfx, kernel_.TonemapAndDraw);
+    gfxDestroyKernel(gfx, kernel_.AntiAliasing);
+    gfxDestroyKernel(gfx, kernel_.DrawToBackBuffer);
 
     gfxDestroyKernel(gfx, kernel_.Debug_SSRC_VisualizeProbes);
     gfxDestroyKernel(gfx, kernel_.Debug_SSRC_PrepareVisualizeProbeUpdateRays);

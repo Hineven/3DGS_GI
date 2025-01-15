@@ -137,6 +137,9 @@ void DeviceScene::UpdateLights(const Scene &scene) {
         if (scene.light_instance_[i] != -1) {
             glm::mat4x3 transform = scene.GetInstanceTransformMatrix(scene.light_instance_[i]);
             transformed_light_data[i] = scene.light_data_[i];
+            if (!scene.gsi_active_[scene.light_instance_[i]]) {
+                transformed_light_data[i].Radiance = glm::vec3(0);
+            }
             transformed_light_data[i].V1 = transform * glm::vec4(transformed_light_data[i].V1, 1.f);
             transformed_light_data[i].V2 = transform * glm::vec4(transformed_light_data[i].V2, 1.f);
             transformed_light_data[i].V3 = transform * glm::vec4(transformed_light_data[i].V3, 1.f);
@@ -193,96 +196,128 @@ void DeviceScene::UpdateTransforms(const Scene &scene) {
     }
 }
 
+
+void DeviceScene::UpdateMaterials(const Scene &scene) {
+    auto gfx = AppInternal::GetInstance().GetGfx();
+    auto total_size = uint32_t(scene.num_instances_ * sizeof(SimpleMaterial));
+    if (material_data_staging_.getSize() < total_size) {
+        material_data_staging_ = gfxCreateBuffer(gfx, total_size, nullptr, kGfxCpuAccess_Write);
+        material_data_staging_.setName("MaterialDataStagingBuffer");
+    }
+    if (!gsi_materials_ || gsi_materials_.getSize() < scene.num_instances_ * sizeof(SimpleMaterial)) {
+        if (gsi_materials_) gfxDestroyBuffer(gfx, gsi_materials_);
+        gsi_materials_ = gfxCreateBuffer(gfx, scene.num_instances_ * sizeof(SimpleMaterial), scene.gsi_materials_.data());
+        gsi_materials_.setName("GSIMaterialsBuffer");
+    } else {
+        memcpy((char*)gfxBufferGetData(gfx, material_data_staging_), scene.gsi_materials_.data(), scene.num_instances_ * sizeof(SimpleMaterial));
+        gfxCommandCopyBuffer(gfx, gsi_materials_, 0, material_data_staging_, 0, scene.num_instances_ * sizeof(SimpleMaterial));
+    }
+}
+
+
 void DeviceScene::UpdateGfxScene(const Scene & scene) {
     auto gfx = AppInternal::GetInstance().GetGfx();
     if (!gfx_scene_) gfx_scene_ = gfxCreateScene();
     auto filename = scene.environment_map_path_.string();
-    if (kGfxResult_NoError != gfxSceneImport(gfx_scene_, filename.c_str())) {
-        app_warning("Failed to import environment map: " << scene.environment_map_path_.string().c_str());
-        return ;
+    if (filename.length() > 0) {
+        if (kGfxResult_NoError != gfxSceneImport(gfx_scene_, filename.c_str())) {
+            app_warning("Failed to import environment map: " << scene.environment_map_path_.string().c_str());
+            return ;
+        }
+        auto resource = gfxSceneFindObjectByAssetFile<GfxImage>(gfx_scene_, filename.c_str());
+        if (!resource) {
+            app_warning("Failed to load environment map: " << scene.environment_map_path_.string().c_str());
+            return ;
+        }
+        uint width = 1024;
+        uint num_mips = gfxCalculateMipCount(width);
+
+        environment_map_ = gfxCreateTextureCube(
+            gfx, width, DXGI_FORMAT_R16G16B16A16_FLOAT, num_mips
+        );
+        environment_map_.setName("EnvironmentMap");
+
+        uint in_width = resource->width;
+        uint in_height = resource->height;
+        uint in_num_mips = gfxCalculateMipCount(in_width, in_height);
+        uint in_num_channels = resource->channel_count;
+        uint in_channel_bytes = resource->bytes_per_channel;
+
+        GfxTexture in_environment_texture = gfxCreateTexture2D(
+            gfx, in_width, in_height, resource->format, in_num_mips
+        );
+        {
+            GfxBuffer upload_buffer = gfxCreateBuffer(gfx,
+            (size_t)in_width * in_height * in_num_channels * in_channel_bytes,
+                resource->data.data(), kGfxCpuAccess_Write);
+            gfxCommandCopyBufferToTexture(gfx, in_environment_texture, upload_buffer);
+            gfxCommandGenerateMips(gfx, in_environment_texture);
+            gfxDestroyBuffer(gfx, upload_buffer);
+        }
+
+        glm::dvec3 const forward_vectors[] = {glm::dvec3(-1.0, 0.0, 0.0), glm::dvec3(1.0, 0.0, 0.0),
+        glm::dvec3(0.0, 1.0, 0.0), glm::dvec3(0.0, -1.0, 0.0), glm::dvec3(0.0, 0.0, -1.0),
+        glm::dvec3(0.0, 0.0, 1.0)};
+
+        glm::dvec3 const up_vectors[] = {glm::dvec3(0.0, -1.0, 0.0), glm::dvec3(0.0, -1.0, 0.0),
+            glm::dvec3(0.0, 0.0, -1.0), glm::dvec3(0.0, 0.0, 1.0), glm::dvec3(0.0, -1.0, 0.0),
+            glm::dvec3(0.0, -1.0, 0.0)};
+
+        uint32_t const buffer_dimensions[] = {
+            environment_map_.getWidth(), environment_map_.getHeight()};
+        gfxProgramSetParameter(gfx, ibl_program_, "g_BufferDimensions", buffer_dimensions);
+        gfxProgramSetParameter(gfx, ibl_program_, "g_EnvironmentMap", in_environment_texture);
+        gfxProgramSetParameter(gfx, ibl_program_, "g_LinearSampler", AppInternal::GetInstance().GetSamplers().linear_wrap);
+
+        for (uint32_t cubemap_face = 0; cubemap_face < 6; ++cubemap_face)
+        {
+
+            gfxCommandBindColorTarget(gfx, 0, environment_map_, 0, cubemap_face);
+
+            glm::dmat4 const view =
+                glm::lookAt(glm::dvec3(0.0), forward_vectors[cubemap_face], up_vectors[cubemap_face]);
+            glm::dmat4 const proj          = glm::perspective(M_PI / 2.0, 1.0, 0.1, 1e4);
+            glm::mat4 const  view_proj_inv = glm::mat4(glm::inverse(proj * view));
+
+            gfxProgramSetParameter(gfx, ibl_program_, "g_ViewProjectionInverse", view_proj_inv);
+
+            gfxCommandBindKernel(gfx, draw_sky_kernel_);
+            gfxCommandDraw(gfx, 3);
+        }
+
+        for (uint32_t mip_level = 1; mip_level < num_mips; ++mip_level)
+        {
+            gfxProgramSetParameter(
+                gfx, ibl_program_, "g_InEnvironmentBuffer", environment_map_, mip_level - 1);
+            gfxProgramSetParameter(
+                gfx, ibl_program_, "g_OutEnvironmentBuffer", environment_map_, mip_level);
+
+            uint32_t const *num_threads = gfxKernelGetNumThreads(gfx, blur_sky_kernel_);
+            uint32_t const  num_groups_x =
+                (GFX_MAX(width >> mip_level, 1u) + num_threads[0] - 1) / num_threads[0];
+            uint32_t const num_groups_y =
+                (GFX_MAX(width >> mip_level, 1u) + num_threads[1] - 1) / num_threads[1];
+            uint32_t const num_groups_z = 6; // blur all faces
+
+            gfxCommandBindKernel(gfx, blur_sky_kernel_);
+            gfxCommandDispatch(gfx, num_groups_x, num_groups_y, num_groups_z);
+        }
+
+        auto handle = gfxSceneGetImageHandle(gfx_scene_, resource.getIndex());
+        gfxSceneDestroyImage(gfx_scene_, handle);
+        gfxDestroyTexture(gfx, in_environment_texture);
+    } else {
+        // Black
+        uint width = 1024;
+        uint num_mips = gfxCalculateMipCount(width);
+        float clear_value [] = {0.0f, 0.0f, 0.0f, 0.0f};
+        environment_map_ = gfxCreateTextureCube(
+            gfx, width, DXGI_FORMAT_R16G16B16A16_FLOAT, num_mips,
+            clear_value
+        );
+        environment_map_.setName("EnvironmentMap");
+        gfxCommandClearTexture(gfx, environment_map_);
     }
-    auto resource = gfxSceneFindObjectByAssetFile<GfxImage>(gfx_scene_, filename.c_str());
-    if (!resource) {
-        app_warning("Failed to load environment map: " << scene.environment_map_path_.string().c_str());
-        return ;
-    }
-    uint width = 1024;
-    uint num_mips = gfxCalculateMipCount(width);
-
-    environment_map_ = gfxCreateTextureCube(
-        gfx, width, DXGI_FORMAT_R16G16B16A16_FLOAT, num_mips
-    );
-    environment_map_.setName("EnvironmentMap");
-
-    uint in_width = resource->width;
-    uint in_height = resource->height;
-    uint in_num_mips = gfxCalculateMipCount(in_width, in_height);
-    uint in_num_channels = resource->channel_count;
-    uint in_channel_bytes = resource->bytes_per_channel;
-
-    GfxTexture in_environment_texture = gfxCreateTexture2D(
-        gfx, in_width, in_height, resource->format, in_num_mips
-    );
-    {
-        GfxBuffer upload_buffer = gfxCreateBuffer(gfx,
-        (size_t)in_width * in_height * in_num_channels * in_channel_bytes,
-            resource->data.data(), kGfxCpuAccess_Write);
-        gfxCommandCopyBufferToTexture(gfx, in_environment_texture, upload_buffer);
-        gfxCommandGenerateMips(gfx, in_environment_texture);
-        gfxDestroyBuffer(gfx, upload_buffer);
-    }
-
-    glm::dvec3 const forward_vectors[] = {glm::dvec3(-1.0, 0.0, 0.0), glm::dvec3(1.0, 0.0, 0.0),
-    glm::dvec3(0.0, 1.0, 0.0), glm::dvec3(0.0, -1.0, 0.0), glm::dvec3(0.0, 0.0, -1.0),
-    glm::dvec3(0.0, 0.0, 1.0)};
-
-    glm::dvec3 const up_vectors[] = {glm::dvec3(0.0, -1.0, 0.0), glm::dvec3(0.0, -1.0, 0.0),
-        glm::dvec3(0.0, 0.0, -1.0), glm::dvec3(0.0, 0.0, 1.0), glm::dvec3(0.0, -1.0, 0.0),
-        glm::dvec3(0.0, -1.0, 0.0)};
-
-    uint32_t const buffer_dimensions[] = {
-        environment_map_.getWidth(), environment_map_.getHeight()};
-    gfxProgramSetParameter(gfx, ibl_program_, "g_BufferDimensions", buffer_dimensions);
-    gfxProgramSetParameter(gfx, ibl_program_, "g_EnvironmentMap", in_environment_texture);
-    gfxProgramSetParameter(gfx, ibl_program_, "g_LinearSampler", AppInternal::GetInstance().GetSamplers().linear_wrap);
-
-    for (uint32_t cubemap_face = 0; cubemap_face < 6; ++cubemap_face)
-    {
-
-        gfxCommandBindColorTarget(gfx, 0, environment_map_, 0, cubemap_face);
-
-        glm::dmat4 const view =
-            glm::lookAt(glm::dvec3(0.0), forward_vectors[cubemap_face], up_vectors[cubemap_face]);
-        glm::dmat4 const proj          = glm::perspective(M_PI / 2.0, 1.0, 0.1, 1e4);
-        glm::mat4 const  view_proj_inv = glm::mat4(glm::inverse(proj * view));
-
-        gfxProgramSetParameter(gfx, ibl_program_, "g_ViewProjectionInverse", view_proj_inv);
-
-        gfxCommandBindKernel(gfx, draw_sky_kernel_);
-        gfxCommandDraw(gfx, 3);
-    }
-
-    for (uint32_t mip_level = 1; mip_level < num_mips; ++mip_level)
-    {
-        gfxProgramSetParameter(
-            gfx, ibl_program_, "g_InEnvironmentBuffer", environment_map_, mip_level - 1);
-        gfxProgramSetParameter(
-            gfx, ibl_program_, "g_OutEnvironmentBuffer", environment_map_, mip_level);
-
-        uint32_t const *num_threads = gfxKernelGetNumThreads(gfx, blur_sky_kernel_);
-        uint32_t const  num_groups_x =
-            (GFX_MAX(width >> mip_level, 1u) + num_threads[0] - 1) / num_threads[0];
-        uint32_t const num_groups_y =
-            (GFX_MAX(width >> mip_level, 1u) + num_threads[1] - 1) / num_threads[1];
-        uint32_t const num_groups_z = 6; // blur all faces
-
-        gfxCommandBindKernel(gfx, blur_sky_kernel_);
-        gfxCommandDispatch(gfx, num_groups_x, num_groups_y, num_groups_z);
-    }
-
-    auto handle = gfxSceneGetImageHandle(gfx_scene_, resource.getIndex());
-    gfxSceneDestroyImage(gfx_scene_, handle);
-    gfxDestroyTexture(gfx, in_environment_texture);
 }
 
 
@@ -321,6 +356,7 @@ void DeviceScene::Destroy () {
 
     gfxDestroyBuffer(gfx, light_data_staging_);
     gfxDestroyBuffer(gfx, transform_data_staging_);
+    gfxDestroyBuffer(gfx, material_data_staging_);
 
     gfxDestroyScene(gfx_scene_);
 }

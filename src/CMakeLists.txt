@@ -7,6 +7,7 @@ add_executable(3DGS_AdvGI
         device_scene.cpp
         renderer.cpp
         renderer_init.cpp
+        renderer_saveimg.cpp
         timed.cpp
         lut.cpp
         bluenoise.cpp

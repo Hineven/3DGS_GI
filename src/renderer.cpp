@@ -22,6 +22,10 @@
 // #define NO_INDIRECT_DISPATCH
 // #define NO_RAYTRACING_INDIRECT_DISPATCH
 
+// Max out render quality for checking consistency between ours and R3DG, try to exclude
+// inconsistencies caused by trading render quality for performance.
+// #define MAXMIZE_RENDER_QUALITY_PRESET
+
 Renderer::Renderer () : Timed("Renderer"), blue_noise_sampler_(AppInternal::GetInstance().GetGfx()) {
 
 }
@@ -29,6 +33,11 @@ Renderer::Renderer () : Timed("Renderer"), blue_noise_sampler_(AppInternal::GetI
 Renderer::~Renderer () {
 
 }
+
+void Renderer::ScreenShot(std::string file_name) {
+    requested_screen_shots_.push_back(file_name);
+}
+
 
 void Renderer::GenerateDispatchRaysIndirect(const GfxBuffer &ray_count_buffer) {
     auto & gfx = AppInternal::GetInstance().GetGfx();
@@ -202,6 +211,17 @@ void Renderer::RenderUI () {
                 if (changed) {
                     scene.SetInstanceTransform(i, model);
                     should_update_transforms_ = true;
+                }
+                auto mat = scene.GetInstanceMaterial(i);
+                changed = false;
+                changed |= ImGui::SliderFloat3("Color", (float*)&mat.Albedo, 0, scene.IsGaussianInstance(i) ? 3 : 1);
+                changed |= ImGui::SliderFloat("Roughess", &mat.Roughness, 0, scene.IsGaussianInstance(i) ? 5 : 1);
+                if (scene.IsGaussianInstance(i)) {
+                    changed |= ImGui::ColorPicker3("AlbedoClamp", &mat.Emissive.x);
+                }
+                if (changed) {
+                    scene.SetInstanceMaterial(i, mat);
+                    should_update_materials_ = true;
                 }
                 ImGui::PopID();
             }
@@ -381,7 +401,7 @@ void Renderer::Render() {
         UB.FrameIndex = frame_index_;
 
         UB.DebugMode = options_.debug_mode;
-        REGISTER_CVAR(UB.VisualizeShadingRays, "Visualize HWRT shading ray results. Otherwise, visualize shadow ray depth results.",
+        REGISTER_CVAR(UB.HWRT_VisualizeShadingRays, "Visualize HWRT shading ray results. Otherwise, visualize shadow ray depth results.",
             false);
         REGISTER_CVAR(UB.OpaqueThreshold, "Pixels with alpha values higher than this threshold are considered opaque.",
             0.6f, 0.0f, 1.0f);
@@ -457,7 +477,7 @@ void Renderer::Render() {
         REGISTER_CVAR(UB.DI_OcclusionThresholdMinFactor, "Minimum factor of shadow ray length threshold upon DI occlusion tests.", 0.97f);
         REGISTER_CVAR(UB.DI_OcclusionThresholdMaxFactor, "Maximum factor of shadow ray length threshold upon DI occlusion tests.", 0.99f);
 
-        REGISTER_CVAR(UB.DI_FilterGaussianRadius, "Direct illumination spatial filter gaussian kernel multiplier.", 2.8f, 0.5f, 4.f);
+        REGISTER_CVAR(UB.DI_FilterGaussianRadius, "Direct illumination spatial filter gaussian kernel multiplier.", 2.f, 0.5f, 4.f);
         UB.DI_InvFilterGaussianRadius2 = 1.f / (UB.DI_FilterGaussianRadius * UB.DI_FilterGaussianRadius);
         UB.DI_InvFilterGaussianRadius = 1.f / UB.DI_FilterGaussianRadius;
 
@@ -465,25 +485,46 @@ void Renderer::Render() {
         REGISTER_CVAR(UB.DI_NoTemporalDenoising, "Disable temporal denoising for direct illumination.", false);
 
         REGISTER_CVAR(UB.DI_NoSpatialDenoising, "Disable spatial denoising for direct illumination.", false);
-        REGISTER_CVAR(UB.DI_Denoiser_TargetNumSamples, "The target number of samples to achieve for direct illumination denoising.", 96, 1, 256);
+        REGISTER_CVAR(UB.DI_Denoiser_TargetNumSamples, "The target number of samples to achieve for direct illumination denoising.", 50, 1, 256);
+
+#ifdef MAXMIZE_RENDER_QUALITY_PRESET
+#define DENOISER_TARGET_NUM_SAMPLES 64
+#else
+#define DENOISER_TARGET_NUM_SAMPLES 16
+#endif
 
         REGISTER_CVAR(UB.II_NoTemporalDenoising, "Disable temporal denoising for indirect illumination.", false);
-        REGISTER_CVAR(UB.II_Denoiser_TargetNumSamples, "The target number of samples to achieve for indirect illumination denoising.", 16, 1, 64);
+        REGISTER_CVAR(UB.II_Denoiser_TargetNumSamples, "The target number of samples to achieve for indirect illumination denoising.",
+            DENOISER_TARGET_NUM_SAMPLES, 1, 64);
         REGISTER_CVAR(UB.II_SecondaryVertexNormalOffset, "Offset along the normal of the secondary vertex when spawning shadow rays for direct illumination.", 1e-2f, 0.f, 0.5f);
         REGISTER_CVAR(UB.II_SecondaryVertexRadianceClamping, "Clamp radiance values of secondary vertices for indirect illumination. "
                                                              "Excluding outliers.", 100.f, 1.f, 200.f);
 
-        REGISTER_CVAR(UB.FallbackReflection_Denoiser_TargetNumSamples, "The target number of samples to achieve for fallback reflection denoising.", 16, 1, 64);
+#ifdef MAXMIZE_RENDER_QUALITY_PRESET
+#define NUM_UPDATE_RAY_PER_PROBE_IN_WAVES 4
+#else
+#define NUM_UPDATE_RAY_PER_PROBE_IN_WAVES 2
+#endif
+        REGISTER_CVAR(UB.FallbackReflection_Denoiser_TargetNumSamples, "The target number of samples to achieve for fallback reflection denoising.",
+            DENOISER_TARGET_NUM_SAMPLES, 1, 64);
 
         REGISTER_CVAR(UB.SSRC_ProbeFiltering, "Enable probe filtering for SSRC.", true);
 
         REGISTER_CVAR(UB.SSRC_NoImportanceSampling, "Disable importance sampling for SSRC.", false);
         UB.SSRC_NumUniformScreenProbes = UB.TileDimensions.x * UB.TileDimensions.y;
-        REGISTER_CVAR(UB.SSRC_BaseUpdateRayWaves, "Number of probe update rays allocated for each probe, in waves.", 1, 2, SSRC_MAX_NUM_UPDATE_RAY_PER_PROBE / cfg_.wave_lane_count);
+
+        REGISTER_CVAR(UB.SSRC_BaseUpdateRayWaves, "Number of probe update rays allocated for each probe, in waves.",
+            NUM_UPDATE_RAY_PER_PROBE_IN_WAVES, 2, SSRC_MAX_NUM_UPDATE_RAY_PER_PROBE / cfg_.wave_lane_count);
         REGISTER_CVAR(UB.SSRC_ResetCache, "Reset SSRC probes at the begging of each frame.", false);
 
         UB.SSRC_MaxNumAdaptiveProbes = options_.SSRC_max_num_probes - UB.SSRC_NumUniformScreenProbes;
-        REGISTER_CVAR(UB.SSRC_NoAdaptiveProbes, "Do not allocate adaptive probes for SSRC.", false);
+#ifdef MAXMIZE_RENDER_QUALITY_PRESET
+#define NO_ADAPTIVE_PROBES true
+#else
+// My implementation somehow downgrades render quality...So I'll just shut this down.
+#define NO_ADAPTIVE_PROBES true
+#endif
+        REGISTER_CVAR(UB.SSRC_NoAdaptiveProbes, "Do not allocate adaptive probes for SSRC.", NO_ADAPTIVE_PROBES);
         REGISTER_CVAR(CB.SSRC_freeze_tile_jitter, "Freeze the tile jitter for SSRC.", false);
         REGISTER_CVAR(CB.SSRC_tile_jitter, "Tile jitter for SSRC (frozen).", 0, 0, 7);
         if (CB.SSRC_freeze_tile_jitter) {
@@ -507,7 +548,7 @@ void Renderer::Render() {
         UB.PreviousTAAJitterUV = history_UB_.TAAJitterUV;
 
         REGISTER_CVAR(UB.Reflection_MaxRoughness, "Maximum roughness to spawn reflection rays.", 0.4f);
-        REGISTER_CVAR(UB.Reflection_FilterRadius, "Gaussian filter radius for spatial reflection denoising.", 3.f, 1, 7);
+        REGISTER_CVAR(UB.Reflection_FilterRadius, "Gaussian filter radius for spatial reflection denoising.", 1.8f, 1, 5);
         UB.Reflection_InvFilterRadius2 = 1.f / (UB.Reflection_FilterRadius * UB.Reflection_FilterRadius);
         UB.Reflection_InvFilterRadius = 1.f / UB.Reflection_FilterRadius;
         REGISTER_CVAR(UB.FallbackReflection_NoTemporalDenoising, "Disable temporal denoising for fallback reflection.", false);
@@ -537,6 +578,26 @@ void Renderer::Render() {
             "Move back the origin along the ray before HWRT ray continuation.", 8e-3f, 5e-3f, 2e-2f);
 
         REGISTER_CVAR(UB.ProbeNormalWeightFactor, "How normals affect probe weights when sampling from SSRC probes.", 2.f, 1.f, 10.f);
+#ifdef MAXMIZE_RENDER_QUALITY_PRESET
+#define INITIAL_GAUSSIAN_EXPAND_FACTOR 4.f
+#else
+#define INITIAL_GAUSSIAN_EXPAND_FACTOR 2.25f
+#endif
+        REGISTER_CVAR(UB.GaussianExpandFactor, "How much we want to overdraw gaussians when doing rasterization."
+                                               "Significantly affect render quality and performance.", INITIAL_GAUSSIAN_EXPAND_FACTOR, 2.f, 4.5f);
+#ifdef MAXMIZE_RENDER_QUALITY_PRESET
+#define INITIAL_TEMPORAL_PROBE_REUSE_FACTOR 0.5
+#else
+#define INITIAL_TEMPORAL_PROBE_REUSE_FACTOR 0.75f
+#endif
+        REGISTER_CVAR(UB.SSRC_ProbeTemporalBlendFactor, "Temporal reuse fraction for probes.",
+            INITIAL_TEMPORAL_PROBE_REUSE_FACTOR, 0.5f, 1.f
+        );
+        REGISTER_CVAR(UB.II_EnvironmentOnly, "Exclude GI from surfaces when computing indirect illumination.", false);
+
+        REGISTER_CVAR(UB.HWRT_VisualizeStochasticRays, "Visualize results from stochastic ray tracing (albedo).", false);
+        REGISTER_CVAR(UB.HWRT_ShadeWithSphericalHarmonics, "Whether to shade shading rays with SH3 (otherwise fallback to albedo).", false);
+
 
         REGISTER_CVAR(UB.LightingSkyRadianceLOD, "LOD when sampling lighting from the sky.", 0, 0, 5);
         REGISTER_CVAR(UB.Debug_VisualizeLightGridCascade, "", false);
@@ -561,7 +622,9 @@ void Renderer::Render() {
         REGISTER_CVAR(UB.TonemapMode, "Tonemap mode. "
                                       "0 for gamma correction,"
                                       "1 for ACEST,"
-                                      "2 for consistent behavior with Relightable 3DGS.", 0, 0, 2);
+                                      "2 for consistent behavior with Relightable 3DGS.", 2, 0, 2);
+        REGISTER_CVAR(UB.EnableAA, "Use FXAA Postprocessing.", true);
+        REGISTER_CVAR(UB.SkyLightMultiplier, "Multiplier on the sky light (environment light).", 1, 0, 1);
 
         REGISTER_CVAR(UB.Debug_VisualizeMeshCardAtlasOffset, "Offset", glm::vec2(0, 0), 0, CARD_ATLAS_RESOLUTION);
 
@@ -625,12 +688,26 @@ void Renderer::Render() {
     }
 
     // Update lights
+    {
+        // Set active states for each instance
+        if (is_instance_active_.size() < scene.GetNumInstances()) {
+            is_instance_active_.resize(scene.GetNumInstances(), true);
+        }
+        for (int i = 0; i < scene.GetNumInstances(); i++) {
+            scene.SetInstanceActive(i, is_instance_active_[i]);
+        }
+    }
     scene.UpdateDeviceLights();
 
     if (should_update_transforms_) {
         scene.UpdateDeviceTransforms();
         should_rebuild_TLAS_ = true;
         should_update_transforms_ = false;
+    }
+
+    if (should_update_materials_) {
+        scene.UpdateDeviceMaterials();
+        should_update_materials_ = false;
     }
 
     auto & device_scene = scene.GetDeviceScene();
@@ -772,6 +849,10 @@ void Renderer::Render() {
     gfxProgramSetParameter(gfx, program_, "g_HistoryRadiance", tex_.radiance[(frame_index_ + 1) & 1]);
     gfxProgramSetParameter(gfx, program_, "g_RW_HistoryDiffuseRadianceWithoutEmission", tex_.history_diffuse_radiance_without_emission);
     gfxProgramSetParameter(gfx, program_, "g_HistoryDiffuseRadianceWithoutEmission", tex_.history_diffuse_radiance_without_emission);
+
+    gfxProgramSetParameter(gfx, program_, "g_RW_MappedRGBA", tex_.mapped_rgba);
+    gfxProgramSetParameter(gfx, program_, "g_MappedRGBA", tex_.mapped_rgba);
+    gfxProgramSetParameter(gfx, program_, "g_FinalRGBA", tex_.final_rgba);
 
     gfxProgramSetParameter(gfx, program_, "g_RWReflectionTexture", tex_.reflection[frame_index_ & 1]);
     gfxProgramSetParameter(gfx, program_, "g_RWFilteredReflectionTexture", tex_.filtered_reflection);
@@ -1326,7 +1407,12 @@ void Renderer::Render() {
             gfxCommandDispatch(gfx, num_groups, 1, 1);
 
             int num_rays = num_groups * TILE_SIZE * TILE_SIZE;
-            if (UB.VisualizeShadingRays) {
+            if (UB.HWRT_VisualizeStochasticRays) {
+                gfxCommandBindKernel(gfx, kernel_.Trace3DGSStochasticRays);
+                gfxSbtSetShaderGroup(gfx, sbt_, kGfxShaderGroupType_Raygen, 0, "Trace3DGSStochasticRaysRaygen");
+                gfxSbtSetShaderGroup(gfx, sbt_, kGfxShaderGroupType_Hit, 0, "Trace3DGSStochasticHitGroup");
+                gfxSbtSetShaderGroup(gfx, sbt_, kGfxShaderGroupType_Miss, 0, "Trace3DGSStochasticMiss");
+            } else if (UB.HWRT_VisualizeShadingRays) {
                 gfxCommandBindKernel(gfx, kernel_.Trace3DGSRays);
                 gfxSbtSetShaderGroup(gfx, sbt_, kGfxShaderGroupType_Raygen, 0, "Trace3DGSRaygen");
                 gfxSbtSetShaderGroup(gfx, sbt_, kGfxShaderGroupType_Hit, 0, "Trace3DGSHitGroup");
@@ -1339,7 +1425,6 @@ void Renderer::Render() {
             }
             gfxCommandDispatchRays(gfx, sbt_, num_rays, 1, 1);
         }
-
         {
             auto section = TimedSection(*this, "DisplayCameraRays");
             int num_groups = UB.SmallTileDimensions.x * UB.SmallTileDimensions.y;
@@ -2003,10 +2088,39 @@ void Renderer::Render() {
         }
     }
 
-    // Tonemapping and output
+    // Tone Mapping
     {
-        auto section = TimedSection(*this, "TonemapAndDraw");
-        gfxCommandBindKernel(gfx, kernel_.TonemapAndDraw);
+        auto section = TimedSection(*this, "ToneMap");
+        gfxCommandBindKernel(gfx, kernel_.ToneMap);
+        gfxCommandDispatch(gfx, UB.TileDimensions.x, UB.TileDimensions.y, 1);
+    }
+
+    // AA and output
+    {
+        auto section = TimedSection(*this, "AntiAliasing");
+        gfxCommandBindColorTarget(gfx, 0, tex_.final_rgba);
+        gfxCommandBindKernel(gfx, kernel_.AntiAliasing);
+        gfxCommandDraw(gfx, 3, 1);
+    }
+
+    while (requested_screen_shots_.size() > 0) {
+        auto section = TimedSection(*this, "ScreenShot");
+        size_t buffer_size = (size_t)UB.ScreenDimensions.x * (size_t)UB.ScreenDimensions.y * 4;
+        auto readback_buffer = gfxCreateBuffer(gfx, buffer_size, nullptr, kGfxCpuAccess_Read);
+        gfxCommandCopyTextureToBuffer(gfx, readback_buffer, tex_.final_rgba);
+        gfxFinish(gfx);
+        auto data = gfxBufferGetData(gfx, readback_buffer);
+        auto filename = requested_screen_shots_.back();
+        requested_screen_shots_.pop_back();
+        SaveImage(filename.c_str(), (uint8_t*)data, (int)UB.ScreenDimensions.x, (int)UB.ScreenDimensions.y);
+        std::cout << "Screenshot: " << filename << std::endl;
+        gfxDestroyBuffer(gfx, readback_buffer);
+    }
+
+    // Draw to backbuffer
+    {
+        auto section = TimedSection(*this, "DrawToBackBuffer");
+        gfxCommandBindKernel(gfx, kernel_.DrawToBackBuffer);
         gfxCommandDraw(gfx, 3, 1);
     }
 

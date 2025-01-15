@@ -21,8 +21,8 @@ public:
     inline GfxContext& GetGfx() { return gfx_; }
     inline const std::string & GetRootPath() { return root_path_; }
 
-    inline int GetWindowWidth() { return 800; }
-    inline int GetWindowHeight() { return 800; }
+    inline int GetWindowWidth() { return 1920; }
+    inline int GetWindowHeight() { return 1088; }
 
     inline Scene & GetScene () { return scene_; }
 
@@ -33,7 +33,12 @@ public:
 protected:
 
     void LoadTeaserScene ();
-    void LoadLightingComparisonScene (std::string model_name, std::string env_name) ;
+    void LoadLightingComparisonScene (std::string model_name, std::string env_name, glm::vec3 extra_rot = {}, glm::vec3 extra_scale = {1, 1, 1}) ;
+    void LoadFaultyArmadilloScene ();
+    void LoadCornellBoxScene (std::string model_name, glm::vec3 extra_rot = {}, glm::vec3 extra_scale = {1, 1, 1}) ;
+    void LoadAllLightsScene ();
+    void LoadLightRoomScene ();
+
 
     GfxWindow window_;
     GfxContext gfx_;

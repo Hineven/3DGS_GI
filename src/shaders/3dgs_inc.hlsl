@@ -19,14 +19,16 @@
 // 24.12.17: Found this method mitigates the "rimlights" around lit round edges of objects.
 #define HIGH_QUALITY_NORMAL_RECONSTRUCTION
 
+#define BACKUP_RADIANCE_ON_PROBE_TEXELS
+
 // Use constant gaussian depths instead of the "max response plane" when reconstructing depths
 // This helps mitigates some artifacts raised by precision issues.
-#define CONSTANT_GAUSSIAN_DEPTH
+// #define CONSTANT_GAUSSIAN_DEPTH
 
 // Bitpack the vertex attributes when transfering them to the fragment shader
 // #define BITPACK_VERTEX_ATTRIBUTES
 
-// Probe normals will affect weights
+// Probe normals will affect probe sample weights
 #define PROBE_NORMAL_WEIGTHS
 
 // Output full G-Buffers for PBR rendering
@@ -218,6 +220,9 @@ Texture2D<float4>        g_Radiance;
 Texture2D<float4>        g_HistoryRadiance;
 RWTexture2D<float4>      g_RW_HistoryDiffuseRadianceWithoutEmission;
 Texture2D<float4>        g_HistoryDiffuseRadianceWithoutEmission;
+Texture2D<float4>        g_MappedRGBA;
+RWTexture2D<float4>      g_RW_MappedRGBA;
+Texture2D<float4>        g_FinalRGBA;
 
 RWTexture2D<float4>        g_RWReflectionTexture;
 RWTexture2D<float4>        g_RWFilteredReflectionTexture;

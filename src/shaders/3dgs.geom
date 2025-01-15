@@ -46,7 +46,7 @@ void DrawActiveGaussians(point DrawActiveGaussians_GSInput Input[1], inout Trian
     float2 Vec1    = -(UnpackUnorm16x2(g_RWActiveGaussianQuadNDCVector0Buffer[ActiveListIndex]) * 2 - 1);
     float2 Vec2    = -(UnpackUnorm16x2(g_RWActiveGaussianQuadNDCVector1Buffer[ActiveListIndex]) * 2 - 1);
     // Expand the quad to be conservative
-    float  Expand  = 2.25f;
+    float  Expand  = UB.GaussianExpandFactor;
     float2 Top    = Center + Expand * -Vec1;
     float2 Bottom = Center + Expand *  Vec1;
     float2 Vec1H  = Vec1 * 0.5;
@@ -84,6 +84,15 @@ void DrawActiveGaussians(point DrawActiveGaussians_GSInput Input[1], inout Trian
     float  D_BL    =  Depth01.y -Depth01.x + Depth;
     // GaussianIndex = max(0, min(GaussianIndex, 10000));
     GaussianPBR G_PBR = FetchGaussianPBR(GaussianIndex);
+
+    SimpleMaterial M = g_MaterialBuffer[InstanceIndex];
+    // Scale color & roughness
+    {
+        float3 ColorScaler = M.Albedo;
+        G_PBR.Albedo = saturate(G_PBR.Albedo * ColorScaler);
+        G_PBR.Albedo = max(G_PBR.Albedo, M.Emissive);
+        G_PBR.Roughness = saturate(G_PBR.Roughness * M.Roughness);
+    }
     
     float4 AlbedoAlpha = float4(G_PBR.Albedo, G.Alpha);
 #ifndef OUTPUT_PBR_G_BUFFER
@@ -92,9 +101,9 @@ void DrawActiveGaussians(point DrawActiveGaussians_GSInput Input[1], inout Trian
 #endif
     
     // Is the quantilization affecting render quality?
-    int Seed = UB.FrameIndex + InstanceIndex * 77183 + GaussianIndex * 81937121;
-    float Q_Noise = 0.01 * (frac(sin(Seed) * 43758.5453) - 0.5f);
-    AlbedoAlpha.a = saturate(AlbedoAlpha.a + Q_Noise);
+    // int Seed = UB.FrameIndex + InstanceIndex * 77183 + GaussianIndex * 81937121;
+    // float Q_Noise = 0.2 * (frac(sin(Seed) * 43758.5453) - 0.5f);
+    // AlbedoAlpha.rgb = saturate(AlbedoAlpha.rgb + Q_Noise);
 
     float3 Albedo = AlbedoAlpha.xyz;
     float  Alpha = AlbedoAlpha.w;

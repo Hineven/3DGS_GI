@@ -6,6 +6,9 @@
 
 #include <iostream>
 #include "app_internal.h"
+
+#include <fstream>
+
 #include "renderer.h"
 #include "gfx_imgui.h"
 #include "glm/detail/type_quat.hpp"
@@ -25,10 +28,10 @@ int AppInternal::Run () {
     gfx_ = gfxCreateContext(
             window_
 #ifndef NDEBUG
-            ,
-            kGfxCreateContextFlag_EnableShaderDebugging
-            | kGfxCreateContextFlag_EnableDebugLayer
-            | kGfxCreateContextFlag_EnableStablePowerState
+            // ,
+            // kGfxCreateContextFlag_EnableShaderDebugging
+            // | kGfxCreateContextFlag_EnableDebugLayer
+            // | kGfxCreateContextFlag_EnableStablePowerState
 #endif
     );
 
@@ -89,8 +92,21 @@ int AppInternal::Run () {
 
     // Load scene
     {
-        // LoadTeaserScene();
-        LoadLightingComparisonScene("chair", "qwantani_dusk_2_4k.exr");
+        LoadTeaserScene();
+
+        // LoadLightingComparisonScene("chair", "qwantani_dusk_2_4k.exr");
+        // LoadLightingComparisonScene("jugs", "qwantani_dusk_2_4k.exr");
+        // LoadLightingComparisonScene("hotdog", "qwantani_dusk_2_4k.exr");
+        // LoadLightingComparisonScene("caterpillar", "qwantani_dusk_2_4k.exr", {-90, 0, 0});
+        // LoadLightingComparisonScene("drums", "rogland_overcast_4k.exr");
+        // LoadLightingComparisonScene("nerf_chair", "rogland_overcast_4k.exr");
+        // LoadLightingComparisonScene("barn", "rogland_overcast_4k.exr", {90, 0, 0}, {0.7, 0.7, 0.7});
+        // LoadLightingComparisonScene("ficus", "rogland_overcast_4k.exr");
+        // LoadLightingComparisonScene("armadillo", "rogland_overcast_4k.exr");
+        // LoadFaultyArmadilloScene();
+        // LoadCornellBoxScene("family", {-90, 36, 0});
+        // LoadAllLightsScene();
+        // LoadLightRoomScene();
 
         scene_.UpdateSceneBounds();
         scene_.UpdateDeviceScene();
@@ -292,8 +308,27 @@ int AppInternal::Run () {
             std::cout << "Shaders reloaded" << std::endl;
         }
 
+        // Screen capture
+        if (gfxWindowIsKeyPressed(window_, VK_F2)) {
+            renderer->ScreenShot("screenshot.png");
+        }
+
         if (gfxWindowIsKeyReleased(window_, VK_F3)) {
             show_ui = !show_ui;
+        }
+
+        if (gfxWindowIsKeyReleased(window_, VK_F4)) {
+            std::fstream file("profile.txt", std::ios::out);
+            for(auto & section : last_frame_timed_sections) {
+                // Keep the texts aligned
+                std::string name = section.first;
+                if(name.size() < 30) {
+                    name += std::string(30 - name.size(), ' ');
+                }
+                char buf[128];
+                sprintf_s(buf, "%s: %4.2f ms\n", name.c_str(), section.second);
+                file << buf;
+            }
         }
     }
 

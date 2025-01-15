@@ -110,60 +110,85 @@ GBufferOutput_RegularMesh DrawRegularMeshes (DrawRegulareMeshes_PSInput Input) {
     return Result;
 }
 
-float3 ACESToneMapping(float3 Color, float Exposure)
-{
-	float A = 2.51f;
-	float B = 0.03f;
-	float C = 2.43f;
-	float D = 0.59f;
-	float E = 0.14f;
-	Color *= Exposure;
-	return (Color * (A * Color + B)) / (Color * (C * Color + D) + E);
+// Simple FXAA for figure visuals, Modified from https://github.com/mattdesl/glsl-fxaa/blob/master/fxaa.glsl
+// This should be performed on RGB color buffer. Anyway i do that on the radiance buffer.
+#ifndef FXAA_REDUCE_MIN
+	#define FXAA_REDUCE_MIN   (1.0 / 128.0)
+#endif
+#ifndef FXAA_REDUCE_MUL
+	#define FXAA_REDUCE_MUL   (1.0 / 8.0)
+#endif
+#ifndef FXAA_SPAN_MAX
+	#define FXAA_SPAN_MAX     8.0
+#endif
+
+//optimized version for mobile, where dependent 
+//texture reads can be a bottleneck
+float4 fxaa(Texture2D tex, float2 fragCoord, float2 resolution,
+			float2 v_rgbNW, float2 v_rgbNE, 
+			float2 v_rgbSW, float2 v_rgbSE, 
+			float2 v_rgbM) {
+	float4 color;
+	float2 inverseVP = float2(1.0 / resolution.x, 1.0 / resolution.y);
+	float3 rgbNW = tex.SampleLevel(g_LinearClampSampler, v_rgbNW, 0).xyz;
+	float3 rgbNE = tex.SampleLevel(g_LinearClampSampler, v_rgbNE, 0).xyz;
+	float3 rgbSW = tex.SampleLevel(g_LinearClampSampler, v_rgbSW, 0).xyz;
+	float3 rgbSE = tex.SampleLevel(g_LinearClampSampler, v_rgbSE, 0).xyz;
+	float4 texColor = tex.SampleLevel(g_LinearClampSampler, v_rgbM, 0);
+	float3 rgbM  = texColor.xyz;
+	float3 luma = float3(0.299, 0.587, 0.114);
+	float lumaNW = dot(rgbNW, luma);
+	float lumaNE = dot(rgbNE, luma);
+	float lumaSW = dot(rgbSW, luma);
+	float lumaSE = dot(rgbSE, luma);
+	float lumaM  = dot(rgbM,  luma);
+	float lumaMin = min(lumaM, min(min(lumaNW, lumaNE), min(lumaSW, lumaSE)));
+	float lumaMax = max(lumaM, max(max(lumaNW, lumaNE), max(lumaSW, lumaSE)));
+	
+	float2 dir;
+	dir.x = -((lumaNW + lumaNE) - (lumaSW + lumaSE));
+	dir.y =  ((lumaNW + lumaSW) - (lumaNE + lumaSE));
+	
+	float dirReduce = max((lumaNW + lumaNE + lumaSW + lumaSE) *
+						  (0.25 * FXAA_REDUCE_MUL), FXAA_REDUCE_MIN);
+	
+	float rcpDirMin = 1.0 / (min(abs(dir.x), abs(dir.y)) + dirReduce);
+	dir = min(float2(FXAA_SPAN_MAX, FXAA_SPAN_MAX),
+			  max(float2(-FXAA_SPAN_MAX, -FXAA_SPAN_MAX),
+			  dir * rcpDirMin)) * inverseVP;
+	
+	float3 rgbA = 0.5 * (
+		tex.SampleLevel(g_LinearClampSampler, fragCoord * inverseVP + dir * (1.0 / 3.0 - 0.5), 0).xyz +
+		tex.SampleLevel(g_LinearClampSampler, fragCoord * inverseVP + dir * (2.0 / 3.0 - 0.5), 0).xyz);
+	float3 rgbB = rgbA * 0.5 + 0.25 * (
+		tex.SampleLevel(g_LinearClampSampler, fragCoord * inverseVP + dir * -0.5, 0).xyz +
+		tex.SampleLevel(g_LinearClampSampler, fragCoord * inverseVP + dir * 0.5, 0).xyz);
+
+	float lumaB = dot(rgbB, luma);
+	if ((lumaB < lumaMin) || (lumaB > lumaMax))
+		color = float4(rgbA, texColor.a);
+	else
+		color = float4(rgbB, texColor.a);
+	return color;
 }
 
-float3 Relightable3DGSToneMapping (float3 Color) {
-    float3 Low = 12.92f * Color;
-    float3 High = pow(max(Color, 0.0031308f), 1.0f / 2.4f) * 1.055f - 0.055f;
-    return select(Color > 0.0031308, High, Low);
-}
-
-float4 TonemapAndDraw (float4 InPosition : SV_Position) : SV_Target {
+float4 AntiAliasing (float4 InPosition : SV_Position) : SV_Target {
     float2 UV = InPosition.xy / UB.ScreenDimensions;
-    float4 Color = g_Radiance.Sample(g_LinearClampSampler, UV);
-    if(UB.TonemapMode == 0) {
-        Color.rgb = ACESToneMapping(Color.rgb, UB.TonemapExposure);
-    } else if(UB.TonemapMode == 1) {
-        Color.rgb = RadianceToColor(Color.rgb * UB.TonemapExposure);
-    } else {
-        Color.rgb = Relightable3DGSToneMapping(Color.rgb);
-    }
-	// Debugging
-	if(UB.DebugMode == 1) {
-		Color.rgb = ColorToRadiance(g_GColorTexture.Sample(g_LinearClampSampler, UV).rgb);
-    } else if(UB.DebugMode == 2) {
-        Color.rgb = g_GMaterialTexture.Sample(g_LinearClampSampler, UV).rrr;
-    } else if(UB.DebugMode == 3) {
-        Color.rgb = g_GNormalTexture.Sample(g_LinearClampSampler, UV).xyz;
-    } else if(UB.DebugMode == 4) {
-		float Depth = g_GFilteredDepthTexture.Sample(g_LinearClampSampler, UV).r * 0.2f;
-        Color = float4(Depth.xxx, 1);
-    } else if(UB.DebugMode == 5) {
-        float Alpha = g_GColorTexture.Sample(g_LinearClampSampler, UV).a;
-        Color = float4(Alpha.xxx, 1);
-    } else if(UB.DebugMode == 8) {
-		float3 VColor = g_DebugTexture.Sample(g_LinearClampSampler, UV).rgb;
-		Color = float4(VColor, 1);
-	} else if(UB.DebugMode == 6) {
-        int2 Coords = int2(UV * UB.ScreenDimensions);
-        float3 Reflection = g_RWReflectionTexture[Coords].rgb;
-        Color = float4(Reflection, 1);
-    } else if(UB.DebugMode == 7) {
-        int2 Coords = int2(UV * UB.ScreenDimensions);
-        float3 Reflection = g_RWFallbackReflectionTexture[Coords].rgb;
-        Color = float4(Reflection, 1);
+    float2 Resolution = UB.ScreenDimensions;
+    float2 InvResolution = 1.0 / UB.ScreenDimensions;
+    float2 v_rgbNW = UV + float2(-1.0, -1.0) * InvResolution;
+    float2 v_rgbNE = UV + float2(1.0, -1.0) * InvResolution;
+    float2 v_rgbSW = UV + float2(-1.0, 1.0) * InvResolution;
+    float2 v_rgbSE = UV + float2(1.0, 1.0) * InvResolution;
+    float2 v_rgbM  = UV;
+    float4 AA = fxaa(g_MappedRGBA, InPosition.xy, Resolution, v_rgbNW, v_rgbNE, v_rgbSW, v_rgbSE, v_rgbM);
+    if(UB.EnableAA) return AA;
+    return g_MappedRGBA.SampleLevel(g_LinearClampSampler, UV, 0);
+}
 
-    }
-    return Color;
+float4 DrawToBackBuffer (float4 InPosition : SV_Position) : SV_Target {
+    float2 UV = InPosition.xy / UB.ScreenDimensions;
+    return g_FinalRGBA.SampleLevel(g_LinearClampSampler, UV, 0);
 }
 
 struct Debug_VisualizeRays_FSInput {

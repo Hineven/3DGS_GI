@@ -611,7 +611,7 @@ Material FetchMaterial (CameraDescription C, uint2 TexelCoords) {
 	float4 AlbedoAlpha = GetColorTexture(C).Load(int3(TexelCoords, 0));
 	Result.Albedo = AlbedoAlpha.xyz;
 	Result.Alpha = AlbedoAlpha.w;
-	Result.Roughness = GetMaterialTexture(C).Load(int3(TexelCoords, 0)).x;
+	Result.Roughness = max(GetMaterialTexture(C).Load(int3(TexelCoords, 0)).x, 0.001f);
 	return Result;
 }
 
@@ -902,7 +902,9 @@ void TraceRaysInScreenSpace (uint DispatchID : SV_DispatchThreadID) {
 				float3 Radiance = g_HistoryDiffuseRadianceWithoutEmission.SampleLevel(g_PointClampSampler, PreviousUVW.xy, 0).xyz;
 				// BRDF already multiplied for radiances in g_HistoryDiffuseRadianceWithoutEmission
 				ProbeUpdateRayResult Result = FetchProbeUpdateRayResult(RayIndex);
-				Result.Radiance = Radiance;
+				if(!UB.II_EnvironmentOnly) {
+					Result.Radiance = Radiance;
+				}
 				Result.bBypass  = true;
 				WriteProbeUpdateRayResult(RayIndex, Result);
 #else
@@ -923,11 +925,11 @@ void TraceRaysInScreenSpace (uint DispatchID : SV_DispatchThreadID) {
 	// If not hit, backward the ray a little from the last visible position for ray continuation
 	if(!bHit) {
 		float LinearDepth = ZDepthToLinear(C, LastVisibleUVW.z);
-		float Bias = LinearDepth * UB.SSRT_RayContinuationBackwardBiasFactor;
 		float3 LastVisibleWorldPosition = RecoverWorldSpacePositionNDC2(C, 
 			UVToNDC2(LastVisibleUVW.xy), LinearDepth
 		);
 		HitDistance = min(length(LastVisibleWorldPosition - BiasedOrigin), MaxTraceDistance);
+		float Bias = min(LinearDepth * UB.SSRT_RayContinuationBackwardBiasFactor, HitDistance * 0.2f);
 		HitDistance = max(HitDistance - Bias, 0);
 	}
 	// Remember to reduce the texel relative thickness on SSRT if there're too many false hits.	
@@ -1889,7 +1891,9 @@ void SSRC_ResolveHitLightingFromScreenHistory (uint DispatchID : SV_DispatchThre
 					float3 HistoryRadiance = g_HistoryDiffuseRadianceWithoutEmission.Load(int3(HistoryScreenCoords, 0)).xyz;
 					// The radiance has been multiplied by BRDF. So no need to do shading again.
 					ProbeUpdateRayResult Result = FetchProbeUpdateRayResult(RayIndex);
-					Result.Radiance = HistoryRadiance;
+					if(!UB.II_EnvironmentOnly) {
+						Result.Radiance = HistoryRadiance;
+					}
 					Result.bBypass = true;
 					WriteProbeUpdateRayResult(RayIndex, Result);
 					bBypass = true;
@@ -1899,7 +1903,6 @@ void SSRC_ResolveHitLightingFromScreenHistory (uint DispatchID : SV_DispatchThre
 	}
 	if(!bBypass) {
 		if(Ray.bHit) {
-
 			// Queue up all hits that failed in reprojection and require direct lighting shading
 			int HitCountNoBypass = WaveActiveCountBits(true);
 			int HitCountListOffset = 0;
@@ -2023,6 +2026,7 @@ void SSRC_SampleLightRays (uint DispatchID : SV_DispatchThreadID) {
 	// Allocate an hash grid cache cell for the hit position
 	// (Only points outside of the screen are cached in the hash grid cache)
 	// Store indirections
+
 	uint HashCellIndex = HashGrids_AllocateTile(HitPosition, HitViewDirection);
 	// Probe update ray results should be resolved from this cell
 	g_RWProbeUpdateRayResolveHashCellIndexBuffer[ProbeUpdateRayIndex] = HashCellIndex;
@@ -2144,7 +2148,9 @@ void SSRC_ResolveHitDirectLightingFromTraceResult (uint DispatchID : SV_Dispatch
 	ProbeUpdateRayResult Result = FetchProbeUpdateRayResult(ProbeUpdateRayIndex);
 	// Bypass hash grid cache, directly transfer radiance from DI results
 	if(Result.bBypass) {
-		Result.Radiance = Radiance;
+		if(!UB.II_EnvironmentOnly) {
+			Result.Radiance = Radiance;
+		}
 		WriteProbeUpdateRayResult(ProbeUpdateRayIndex, Result);
 	}
 }
@@ -2255,7 +2261,9 @@ void SSRC_ResolveProbeUpdateRayRadianceFromCells (uint DispatchID : SV_DispatchT
 	ProbeUpdateRayResult Result = FetchProbeUpdateRayResult(ProbeUpdateRayIndex);
 	if(!Result.bBypass) {
 		// Resolve radiance from hash grid cache if no bypass is specified
-		Result.Radiance = Radiance.xyz;
+		if(!UB.II_EnvironmentOnly) {
+			Result.Radiance = Radiance.xyz;
+		}
 		WriteProbeUpdateRayResult(ProbeUpdateRayIndex, Result);
 	}
 }
@@ -2477,7 +2485,7 @@ void SSRC_UpdateProbes (int LocalID : SV_GroupThreadID, int GroupID : SV_GroupID
         // Accumulate backup radiance
         for(int BaseTexelIndex = 0; BaseTexelIndex < SSRC_PROBE_TEXTURE_TEXEL_COUNT; BaseTexelIndex += WAVE_SIZE) {
             int TexelIndex = BaseTexelIndex + LocalID;
-            float3 Radiance = RecoverRadiance(LocalProbeTexelsQuantilized[TexelIndex]);
+            float3 Radiance = RecoverRadiance(LocalProbeTexelsQuantilized[TexelIndex]).rgb;
             float  Weight   = RecoverWeight(LocalProbeTexelSampleWeightQuantilized[TexelIndex]);
             BackupRadianceSum += Radiance / max(Weight, 1e-4f);
             BackupRadianceWeightSum += (Weight != 0) ? 1 : 0;
@@ -2526,8 +2534,8 @@ void SSRC_UpdateProbes (int LocalID : SV_GroupThreadID, int GroupID : SV_GroupID
             // Shadow-preserving biased temporal hysteresis (inspired by: https://www.youtube.com/watch?v=WzpLWzGvFK4&t=630s)
             // It darkens the scene, while providing temporal stability as a trade-off.
             float TemporalBlend = squared(clamp(max(LumaA - LumaB - min(LumaA, LumaB), 0.0f) / max(max(LumaA, LumaB), 1e-4f), 0.0f, 0.95f));
-            // Replaced by a constant for now.
-			TemporalBlend = 0.8f;
+            // Replaced by a constant for now. The previous one is too unstable.
+			TemporalBlend = UB.SSRC_ProbeTemporalBlendFactor;
 			// Clamp the lerping factor with impact factors from our pipeline
             TemporalBlend = min(max(1.f - ImpactFactors.x, 0), TemporalBlend);
             float4 UpdatedRadianceDepth = lerp(RadianceDepth, OldRadianceDepth, TemporalBlend);
@@ -2971,23 +2979,24 @@ void SpawnReflectionRays (uint2 DispatchID : SV_DispatchThreadID) {
 		float3 WorldPosition = RecoverWorldSpacePosition(C, PixelCoords + 0.5f, LinearDepth);
 		float3 Normal = normalize(2.f * GetNormalTexture(C).Load(int3(PixelCoords, 0)).xyz - 1.f);
 		Material M = FetchMaterial(C, PixelCoords);
-		if(ShouldTraceReflectionRay(DispatchID, M)) {
-			float3 ViewDirection = normalize(C.Position - WorldPosition);
-			float3 Tangent, Bitangent;
-			GetOrthoVectors(Normal, Tangent, Bitangent);
-			float3 LocalView = float3(
-				dot(Tangent,   ViewDirection),
-				dot(Bitangent, ViewDirection),
-				dot(Normal,    ViewDirection)
-			);
-			float2 U  = BlueNoise_Sample2D(PixelCoords, UB.FrameIndex, 3);
-			float  U3 = BlueNoise_Sample1D(PixelCoords, UB.FrameIndex, 5);
-			M.Roughness = min(M.Roughness, UB.Reflection_MaxSampleRoughness);
-			float3 LocalLightDirection = sampleGGX(squared(M.Roughness), LocalView, U);
-			float3 LightDirection = Tangent * LocalLightDirection.x + Bitangent * LocalLightDirection.y
-				+ Normal * LocalLightDirection.z;
-			float3 RayOrigin = WorldPosition;
-			float3 RayDirection = LightDirection;
+		bool bShouldAllocateRay = ShouldTraceReflectionRay(DispatchID, M);
+		float3 ViewDirection = normalize(C.Position - WorldPosition);
+		float3 Tangent, Bitangent;
+		GetOrthoVectors(Normal, Tangent, Bitangent);
+		float3 LocalView = float3(
+			dot(Tangent,   ViewDirection),
+			dot(Bitangent, ViewDirection),
+			dot(Normal,    ViewDirection)
+		);
+		float2 U  = BlueNoise_Sample2D(PixelCoords, UB.FrameIndex, 3);
+		float  U3 = BlueNoise_Sample1D(PixelCoords, UB.FrameIndex, 5);
+		M.Roughness = min(M.Roughness, UB.Reflection_MaxSampleRoughness);
+		float3 LocalLightDirection = sampleGGX(squared(M.Roughness), LocalView, U);
+		float3 LightDirection = Tangent * LocalLightDirection.x + Bitangent * LocalLightDirection.y
+			+ Normal * LocalLightDirection.z;
+		float3 RayOrigin = WorldPosition;
+		float3 RayDirection = LightDirection;
+		if(bShouldAllocateRay) {
 			// A valid reflection ray is spawned
 			// Queue up for a ray trace
 			int RayIndexBase = 0;
@@ -3006,9 +3015,9 @@ void SpawnReflectionRays (uint2 DispatchID : SV_DispatchThreadID) {
 			g_RWRayToTraceListBuffer[RayIndex] = RayIndex;
 			// Clear result buffer
 			g_RWRayToTraceResultBuffer[RayIndex] = PackFp16x4Safe(0.f.xxxx);
-			// Also write the reflection direction buffer
-			g_RWReflectionDirectionTexture[PixelCoords] = PackNormal(LightDirection);
 		}
+		// Also write the reflection direction buffer
+		g_RWReflectionDirectionTexture[PixelCoords] = PackNormal(LightDirection);
 	}
 }
 
@@ -3071,7 +3080,7 @@ void ResolveReflectionTraceResults (uint DispatchID : SV_DispatchThreadID) {
 			ResolvedRadiance = float4(Emission, 1.f);
 
 			// If reprojection failed, we have to query the hash grid radiance cache as last resort.
-			HashGridsKey CacheKey = HashGrids_GetEntryKey(HitWorldPosition, -Ray.Direction);
+			HashGridsKey CacheKey = HashGrids_GetEntryKey(HitWorldPosition, -Ray.Direction, Ray.RayTMin);
 			uint BucketSlotIndex = HashGrids_Find(CacheKey.BucketHash);
 			if(!IsInvalid(BucketSlotIndex)) {
 				uint TileIndex = g_HashGrids_BucketTileIndexBuffer[BucketSlotIndex];
@@ -3124,7 +3133,7 @@ void SpatialFilterReflection (uint2 DispatchID : SV_DispatchThreadID) {
 				float4 NeighborRadiance = g_RWReflectionTexture[NeighborCoords];
 				float  NeighborLinearDepth = GetFilteredDepthTexture(C).Load(int3(NeighborCoords, 0)).x;
 				if(NeighborLinearDepth == 0 || NeighborRadiance.w == 0) continue; // Transparent or no sample.
-				float3 NeighborNormal   = normalize(GetNormalTexture(C).Load(int3(NeighborCoords, 0)).xyz - 0.5);
+				float3 NeighborNormal   = normalize(2 * GetNormalTexture(C).Load(int3(NeighborCoords, 0)).xyz - 1);
 				float  DepthWeight  = GetFilterPositionWeight(NeighborLinearDepth, LinearDepth);
 				float3 NeighborReflectionRayDirection  = UnpackNormal(g_RWReflectionDirectionTexture[NeighborCoords].r);
 				float  NeighborReflectionRayDepth      = g_RWReflectionSTDRayDepthTexture[NeighborCoords].w;
@@ -3132,11 +3141,19 @@ void SpatialFilterReflection (uint2 DispatchID : SV_DispatchThreadID) {
 				// float3 NeighborHitWorldPosition        = NeighborWorldPosition + NeighborReflectionRayDirection * NeighborReflectionRayDepth;
 				float3 LightDirection                  = NeighborReflectionRayDirection;
 				float3 HalfVector                      = normalize(ViewDirection + LightDirection);
-				float  DotNH                           = dot(M.Normal, HalfVector);
-				float  DotNV                           = dot(M.Normal, ViewDirection);
-				float  PdfWeight = sampleGGXPDF(RoughnessAlpha, DotNH, DotNV, LocalViewDirection);
+				float  DotNH                           = saturate(dot(M.Normal, HalfVector));
+				float  DotNV                           = saturate(dot(M.Normal, ViewDirection));
+				// Damn this works not very well (and is time consuming)
+				float  PdfWeight = dot(LightDirection, M.Normal) <= 0 ? 0 : sampleGGXPDF(RoughnessAlpha, DotNH, DotNV, LocalViewDirection);
+				if(isnan(PdfWeight)) PdfWeight = 0;
+				// Clamp to 1 (no more than 1 sample)
+				PdfWeight = saturate(PdfWeight);
+				// float PdfWeight = pow(saturate(dot(M.Normal, NeighborNormal)), AdaptiveNum);
 				float  GaussianWeight = DilatedConvolutionKernelWeight(Offset, UB.Reflection_InvFilterRadius, UB.Reflection_InvFilterRadius2);
-				float  Weight = DepthWeight * PdfWeight * GaussianWeight * NeighborRadiance.w;
+				float  Similarity = DepthWeight * PdfWeight * GaussianWeight;
+				// If the pixel is current pixel, overwrite the similarity to 1
+				Similarity = all(Offset == 0) ? 1 : Similarity;
+				float  Weight = Similarity * NeighborRadiance.w;
 				SumReflection += NeighborRadiance.rgb * Weight;
 #if FILTER_PASS == 0
 				float3 NeighborRadianceSquared = NeighborRadiance.rgb * NeighborRadiance.rgb;
@@ -3309,7 +3326,7 @@ void TemporalDenoiseReflection (uint2 DispatchID : SV_DispatchThreadID) {
         float  luminance_diff_scale = 1e-2f * exp2(UB.TonemapExposure);
 	    float  HistoryHitW   = OldHitReflection.a * saturate(exp2(-luminance_diff_scale * luminance(OldHitReflection.rgb - NewReflection.rgb)));
         float  HistoryWorldW = OldWorldReflection.a * saturate(exp2(-luminance_diff_scale * luminance(OldWorldReflection.rgb - NewReflection.rgb)));
-        if(NewReflection.w < 1e-1f) {
+		if(NewReflection.w < 1e-1f) {
 			// Insufficient new samples found, drop dual blending heuristics from local reflection distribution
 			HistoryHitW = 1;
 			HistoryWorldW = 1;
@@ -3506,7 +3523,9 @@ void FinalComposition (uint2 DispatchID : SV_DispatchThreadID) {
 	float4 RadianceW = 0;
 
 	// Alpha
-	RadianceW.w = g_GColorTexture.Load(int3(DispatchID, 0)).a ;
+	RadianceW.w = g_GColorTexture.Load(int3(DispatchID, 0)).a;
+	// Force transparent below the opaque threshold
+	if(RadianceW.w < UB.OpaqueThreshold) RadianceW.w = 0;
 	float4 VisualizeRadianceW = RadianceW;
 
 	// 1. Direct diffuse illumination
@@ -3535,23 +3554,23 @@ void FinalComposition (uint2 DispatchID : SV_DispatchThreadID) {
 		float3 Reflection = 0.f;
 		float  LowRoughnessThresh = 0.2f;
 		float  MidRoughessThresh  = 0.4f;
+		float4 FallbackReflection = g_RWFallbackReflectionTexture[DispatchID];
+		{
+			// Approximate hemispherical incoming radiance by assuming it's a constant.
+			// It's dumb...but I have no time to implement a proper approximation. 
+			// Paper deardline is coming.
+			float3 DirectRadiance   = DirectIllumination / PI;
+			FallbackReflection.rgb += DirectRadiance;
+		}
 		if(M.Roughness < MidRoughessThresh) {
-			float4 FallbackReflection = g_RWFallbackReflectionTexture[DispatchID];
-			{
-				// Approximate hemispherical incoming radiance by assuming it's a constant.
-				// It's dumb...but I have no time to implement a proper approximation. 
-				// Paper deardline is coming.
-				float3 DirectRadiance   = DirectIllumination / PI;
-				FallbackReflection.rgb += DirectRadiance;
-			}
 			float4 FineReflection     = g_RWReflectionTexture[DispatchID];
 			float MixFactor = saturate((M.Roughness - LowRoughnessThresh) / (MidRoughessThresh - LowRoughnessThresh));
-			float WX = saturate(FallbackReflection.w) * (1 - MixFactor);
-			float WY = saturate(FineReflection.w) * MixFactor;
+			float WX = FallbackReflection.w * MixFactor;
+			float WY = FineReflection.w * (1 - MixFactor);
 			MixFactor = WX / max(WX + WY, 1e-4f);
-			Reflection = lerp(FallbackReflection.rgb, FineReflection.rgb, MixFactor);
+			Reflection = lerp(FineReflection.rgb, FallbackReflection.rgb, MixFactor);
 		} else {
-			Reflection = g_RWFallbackReflectionTexture[DispatchID].rgb;
+			Reflection = FallbackReflection.rgb;
 			// TODO mix between irradiance and fallback reflection (from SSRC)
 			// No time for that!
 		}
@@ -3571,13 +3590,72 @@ void FinalComposition (uint2 DispatchID : SV_DispatchThreadID) {
 	RadianceW.rgb += Emission;
 	VisualizeRadianceW.rgb += Emission;
 
-	float3 SkyRadiance = EvaluateSkyRadiance(ViewDirection);
+	// Force on 0 lod for sky details
+	float3 SkyRadiance = EvaluateSkyRadiance(ViewDirection, 0);
 	RadianceW.rgb += SkyRadiance * (1.f - RadianceW.w);
 	VisualizeRadianceW.rgb += SkyRadiance * (1.f - RadianceW.w);
 	GetRWRadianceTexture(C)[DispatchID] = float4(
 		VisualizeRadianceW.rgb,
 		1
 	);
+}
+
+float3 ACESToneMapping(float3 Color, float Exposure)
+{
+	float A = 2.51f;
+	float B = 0.03f;
+	float C = 2.43f;
+	float D = 0.59f;
+	float E = 0.14f;
+	Color *= Exposure;
+	return (Color * (A * Color + B)) / (Color * (C * Color + D) + E);
+}
+
+float3 Relightable3DGSToneMapping (float3 Color) {
+    float3 Low = 12.92f * Color;
+    float3 High = pow(max(Color, 0.0031308f), 1.0f / 2.4f) * 1.055f - 0.055f;
+    return select(Color > 0.0031308, High, Low);
+}
+
+[numthreads(TILE_SIZE, TILE_SIZE, 1)]
+void ToneMap (uint2 DispatchID : SV_DispatchThreadID) {
+	CameraDescription C = GetCameraDescription();
+	if(IsOutOfFilm(C, DispatchID)) return;
+	float2 UV = (DispatchID + 0.5f) / UB.ScreenDimensions;
+    float4 Color = g_Radiance.SampleLevel(g_LinearClampSampler, UV, 0);
+	// Debugging
+	if(UB.DebugMode == 1) {
+		Color.rgb = g_GColorTexture.SampleLevel(g_LinearClampSampler, UV, 0).rgb;
+    } else if(UB.DebugMode == 2) {
+        Color.rgb = g_GMaterialTexture.SampleLevel(g_LinearClampSampler, UV, 0).rrr;
+    } else if(UB.DebugMode == 3) {
+        Color.rgb = g_GNormalTexture.SampleLevel(g_LinearClampSampler, UV, 0).xyz;
+    } else if(UB.DebugMode == 4) {
+		float Depth = g_GFilteredDepthTexture.SampleLevel(g_LinearClampSampler, UV, 0).r * 0.2f;
+        Color = float4(Depth.xxx, 1);
+    } else if(UB.DebugMode == 5) {
+        float Alpha = g_GColorTexture.SampleLevel(g_LinearClampSampler, UV, 0).a;
+        Color = float4(Alpha.xxx, 1);
+    } else if(UB.DebugMode == 8) {
+		float3 VColor = g_DebugTexture.SampleLevel(g_LinearClampSampler, UV, 0).rgb;
+		Color = float4(VColor, 1);
+	} else if(UB.DebugMode == 6) {
+        int2 Coords = int2(UV * UB.ScreenDimensions);
+        float3 Reflection = g_RWReflectionTexture[Coords].rgb;
+        Color = float4(Reflection, 1);
+    } else if(UB.DebugMode == 7) {
+        int2 Coords = int2(UV * UB.ScreenDimensions);
+        float3 Reflection = g_RWFallbackReflectionTexture[Coords].rgb;
+        Color = float4(Reflection, 1);
+    }
+	if(UB.TonemapMode == 0) {
+        Color.rgb = ACESToneMapping(Color.rgb, UB.TonemapExposure);
+    } else if(UB.TonemapMode == 1) {
+        Color.rgb = RadianceToColor(Color.rgb * UB.TonemapExposure);
+    } else {
+        Color.rgb = Relightable3DGSToneMapping(Color.rgb * UB.TonemapExposure);
+    }
+	g_RW_MappedRGBA[DispatchID] = Color;
 }
 
 // Card kernels
@@ -3675,9 +3753,18 @@ void DisplayCameraRays (uint GroupID : SV_GroupID, uint LocalID : SV_GroupThread
 		) + TileCoords * SMALL_TILE_SIZE;
 		
 		int RayIndex = TexelCoords.x + TexelCoords.y * UB.ScreenDimensions.x;
-		if(UB.VisualizeShadingRays) {
+		if(UB.HWRT_VisualizeShadingRays) {
 			float4 RayResult = FetchRayTraceResult(RayIndex);
 			g_RW_Radiance[TexelCoords] = float4(RayResult.xyz, 1);
+		} else if(UB.HWRT_VisualizeStochasticRays) {
+			uint2 Result = g_RWRayToTraceResultBuffer[RayIndex];
+			RayToTrace R = FetchRayToTrace(RayIndex, UB.RT_MaxTraceDistance, false);
+			if(R.bHit) {
+				Material M = UnpackCachedMaterial(Result.x);
+				g_RW_Radiance[TexelCoords] = float4(M.Albedo, 1);
+			} else {
+				g_RW_Radiance[TexelCoords] = float4(0, 0, 0, 1);
+			}
 		} else {
 			float  RayT = FetchRayTraceHitT(RayIndex) * 0.2f;
 			g_RW_Radiance[TexelCoords] = float4(RayT.xxx, 1);

@@ -22,13 +22,15 @@ Scene::Scene () {
 }
 
 bool Scene::LoadEnvironmentMap(std::filesystem::path path) {
-    if (path.extension() != ".hdr" && path.extension() != ".exr") {
-        app_warning("Only .hdr and .exr files are supported. Current: " << path.extension());
-        return false;
-    }
-    if (!std::filesystem::exists(path)) {
-        app_warning("File does not exist.");
-        return false;
+    if (path.string().size() > 0) {
+        if (path.extension() != ".hdr" && path.extension() != ".exr") {
+            app_warning("Only .hdr and .exr files are supported. Current: " << path.extension());
+            return false;
+        }
+        if (!std::filesystem::exists(path)) {
+            app_warning("File does not exist.");
+            return false;
+        }
     }
     environment_map_path_ = path;
 
@@ -191,6 +193,7 @@ int Scene::LoadGaussians (std::filesystem::path path, bool always_load_sh) {
 
     int curr_instance = num_instances_ - 1;
     gsi_types_.resize(num_instances_);
+    gsi_active_.resize(num_instances_);
     gsi_types_[curr_instance] = InstanceType::eGaussians;
     gsi_gs_index_offsets_.resize(num_instances_);
     gsi_gs_index_offsets_[curr_instance] = old_num_gaussians;
@@ -201,7 +204,12 @@ int Scene::LoadGaussians (std::filesystem::path path, bool always_load_sh) {
     gsi_gs_counts_.resize(num_instances_);
     gsi_gs_counts_[curr_instance] = inst_num_gaussians;
     gsi_materials_.resize(num_instances_);
-    gsi_materials_[curr_instance] = {};
+    gsi_materials_[curr_instance] = {
+        .Albedo = {1, 1, 1},
+        .Roughness = {1},
+        .Emissive = {},
+        .Padding = {}
+    };
 
     SetInstanceTransform(curr_instance, InstanceTransform{});
 
@@ -211,6 +219,24 @@ int Scene::LoadGaussians (std::filesystem::path path, bool always_load_sh) {
 
     return curr_instance;
 }
+
+void Scene::OverwriteGaussianAlbedo(int instance_id, glm::vec3 albedo) {
+    int starting_gaussian = gsi_gs_index_offsets_[instance_id];
+    int num_gaussians = gsi_gs_counts_[instance_id];
+    for (int i = 0; i < num_gaussians; i++) {
+        gs_albedos_[starting_gaussian + i] = albedo;
+    }
+}
+
+void Scene::OverwriteGaussianRoughness(int instance_id, float roughness) {
+    int starting_gaussian = gsi_gs_index_offsets_[instance_id];
+    int num_gaussians = gsi_gs_counts_[instance_id];
+    for (int i = 0; i < num_gaussians; i++) {
+        gs_roughnesses_[starting_gaussian + i] = roughness;
+    }
+}
+
+
 
 int Scene::LoadGltf (std::filesystem::path path) {
     if(path.extension() != ".gltf") {
@@ -249,6 +275,7 @@ int Scene::LoadGltf (std::filesystem::path path) {
     gsi_bounds_max.resize(num_instances_);
 
     gsi_types_.resize(num_instances_);
+    gsi_active_.resize(num_instances_);
     gsi_mesh_index_offsets_.resize(num_instances_);
     gsi_gs_index_offsets_.resize(num_instances_);
     gsi_mesh_num_indices_.resize(num_instances_);
@@ -342,6 +369,7 @@ int Scene::DuplicateInstance (int src_instance) {
     num_instances_ ++;
     int curr_instance = num_instances_ - 1;
     gsi_types_.resize(num_instances_);
+    gsi_active_.resize(num_instances_);
     gsi_positions_.resize(num_instances_);
     gsi_rotations_.resize(num_instances_);
     gsi_scales_.resize(num_instances_);
@@ -355,6 +383,7 @@ int Scene::DuplicateInstance (int src_instance) {
     gsi_mesh_index_offsets_.resize(num_instances_);
     gsi_mesh_num_indices_.resize(num_instances_);
     gsi_gs_counts_.resize(num_instances_);
+    gsi_materials_.resize(num_instances_);
 
     // Copy data
     gsi_types_[curr_instance] = gsi_types_[src_instance];
@@ -364,6 +393,7 @@ int Scene::DuplicateInstance (int src_instance) {
     gsi_gs_counts_[curr_instance] = gsi_gs_counts_[src_instance];
     gsi_bounds_min[curr_instance] = gsi_bounds_min[src_instance];
     gsi_bounds_max[curr_instance] = gsi_bounds_max[src_instance];
+    gsi_materials_[curr_instance] = gsi_materials_[src_instance];
 
     // Copy and add lights
     for (int i = 0; i < (int)light_data_.size(); i++) {
@@ -543,6 +573,14 @@ void Scene::UpdateDeviceTransforms() {
         device_scene_ = std::make_unique<DeviceScene>();
     }
     device_scene_->UpdateTransforms(scene);
+}
+
+void Scene::UpdateDeviceMaterials() {
+    Scene & scene = *this;
+    if(!device_scene_) {
+        device_scene_ = std::make_unique<DeviceScene>();
+    }
+    device_scene_->UpdateMaterials(scene);
 }
 
 Scene::~Scene () {

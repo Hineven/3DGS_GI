@@ -49,7 +49,7 @@ struct Trace3DGSPayload {
 struct Trace3DGSStochasticRayPayload {
     float Seed;
     float HitDist;
-#if defined(PROBE_UPDATE_STOCHASTIC_RAY_TRACING) || defined(REFLECTION_STOCHASTIC_RAY_TRACING)
+#if defined(PROBE_UPDATE_STOCHASTIC_RAY_TRACING) || defined(REFLECTION_STOCHASTIC_RAY_TRACING) || defined(STOCHASTIC_RAY_TRACING)
     uint  HitMaterial;
     uint  HitNormal;
 #endif
@@ -120,8 +120,14 @@ void Trace3DGSRaygen ()
                 EvaluateGaussianResponse(LocalRay.Origin, LocalRay.Direction, G, RayT)
             );
             if(Alpha >= UB.HWRT_MinAlphaForGaussianEvaluation) {
-                SHCoefficents3 SH = FetchGaussianSHCoefficients(GaussianIndex, 1);
-                float3 Color = SH3Evaluate(-LocalRay.Direction, SH, 1);
+                float3 Color = 0;
+                if(UB.HWRT_ShadeWithSphericalHarmonics) {
+                    SHCoefficents3 SH = FetchGaussianSHCoefficients(GaussianIndex, 1);
+                    Color = SH3Evaluate(-LocalRay.Direction, SH, 1);
+                } else {
+                    GaussianPBR PBR = FetchGaussianPBR(GaussianIndex);
+                    Color = PBR.Albedo;
+                }
                 AccumulatedColor += Color * Alpha * Transparency;
                 Transparency *= 1 - Alpha;
             }
@@ -139,7 +145,7 @@ void Trace3DGSRaygen ()
     }
     
     // Write the result to the output buffer
-    float3 AccumulatedRadiance = ColorToRadiance(AccumulatedColor);
+    float3 AccumulatedRadiance = UB.HWRT_ShadeWithSphericalHarmonics ? ColorToRadiance(AccumulatedColor) : AccumulatedColor;
     float4 Result = float4(AccumulatedRadiance, Transparency);
     g_RWRayToTraceResultBuffer[RayIndex] = PackRadianceA16(Result);
 }
@@ -187,6 +193,8 @@ void DirectIlluminationTrace3DGSShadowRaygen ()
 void Trace3DGSProbeUpdateRaysRaygen ()
 #elif defined(REFLECTION_STOCHASTIC_RAY_TRACING)
 void Trace3DGSReflectionRaysRaygen ()
+#elif defined(STOCHASTIC_RAY_TRACING)
+void Trace3DGSStochasticRaysRaygen ()
 #else
 void Trace3DGSShadowRaygen ()
 #endif
@@ -214,6 +222,9 @@ void Trace3DGSShadowRaygen ()
         bFetchOrigin = false;
 #elif defined(REFLECTION_STOCHASTIC_RAY_TRACING)
         bFetchOrigin = false;
+#elif defined(STOCHASTIC_RAY_TRACING)
+        // Fetch origin as all the rays are spawned by SpawnCameraRays
+        bFetchOrigin = true;
 #endif
         RayToTrace RayData = FetchRayToTrace(RayIndex, TraceDistance, bFetchOrigin);
 #if defined(DIRECT_ILLUMINATION_SHADOW_RAY_TRACING) || defined(REFLECTION_STOCHASTIC_RAY_TRACING)
@@ -252,7 +263,7 @@ void Trace3DGSShadowRaygen ()
     // Write the result to the output buffer
     bool bHit = Payload.HitDist != 0;
     WriteRayTraceFlags(RayIndex, bHit, bHit ? Payload.HitDist : Ray.TMax);
-#if defined(PROBE_UPDATE_STOCHASTIC_RAY_TRACING) || defined(REFLECTION_STOCHASTIC_RAY_TRACING)
+#if defined(PROBE_UPDATE_STOCHASTIC_RAY_TRACING) || defined(REFLECTION_STOCHASTIC_RAY_TRACING) || defined(STOCHASTIC_RAY_TRACING)
     // Extra hit results
     if(bHit) {
         g_RWRayToTraceResultBuffer[RayIndex] = uint2(Payload.HitMaterial, Payload.HitNormal);
@@ -287,7 +298,7 @@ void Trace3DGSStochasticAnyHit (inout Trace3DGSStochasticRayPayload Payload, in 
         
         // No need to update the payload if we're not tracing shadow rays
         // stochastic ray hit data is decoded in the closest hit shader
-#if !defined(PROBE_UPDATE_STOCHASTIC_RAY_TRACING) && !defined(REFLECTION_STOCHASTIC_RAY_TRACING)
+#if !defined(PROBE_UPDATE_STOCHASTIC_RAY_TRACING) && !defined(REFLECTION_STOCHASTIC_RAY_TRACING) && !defined(STOCHASTIC_RAY_TRACING)
         InPayload.HitDist     = RayTCurrent();
 #endif
         ShouldIgnore = false;
@@ -307,7 +318,11 @@ void Trace3DGSStochasticAnyHit (inout Trace3DGSStochasticRayPayload Payload, in 
         if(ShouldIgnore) {
             InPayload.Seed = (InPayload.Seed - Alpha) / (1 - Alpha);
         } else {
-#if !defined(PROBE_UPDATE_STOCHASTIC_RAY_TRACING) && !defined(REFLECTION_STOCHASTIC_RAY_TRACING)
+#if defined(PROBE_UPDATE_STOCHASTIC_RAY_TRACING) || defined(REFLECTION_STOCHASTIC_RAY_TRACING)  || defined(STOCHASTIC_RAY_TRACING)
+            // Still, we have to roll out a new seed for the next anyhit
+            InPayload.Seed = InPayload.Seed / Alpha;
+#endif
+#if !defined(PROBE_UPDATE_STOCHASTIC_RAY_TRACING) && !defined(REFLECTION_STOCHASTIC_RAY_TRACING) && !defined(STOCHASTIC_RAY_TRACING)
             InPayload.HitDist = RayT / max(1e-6, RayScaler); // Use the max response T as reply
 #endif
         }
@@ -336,10 +351,10 @@ void Trace3DGSStochasticClosestHit (inout Trace3DGSStochasticRayPayload Payload,
         float3 V2 = TransformPoint(ToWorld, g_VertexBuffer[I2].Position);
         float3 Normal = normalize(cross(V1 - V0, V2 - V0));
         Payload.HitDist     = RayTCurrent();
-#if defined(PROBE_UPDATE_STOCHASTIC_RAY_TRACING) || defined(REFLECTION_STOCHASTIC_RAY_TRACING)
+#if defined(PROBE_UPDATE_STOCHASTIC_RAY_TRACING) || defined(REFLECTION_STOCHASTIC_RAY_TRACING) || defined(STOCHASTIC_RAY_TRACING)
         Payload.HitNormal   = PackNormal(Normal);
 #endif
-#if defined(PROBE_UPDATE_STOCHASTIC_RAY_TRACING)
+#if defined(PROBE_UPDATE_STOCHASTIC_RAY_TRACING) || defined(STOCHASTIC_RAY_TRACING)
         Payload.HitMaterial = PackCachedMaterial(M.Albedo, M.Roughness);
 #endif
 #if defined(REFLECTION_STOCHASTIC_RAY_TRACING)
@@ -359,10 +374,10 @@ void Trace3DGSStochasticClosestHit (inout Trace3DGSStochasticRayPayload Payload,
         );
         GaussianPBR Pbr = FetchGaussianPBR(HitGaussianIndex);
         Payload.HitDist = RayT / max(1e-6, RayScaler); // Use the max response T as reply
-#if defined(PROBE_UPDATE_STOCHASTIC_RAY_TRACING) || defined(REFLECTION_STOCHASTIC_RAY_TRACING)
+#if defined(PROBE_UPDATE_STOCHASTIC_RAY_TRACING) || defined(REFLECTION_STOCHASTIC_RAY_TRACING) || defined(STOCHASTIC_RAY_TRACING)
         Payload.HitNormal   = PackNormal(Pbr.Normal);
 #endif
-#if defined(PROBE_UPDATE_STOCHASTIC_RAY_TRACING)
+#if defined(PROBE_UPDATE_STOCHASTIC_RAY_TRACING) || defined(STOCHASTIC_RAY_TRACING)
         Payload.HitMaterial = PackCachedMaterial(Pbr.Albedo, Pbr.Roughness);
 #endif
     }
