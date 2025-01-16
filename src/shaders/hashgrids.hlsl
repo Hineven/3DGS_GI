@@ -65,6 +65,8 @@ struct HashGridsKey {
 };
 
 HashGridsKey HashGrids_GetEntryKey (float3 WorldPosition, float3 ViewDirection, float TraveledDistance = 0) {
+    // Get rid of artifacts along axis-aligned planes that are exactly multiple of tile sizes (due to hash grid quantization)
+    WorldPosition += float3(0.00007893f, 0.00008461f, 0.00002847f);
     float CellSize = HashGrids_GetCellSize(WorldPosition);
     float TileSize = HASHGRIDS_TILE_CELL_WIDTH * CellSize;
     int3  TileIndex = floor(WorldPosition / TileSize);
@@ -141,7 +143,6 @@ uint HashGrids_Find (uint BucketHash) {
     [unroll(HASHGRIDS_MAX_NUM_ENTRIES_SEARCHED_PER_BUCKET)]
     for(; TileRank < UB.HashGrids_MaxNumEntriesSearchedPerBucket; TileRank ++) {
         BucketSlotIndex = BucketIndex * UB.HashGrids_NumInterleavedEntriesPerBucket + TileRank;
-        // Try to allocate a tile (if it is empty)
         PrevBucketHash = g_HashGrids_BucketHashBuffer[BucketSlotIndex];
         if(PrevBucketHash == BucketHash) {
             break; // Found existing tile

@@ -719,7 +719,7 @@ float3 GetSkyBoxDirection (int i) {
 }
 
 float3 EvaluateSkyRadiance (float3 Direction, float LOD = 0) {
-    return g_EnvironmentMap.SampleLevel(g_LinearWrapSampler, Direction, LOD).xyz;
+    return g_EnvironmentMap.SampleLevel(g_LinearWrapSampler, Direction, LOD).xyz * UB.SkyLightMultiplier;
 }
 
 float3 ReprojectToPreviousUVWFromUVW (CameraDescription C, float3 UVW) {

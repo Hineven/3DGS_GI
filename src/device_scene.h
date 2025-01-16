@@ -71,10 +71,13 @@ public:
 
     GfxBuffer light_data_staging_;
     GfxBuffer transform_data_staging_;
+    GfxBuffer material_data_staging_;
 
     void UpdateLights (const Scene & scene);
 
     void UpdateTransforms (const Scene & scene);
+
+    void UpdateMaterials (const Scene & scene);
 
 protected:
 
