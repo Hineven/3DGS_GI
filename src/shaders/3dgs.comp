@@ -257,14 +257,14 @@ void ResolveGBuffers (uint2 DispatchID : SV_DispatchThreadID) {
 	GetRWDepthTexture(C)[DispatchID].x = Depth;
 	// If the normals are reconstructed from the depth, they are not rendered to the GBuffer
 #ifndef RECONSTRUCT_NORMALS_FROM_DEPTH
-	// Normalize rendered normals
-	float3 Normal = GetRWNormalTexture(C)[DispatchID].xyz;
+	// Normalize rasterized gaussian normals
+	float3 Normal = g_RWGaussianNormalTexture[DispatchID].xyz;
 	if(Opacity >= UB.OpaqueThreshold) Normal /= max(Weight, 1e-6f);
 	Normal = Normal * 2 - 1;
 	if(any(Normal != -1)) {
 		Normal = normalize(Normal);
 	}
-	GetRWNormalTexture(C)[DispatchID] = float4(Normal * 0.5 + 0.5, 1);
+	g_RWGaussianNormalTexture[DispatchID] = float4(Normal * 0.5 + 0.5, 1);
 #endif
 }
 
@@ -304,8 +304,6 @@ void FilterDepth (uint2 DispatchID : SV_DispatchThreadID) {
 	if(SumWeight <= UB.OpaqueThreshold || bTransparent) SumDepth = 0;
 	float FilteredDepth = SumDepth / max(SumWeight, 1e-6f);
 	GetRWFilteredDepthTexture(C)[DispatchID] = FilteredDepth;
-	// float ZDepth = FilteredDepth == 0 ? ZDEPTH_INF : LinearToZDepth(C, FilteredDepth);
-	// GetRWZDepthTexture(C)[DispatchID] = ZDepth;
 }
 
 // Combine the GBuffers rendered via gaussians and regular mesh.
@@ -337,7 +335,20 @@ void CombineGBuffers (uint2 DispatchID : SV_DispatchThreadID) {
 	// Gaussians are not emissive.
 	float3 GaussianEmission = 0.f;
 	GetRWEmissionAlphaTexture(C)[DispatchID].rgb = lerp(EmissionA.rgb, GaussianEmission, LerpingFactor);
-	// Normal is naturally blended (or being reconstructed from depth later)
+	
+#ifndef RECONSTRUCT_NORMALS_FROM_DEPTH
+	// Normal
+	float3 GaussianNormal = normalize(2 * g_RWGaussianNormalTexture[DispatchID].xyz - 1);
+	float3 RegularNormal  = normalize(2 * GetNormalTexture(C)[DispatchID].xyz - 1);
+	float3 BlendedNormal = lerp(RegularNormal, GaussianNormal, LerpingFactor);
+	float  Length = length(BlendedNormal);
+	if(Length > 0) {
+		BlendedNormal /= Length;
+	} else {
+		BlendedNormal = LerpingFactor > 0.5 ? GaussianNormal : RegularNormal;
+	}
+	GetRWNormalTexture(C)[DispatchID] = float4(BlendedNormal * 0.5 + 0.5, 1);
+#endif
 	// Accumulate opacities. (Color is already blended)
 	GetRWColorTexture(C)[DispatchID].w = saturate(RegularOpacity + GaussianOpacity);
 }
@@ -929,7 +940,7 @@ void TraceRaysInScreenSpace (uint DispatchID : SV_DispatchThreadID) {
 			UVToNDC2(LastVisibleUVW.xy), LinearDepth
 		);
 		HitDistance = min(length(LastVisibleWorldPosition - BiasedOrigin), MaxTraceDistance);
-		float Bias = min(LinearDepth * UB.SSRT_RayContinuationBackwardBiasFactor, HitDistance * 0.2f);
+		float Bias = min(LinearDepth * UB.SSRT_RayContinuationBackwardBiasFactor, HitDistance * 0.5f);
 		HitDistance = max(HitDistance - Bias, 0);
 	}
 	// Remember to reduce the texel relative thickness on SSRT if there're too many false hits.	
@@ -2031,18 +2042,17 @@ void SSRC_SampleLightRays (uint DispatchID : SV_DispatchThreadID) {
 	// Probe update ray results should be resolved from this cell
 	g_RWProbeUpdateRayResolveHashCellIndexBuffer[ProbeUpdateRayIndex] = HashCellIndex;
 
-	if(ReservedSample.IsValid()) {
-		
+	// Spawn shadow ray
+	float3 NewRayDirection = 0;
+	float OcclusionThreshold = 0;
+	bool bValidRay = ReservedSample.IsValid();
+	if(bValidRay) {
 		// Calculate the real sample contribution.
 		// 0104: Resampling results in poor visual quality. So no RIS.
 		// We just use a simple approximation (GridReservoirWeight) to compensate for all 
 		// the lights overflowing the grid.
 		ReservedSample.Radiance *= GridReservoirWeight * SumResampleWeights /
 			(ReservedSample.Pdf * SampledLightResampleWeight);
-
-		// Spawn shadow ray
-		float3 NewRayDirection = 0;
-		float OcclusionThreshold = 0;
 		if(IsInfinitelyFarLightType(ReservedSample.LightType)) {
 			NewRayDirection = ReservedSample.Position;
 			OcclusionThreshold = UB.RT_MaxTraceDistance;
@@ -2050,32 +2060,42 @@ void SSRC_SampleLightRays (uint DispatchID : SV_DispatchThreadID) {
 			NewRayDirection = normalize(ReservedSample.Position - HitPosition);
 			OcclusionThreshold = length(ReservedSample.Position - HitPosition);
 		}
-		// Allocate rays
-		int NewRayIndex = 0;
-		{
-			int NewRayIndexBase = 0;
-			int NewRayWarpCount = WaveActiveCountBits(1);
-			int NewRayWarpRank  = WavePrefixCountBits(1);
-			if(WaveIsFirstLane()) {
-				InterlockedAdd(g_RWRayToTraceCountBuffer[0], NewRayWarpCount, NewRayIndexBase);
-			}
-			NewRayIndexBase = WaveReadLaneFirst(NewRayIndexBase);
-			NewRayIndex = NewRayIndexBase + NewRayWarpRank;
-		}
-		// Write ray to memory for HWRT
-		RayToTrace NewRay = InitRayToTrace(UB.RT_MaxTraceDistance);
-		NewRay.Direction = NewRayDirection;
-		NewRay.Seed = rng.rand() * UB.HWRT_StochasticRayTracingQuality;
-		NewRay.Origin = HitPosition;
-		WriteRayToTrace(NewRayIndex, NewRay, true);
-		// No need to write ray to trace indirections (no compound tracing)
-		// Keep in mind the occulusion threshold for direct illumination visibility testing
-		g_RWDirectIlluminationRayOcclusionThresholdBuffer[NewRayIndex] = OcclusionThreshold;
-		// Store the sample contribution for direct illumination (if it passed the visibility test)
-		g_RWDirectIlluminationRayContributionBuffer[NewRayIndex] = PackFp16x4Safe(float4(ReservedSample.Radiance, 1.f));
-		// Trace results are used to shade the hit of a probe update ray. Store indirections
-		g_RWDirectIlluminationRayProbeUpdateRayIndexBuffer[NewRayIndex] = ProbeUpdateRayIndex;
+	} else {
+		ReservedSample.Radiance = 0.f;
+		NewRayDirection = 0;
+		OcclusionThreshold = 0;
 	}
+
+	// Allocate rays
+	int NewRayIndex = 0;
+	{
+		int NewRayIndexBase = 0;
+		int NewRayWarpCount = WaveActiveCountBits(1);
+		int NewRayWarpRank  = WavePrefixCountBits(1);
+		if(WaveIsFirstLane()) {
+			InterlockedAdd(g_RWRayToTraceCountBuffer[0], NewRayWarpCount, NewRayIndexBase);
+		}
+		NewRayIndexBase = WaveReadLaneFirst(NewRayIndexBase);
+		NewRayIndex = NewRayIndexBase + NewRayWarpRank;
+	}
+	// Write ray to memory for HWRT
+	RayToTrace NewRay = InitRayToTrace(UB.RT_MaxTraceDistance);
+	NewRay.Direction = NewRayDirection;
+	NewRay.Seed = rng.rand() * UB.HWRT_StochasticRayTracingQuality;
+	NewRay.Origin = HitPosition;
+	if(!bValidRay) {
+		// Mark the ray as invalid
+		NewRay.bHit = true;
+		NewRay.RayTMin = 0;
+	}
+	WriteRayToTrace(NewRayIndex, NewRay, true);
+	// No need to write ray to trace indirections (no compound tracing)
+	// Keep in mind the occulusion threshold for direct illumination visibility testing
+	g_RWDirectIlluminationRayOcclusionThresholdBuffer[NewRayIndex] = OcclusionThreshold;
+	// Store the sample contribution for direct illumination (if it passed the visibility test)
+	g_RWDirectIlluminationRayContributionBuffer[NewRayIndex] = PackFp16x4Safe(float4(ReservedSample.Radiance, 1.f));
+	// Trace results are used to shade the hit of a probe update ray. Store indirections
+	g_RWDirectIlluminationRayProbeUpdateRayIndexBuffer[NewRayIndex] = ProbeUpdateRayIndex;
 }
 
 // Only the newly allocated cells should be cleared
@@ -2121,20 +2141,23 @@ void SSRC_ResolveHitDirectLightingFromTraceResult (uint DispatchID : SV_Dispatch
 	int RayIndex = DispatchID; // No indirection
 	RayToTrace Ray = FetchRayToTrace(RayIndex, UB.RT_MaxTraceDistance, true);
 	CameraDescription C = GetCameraDescription();
-
-	float  Threshold = g_RWDirectIlluminationRayOcclusionThresholdBuffer[RayIndex];
-	uint Seed = DispatchID ^ 0x81c61f7eu;
-	Random rng = MakeRandom(Seed, UB.FrameIndex);
-	float  Noise = rng.rand();
-	Threshold *= lerp(UB.DI_OcclusionThresholdMinFactor, UB.DI_OcclusionThresholdMaxFactor, Noise);
-	float3 Radiance = UnpackFp16x4(g_RWDirectIlluminationRayContributionBuffer[RayIndex]).xyz;
-	Radiance *= (!Ray.bHit || (Threshold < Ray.RayTMin)) ? 1 : 0;
-
 	uint ProbeUpdateRayIndex = g_RWDirectIlluminationRayProbeUpdateRayIndexBuffer[RayIndex];
-	// Shadow ray tracing will not overwrite RayToTraceResultBuffer.
-	Material M = UnpackCachedMaterial(g_RWRayToTraceResultBuffer[ProbeUpdateRayIndex].x);
-	// Lambertian only for secondary vertices
-	Radiance *= EvaluateLambertian(M.Albedo);
+
+	float3 Radiance = 0;
+	if(Ray.IsValid()) {
+		float  Threshold = g_RWDirectIlluminationRayOcclusionThresholdBuffer[RayIndex];
+		uint Seed = DispatchID ^ 0x81c61f7eu;
+		Random rng = MakeRandom(Seed, UB.FrameIndex);
+		float  Noise = rng.rand();
+		Threshold *= lerp(UB.DI_OcclusionThresholdMinFactor, UB.DI_OcclusionThresholdMaxFactor, Noise);
+		Radiance = UnpackFp16x4(g_RWDirectIlluminationRayContributionBuffer[RayIndex]).xyz;
+		Radiance *= (!Ray.bHit || (Threshold < Ray.RayTMin)) ? 1 : 0;
+
+		// Shadow ray tracing will not overwrite RayToTraceResultBuffer.
+		Material M = UnpackCachedMaterial(g_RWRayToTraceResultBuffer[ProbeUpdateRayIndex].x);
+		// Lambertian only for secondary vertices
+		Radiance *= EvaluateLambertian(M.Albedo);
+	}
 
 	// Accumulate the radiance to the hash grid cell
 	uint HashCellIndex = g_RWProbeUpdateRayResolveHashCellIndexBuffer[ProbeUpdateRayIndex];
@@ -3063,9 +3086,7 @@ void ResolveReflectionTraceResults (uint DispatchID : SV_DispatchThreadID) {
 				float  HistoryDepth  = ZDepthToLinear(C, HistoryZDepth);
 				float  PreviousDepth = ZDepthToLinear(C, PreviousHomogeneous.z);
 				bool   bNormalVisible = dot(HistoryNormal, HitNormal) > 0.5f;
-				bool   bDepthVisible  = 
-							abs(HistoryDepth - PreviousDepth) 
-							/ max(PreviousDepth, HistoryDepth) < 5e-2f;
+				bool   bDepthVisible  =  abs(HistoryDepth - PreviousDepth)  / max(PreviousDepth, HistoryDepth) < 5e-2f;
 				if(bNormalVisible && bDepthVisible) {
 					float3 HistoryRadiance = g_HistoryRadiance.Load(int3(HistoryScreenCoords, 0)).xyz;
 					ResolvedRadiance = float4(HistoryRadiance, 1.f);

@@ -163,6 +163,7 @@ protected:
         GfxTexture G_material;
         // unorm8x4
         GfxTexture G_normal[2];
+        GfxTexture G_gaussian_normal;
         // fp16x4
         GfxTexture G_emission_alpha;
         // Full precision R32 depth (filtered from R16 linear depth)

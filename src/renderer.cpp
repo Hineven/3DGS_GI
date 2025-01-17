@@ -417,7 +417,7 @@ void Renderer::Render() {
         5.f);
         REGISTER_CVAR(UB.SSRT_RelativeTexelThickness,
             "How thick a texel is on Z axis in the projected space when doing screen space ray tracing."
-            "Thicker values may produce more artifacts but can cull more rays.", 0.01f, 0.001f, 0.02f);
+            "Thicker values may produce more artifacts but can cull more rays.", 0.01f, 0.00f, 0.02f);
 
         REGISTER_CVAR(UB.Debug_LightPosition, "", glm::vec3(0, 0, 0), -10, 10);
         UB.SSRT_MaxNumIterations            = 50; // Consistent with Lumen
@@ -533,16 +533,16 @@ void Renderer::Render() {
         UB.SSRC_PreviousTileJitterFrameSeed = history_UB_.SSRC_TileJitterFrameSeed;
 
         UB.TAAJitterUV = glm::vec2(0);
-        REGISTER_CVAR(UB.HashGrids_MaxNumSamples, "Maximum number of samples kept in each hash grid cell.", 128, 0, 256);
+        REGISTER_CVAR(UB.HashGrids_MaxNumSamples, "Maximum number of samples kept in each hash grid cell.", 192, 0, 256);
         UB.HashGrids_MaxNumTiles = options_.HashGrids_max_num_tiles;
         UB.HashGrids_Center = camera.position;
         REGISTER_CVAR(CB.HashGrids_cascade_radius, "Radius of the base cascade in the hash grid", 4.f, 1.f, 20.f);
         UB.HashGrids_InvCascadeRadius = 1.f / CB.HashGrids_cascade_radius;
 
-        REGISTER_CVAR(UB.HashGrids_CellSize, "Size of base level cell in hash grids.", 0.15f, 0.01f, 0.3f);
+        REGISTER_CVAR(UB.HashGrids_CellSize, "Size of base level cell in hash grids.", 0.08f, 0.01f, 0.3f);
         UB.HashGrids_NumBuckets = options_.HashGrids_max_num_buckets;
         UB.HashGrids_NumInterleavedEntriesPerBucket = options_.HashGrids_num_slots_per_bucket;
-        REGISTER_CVAR(UB.HashGrids_TargetSampleCount, "Target number of samples to achieve for hash grid sampling.", 40, 1, 128);
+        REGISTER_CVAR(UB.HashGrids_TargetSampleCount, "Target number of samples to achieve for hash grid sampling.", 96, 1, 128);
         REGISTER_CVAR(UB.HashGrids_TileLifespan, "Tile lifespan in hash grids (max number of frames unvisited).", 30, 1, 60);
         REGISTER_CVAR(UB.HashGrids_MaxNumEntriesSearchedPerBucket, "Maximum number of entries to search when query hash table for a tile.", 8, 1, HASHGRIDS_MAX_NUM_ENTRIES_SEARCHED_PER_BUCKET);
         UB.PreviousTAAJitterUV = history_UB_.TAAJitterUV;
@@ -820,6 +820,7 @@ void Renderer::Render() {
     // Not rasterized, but derived from depth buffer (overdraw is too severe for 3dgs)
     gfxProgramSetParameter(gfx, program_, "g_RW_GNormalTexture", tex_.G_normal[frame_index_ & 1]);
     gfxProgramSetParameter(gfx, program_, "g_GNormalTexture", tex_.G_normal[frame_index_ & 1]);
+    gfxProgramSetParameter(gfx, program_, "g_RWGaussianNormalTexture", tex_.G_gaussian_normal);
     gfxProgramSetParameter(gfx, program_, "g_HistoryNormalTexture", tex_.G_normal[!(frame_index_ & 1)]);
     gfxProgramSetParameter(gfx, program_, "g_RW_GFilteredDepthTexture", tex_.G_filtered_depth);
     gfxProgramSetParameter(gfx, program_, "g_GFilteredDepthTexture", tex_.G_filtered_depth);
@@ -1498,6 +1499,7 @@ void Renderer::Render() {
             auto section = TimedSection(*this, "DrawActiveGaussians");
             // Cleared to (0, 0, 0, 0)
             gfxCommandClearTexture(gfx, tex_.G_depth);
+            gfxCommandClearTexture(gfx, tex_.G_gaussian_normal);
             GenerateDrawIndirect(buf_.active_gaussian_count);
             gfxCommandBindKernel(gfx, kernel_.DrawActiveGaussians);
             gfxCommandBindColorTarget(gfx, 0, tex_.G_albedo_alpha);
@@ -1505,7 +1507,7 @@ void Renderer::Render() {
             gfxCommandBindColorTarget(gfx, 2, tex_.G_depth);
             gfxCommandBindDepthStencilTarget(gfx, tex_.rasterization_depth);
             if (!options_.reconstruct_normals) {
-                gfxCommandBindColorTarget(gfx, 3, tex_.G_normal[frame_index_ & 1]);
+                gfxCommandBindColorTarget(gfx, 3, tex_.G_gaussian_normal);
             }
 #ifndef NO_INDIRECT_DISPATCH
             gfxCommandMultiDrawIndirect(gfx, buf_.draw_indirect_command, 1);

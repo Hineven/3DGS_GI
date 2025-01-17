@@ -115,15 +115,33 @@ void Trace3DGSRaygen ()
             UnpackGaussianHit(HitPacked, InstanceIndex, GaussianIndex);
             Gaussian G   = FetchGaussian(GaussianIndex);
             float RayScaler = 1, RayT = 0;
-            RayDesc LocalRay = GaussianInstance_TransformWorldToLocal(Ray, InstanceIndex, RayScaler);
-            float Alpha = saturate(
-                EvaluateGaussianResponse(LocalRay.Origin, LocalRay.Direction, G, RayT)
+            // RayDesc LocalRay = GaussianInstance_TransformWorldToLocal(Ray, InstanceIndex, RayScaler);
+            float3x4 WorldToObject = g_InstanceInvTransformBuffer[InstanceIndex];
+            float3x3 WorldToObjectNormal = g_InstanceInvNormalTransformBuffer[InstanceIndex];
+            float3 RayTangent, RayBitangent;
+            GetOrthoVectors(Ray.Direction, RayTangent, RayBitangent);
+            float3 LocalRayOrigin = TransformPoint(WorldToObject, Ray.Origin);
+            float3 LocalRayDirection = TransformVector(WorldToObject, Ray.Direction);
+            float3 LocalRayTangent   = TransformVector(WorldToObjectNormal, RayTangent);
+            float3 LocalRayBitangent = TransformVector(WorldToObjectNormal, RayBitangent);
+            float3x3 RaySpace = float3x3(
+                LocalRayTangent / dot(LocalRayTangent, LocalRayTangent),
+                LocalRayBitangent / dot(LocalRayBitangent, LocalRayBitangent),
+                LocalRayDirection / dot(LocalRayDirection, LocalRayDirection)
             );
+#ifdef MAX_RESPONSE_APPROXIMATION
+            float Alpha = saturate(
+                EvaluateGaussianResponse(LocalRayOrigin, LocalRayDirection, G, RayT)
+            );
+#else
+            float Alpha = 
+                EvaluateGaussianResponseRast(LocalRayOrigin, RaySpace, G, RayT);
+#endif
             if(Alpha >= UB.HWRT_MinAlphaForGaussianEvaluation) {
                 float3 Color = 0;
                 if(UB.HWRT_ShadeWithSphericalHarmonics) {
                     SHCoefficents3 SH = FetchGaussianSHCoefficients(GaussianIndex, 1);
-                    Color = SH3Evaluate(-LocalRay.Direction, SH, 1);
+                    Color = SH3Evaluate(-normalize(LocalRayDirection), SH, 1);
                 } else {
                     GaussianPBR PBR = FetchGaussianPBR(GaussianIndex);
                     Color = PBR.Albedo;
@@ -308,11 +326,26 @@ void Trace3DGSStochasticAnyHit (inout Trace3DGSStochasticRayPayload Payload, in 
         RayDesc Ray = GetRayDesc();
         float RayScaler = 1, RayT = 0;
         float3x4 WorldToObject = WorldToObject3x4();
+        float3x3 WorldToObjectNormal = g_InstanceInvNormalTransformBuffer[HitInstance];
         float3 LocalRayOrigin = TransformPoint(WorldToObject, Ray.Origin);
+        float3 RayTangent, RayBitangent;
+        GetOrthoVectors(Ray.Direction, RayTangent, RayBitangent);
         float3 LocalRayDirection = TransformVector(WorldToObject, Ray.Direction);
+        float3 LocalRayTangent   = TransformVector(WorldToObjectNormal, RayTangent);
+        float3 LocalRayBitangent = TransformVector(WorldToObjectNormal, RayBitangent);
+        float3x3 RaySpace = float3x3(
+            LocalRayTangent / dot(LocalRayTangent, LocalRayTangent),
+            LocalRayBitangent / dot(LocalRayBitangent, LocalRayBitangent),
+            LocalRayDirection / dot(LocalRayDirection, LocalRayDirection)
+        );
+#ifdef MAX_RESPONSE_APPROXIMATION
         float Alpha = saturate(
             EvaluateGaussianResponse(LocalRayOrigin, LocalRayDirection, G, RayT)
         );
+#else
+        float Alpha = 
+            EvaluateGaussianResponseRast(LocalRayOrigin, RaySpace, G, RayT);
+#endif
         // Stochastically ignore the hit according to the gaussian response (opacity along the ray)
         ShouldIgnore = Alpha < InPayload.Seed;
         if(ShouldIgnore) {
@@ -336,6 +369,7 @@ void Trace3DGSStochasticClosestHit (inout Trace3DGSStochasticRayPayload Payload,
 {
     int HitInstance  = InstanceID();
     int HitPrimitive = PrimitiveIndex();
+    RayDesc Ray = GetRayDesc();
     if(HitInstance & RT_INSTANCE_REGULAR_MESH_BIT) {
         // Opaque object, commit hit.
         int MeshInstance = HitInstance - RT_INSTANCE_REGULAR_MESH_BIT;
@@ -350,6 +384,9 @@ void Trace3DGSStochasticClosestHit (inout Trace3DGSStochasticRayPayload Payload,
         float3 V1 = TransformPoint(ToWorld, g_VertexBuffer[I1].Position);
         float3 V2 = TransformPoint(ToWorld, g_VertexBuffer[I2].Position);
         float3 Normal = normalize(cross(V1 - V0, V2 - V0));
+        // Strangely i have to do this for correct reconstruction of normal...
+        // TODO find out why
+        if(dot(Normal, Ray.Direction) > 0) Normal = -Normal;
         Payload.HitDist     = RayTCurrent();
 #if defined(PROBE_UPDATE_STOCHASTIC_RAY_TRACING) || defined(REFLECTION_STOCHASTIC_RAY_TRACING) || defined(STOCHASTIC_RAY_TRACING)
         Payload.HitNormal   = PackNormal(Normal);
@@ -364,18 +401,34 @@ void Trace3DGSStochasticClosestHit (inout Trace3DGSStochasticRayPayload Payload,
     } else {
         int  HitGaussianIndex = GetHitGaussianIndex(HitInstance, HitPrimitive, HitAttr);
         Gaussian G = FetchGaussian(HitGaussianIndex);
-        RayDesc Ray = GetRayDesc();
         float RayScaler = 1, RayT = 0;
         float3x4 WorldToObject = WorldToObject3x4();
+        float3x3 WorldToObjectNormal = g_InstanceInvNormalTransformBuffer[HitInstance];
+        float3 RayTangent, RayBitangent;
+        GetOrthoVectors(Ray.Direction, RayTangent, RayBitangent);
         float3 LocalRayOrigin = TransformPoint(WorldToObject, Ray.Origin);
         float3 LocalRayDirection = TransformVector(WorldToObject, Ray.Direction);
+        float3 LocalRayTangent   = TransformVector(WorldToObjectNormal, RayTangent);
+        float3 LocalRayBitangent = TransformVector(WorldToObjectNormal, RayBitangent);
+        float3x3 RaySpace = float3x3(
+            LocalRayTangent / dot(LocalRayTangent, LocalRayTangent),
+            LocalRayBitangent / dot(LocalRayBitangent, LocalRayBitangent),
+            LocalRayDirection / dot(LocalRayDirection, LocalRayDirection)
+        );
+#ifdef MAX_RESPONSE_APPROXIMATION
         float Alpha = saturate(
             EvaluateGaussianResponse(LocalRayOrigin, LocalRayDirection, G, RayT)
         );
+#else
+        float Alpha = 
+            EvaluateGaussianResponseRast(LocalRayOrigin, RaySpace, G, RayT);
+#endif
         GaussianPBR Pbr = FetchGaussianPBR(HitGaussianIndex);
         Payload.HitDist = RayT / max(1e-6, RayScaler); // Use the max response T as reply
 #if defined(PROBE_UPDATE_STOCHASTIC_RAY_TRACING) || defined(REFLECTION_STOCHASTIC_RAY_TRACING) || defined(STOCHASTIC_RAY_TRACING)
-        Payload.HitNormal   = PackNormal(Pbr.Normal);
+        float3x3 ObjectToWorldNormal = g_InstanceNormalTransformBuffer[HitInstance];
+        float3 Normal = TransformVector(ObjectToWorldNormal, Pbr.Normal);
+        Payload.HitNormal   = PackNormal(Normal);
 #endif
 #if defined(PROBE_UPDATE_STOCHASTIC_RAY_TRACING) || defined(STOCHASTIC_RAY_TRACING)
         Payload.HitMaterial = PackCachedMaterial(Pbr.Albedo, Pbr.Roughness);

@@ -330,6 +330,21 @@ float3 ProjectCovarianceMatrixToNDC(float3x3 J, SymmetricMatrix Covariance3D, fl
     return float3(C_2D[0][0], C_2D[0][1], C_2D[1][1]);
 }
 
+float3 ProjectCovarianceMatrixToRay(float3x3 J, SymmetricMatrix Covariance3D, float3x3 RaySpace)
+{
+    float3x3 W = float3x3(
+        RaySpace[0][0], RaySpace[0][1], RaySpace[0][2],
+        RaySpace[1][0], RaySpace[1][1], RaySpace[1][2],
+        RaySpace[2][0], RaySpace[2][1], RaySpace[2][2]);
+
+    float3x3 Mk = mul(J, W);
+    
+    float3x3 C = ExpandSymmetricMatrix(Covariance3D);
+    float3x3 C_2D = mul(mul(Mk, C), transpose(Mk));
+
+    return float3(C_2D[0][0], C_2D[0][1], C_2D[1][1]);
+}
+
 struct RayToTrace {
     float3 Direction;
     float3 Origin;
@@ -411,12 +426,45 @@ float EvaluateGaussianResponseRayT (float3 Origin, float3 Direction, Gaussian G,
     return Numerator / max(Denominator, 1e-7f);
 }
 
-// Evaluate the gaussian response along the ray
+// Evaluate the gaussian max-response along the ray
 float EvaluateGaussianResponse (float3 Origin, float3 Direction, Gaussian G, out float RayMaxResponseT) {
     float3x3 InvCov;
     RayMaxResponseT = EvaluateGaussianResponseRayT(Origin, Direction, G, InvCov);
     float3 Position = Origin + RayMaxResponseT * Direction;
     return exp(dot(G.Position - Position, mul(InvCov, Position - G.Position))) * G.Alpha;
+}
+
+float Evaluate2DUnnormalizedGaussian (float2 P) {
+    // float NormalizationFactor = 1 / (2 * M_PI);
+    return exp(-dot(P, P) / 2);
+}
+
+float Evaluate2DGaussian (float2 P) {
+    float NormalizationFactor = 1 / (2 * M_PI);
+    return NormalizationFactor * exp(-dot(P, P) / 2);
+}
+
+// Evaluate the gaussian rasterization-response along the ray
+float EvaluateGaussianResponseRast (float3 Origin, float3x3 RaySpace, Gaussian G, out float RayRastResponseT) {
+    float3x3 J = float3x3(
+        1, 0, 0,
+        0, 1, 0,
+        0, 0, 0
+    );
+    // Instance local covariance 3D
+    SymmetricMatrix Cov3D = ComputeCovarianceMatrix(G.Scale, G.Rotation);
+    float3 Cov2D   = ProjectCovarianceMatrixToRay(J, Cov3D, RaySpace);
+    // Cov2D = float3(0.001, 0, 0.001);
+    float3 RaySpacePosition = mul(RaySpace, G.Position - Origin);
+    RayRastResponseT = RaySpacePosition.z;
+    float  Det    = Cov2D.x * Cov2D.z - Cov2D.y * Cov2D.y;
+    float2x2 InvCov2D = float2x2(
+        Cov2D.z / Det, -Cov2D.y / Det,
+        -Cov2D.y / Det, Cov2D.x / Det
+    );
+    float Dist = dot(RaySpacePosition.xy, mul(InvCov2D, RaySpacePosition.xy));
+    // Unnormalized 2D gaussian distribution, similar to the rasterizer.
+    return exp(-0.5 * Dist) /*/ sqrt(Det)*/ * G.Alpha;
 }
 
 // Map (film space) NDC to a direction in world space

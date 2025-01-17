@@ -31,6 +31,9 @@
 // Probe normals will affect probe sample weights
 #define PROBE_NORMAL_WEIGTHS
 
+// Use max-response instead of rasterization response upon ray tracing
+// #define MAX_RESPONSE_APPROXIMATION
+
 // Output full G-Buffers for PBR rendering
 // Controlled by the renderer. Otherwise, output colored gaussians to the albedo channel.
 // #define OUTPUT_PBR_G_BUFFER
@@ -188,6 +191,7 @@ RWTexture2D<float>       g_RW_GMaterialTexture;
 Texture2D<float>         g_GMaterialTexture;
 RWTexture2D<float4>      g_RW_GNormalTexture;
 Texture2D<float4>        g_GNormalTexture;
+RWTexture2D<float4>      g_RWGaussianNormalTexture;
 Texture2D<float4>        g_HistoryNormalTexture;
 RWTexture2D<float>       g_RW_GFilteredDepthTexture;
 Texture2D<float>         g_GFilteredDepthTexture;

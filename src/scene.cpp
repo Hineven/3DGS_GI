@@ -49,6 +49,9 @@ int Scene::LoadGaussians (std::filesystem::path path, bool always_load_sh) {
     assert(element.count < (1 << 24));
     int old_num_gaussians = num_gaussians_;
     int inst_num_gaussians = element.count;
+
+    // inst_num_gaussians = 10;
+
     num_gaussians_ += inst_num_gaussians;
     // Positions
     {
@@ -56,7 +59,7 @@ int Scene::LoadGaussians (std::filesystem::path path, bool always_load_sh) {
         auto y = element.getProperty<float>("y");
         auto z = element.getProperty<float>("z");
         gs_positions_.resize(num_gaussians_);
-        for(int i = 0; i < x.size(); i++) {
+        for(int i = 0; i < inst_num_gaussians; i++) {
             gs_positions_[old_num_gaussians + i] = glm::vec3(x[i], y[i], z[i]);
         }
     }
@@ -73,7 +76,7 @@ int Scene::LoadGaussians (std::filesystem::path path, bool always_load_sh) {
             auto g = element.getProperty<float>("base_color_1");
             auto b = element.getProperty<float>("base_color_2");
             gs_albedos_.resize(num_gaussians_);
-            for (int i = 0; i < r.size(); i++) {
+            for (int i = 0; i < inst_num_gaussians; i++) {
                 auto raw = glm::vec3(r[i], g[i], b[i]);
                 // activation: scaled sigmoid
                 gs_albedos_[old_num_gaussians + i] = 0.03f + 0.77f / (1.f + exp(-raw));
@@ -83,7 +86,7 @@ int Scene::LoadGaussians (std::filesystem::path path, bool always_load_sh) {
         {
             auto r = element.getProperty<float>("roughness");
             gs_roughnesses_.resize(num_gaussians_);
-            for (int i = 0; i < r.size(); i++) {
+            for (int i = 0; i < inst_num_gaussians; i++) {
                 // activation: sigmoid
                 gs_roughnesses_[old_num_gaussians + i] = 0.09f + 0.9f / (1.f + exp(-r[i]));
             }
@@ -98,7 +101,7 @@ int Scene::LoadGaussians (std::filesystem::path path, bool always_load_sh) {
             auto g = element.getProperty<float>("f_dc_1");
             auto b = element.getProperty<float>("f_dc_2");
             gs_colors_.resize(num_gaussians_);
-            for(int i = 0; i < r.size(); i++) {
+            for(int i = 0; i < inst_num_gaussians; i++) {
                 gs_colors_[old_num_gaussians + i] = glm::vec3(r[i], g[i], b[i]);
             }
         }
@@ -115,7 +118,7 @@ int Scene::LoadGaussians (std::filesystem::path path, bool always_load_sh) {
                     for (int ch = 0; ch < 3; ch++) {
                         std::string name = "f_rest_" + std::to_string(coeff_top);
                         auto data = element.getProperty<float>(name);
-                        for(int i = 0; i < data.size(); i++) {
+                        for(int i = 0; i < inst_num_gaussians; i++) {
                             auto & v = arr[degree - 1];
                             v.get()[(old_num_gaussians + i) * num_coeff + coeff][ch] = data[i];
                         }
@@ -129,7 +132,7 @@ int Scene::LoadGaussians (std::filesystem::path path, bool always_load_sh) {
     {
         auto alphas = element.getProperty<float>("opacity");
         gs_alphas_.resize(num_gaussians_);
-        for(int i = 0; i < alphas.size(); i++) {
+        for(int i = 0; i < inst_num_gaussians; i++) {
             // activation: sigmoid
             alphas[i] = 1.f / (1.f + exp(-alphas[i]));
             gs_alphas_[old_num_gaussians + i] = alphas[i];
@@ -141,13 +144,13 @@ int Scene::LoadGaussians (std::filesystem::path path, bool always_load_sh) {
         auto scale_y = element.getProperty<float>("scale_1");
         auto scale_z = element.getProperty<float>("scale_2");
         // Activation: exp
-        for(int i = 0; i < scale_x.size(); i++) {
+        for(int i = 0; i < inst_num_gaussians; i++) {
             scale_x[i] = exp(scale_x[i]);
             scale_y[i] = exp(scale_y[i]);
             scale_z[i] = exp(scale_z[i]);
         }
         gs_scales_.resize(num_gaussians_);
-        for(int i = 0; i < scale_x.size(); i++) {
+        for(int i = 0; i < inst_num_gaussians; i++) {
             gs_scales_[old_num_gaussians + i] = glm::vec3(scale_x[i], scale_y[i], scale_z[i]);
         }
     }
@@ -159,7 +162,7 @@ int Scene::LoadGaussians (std::filesystem::path path, bool always_load_sh) {
         auto rotation_y = element.getProperty<float>("rot_2");
         auto rotation_z = element.getProperty<float>("rot_3");
         gs_rotations_.resize(num_gaussians_);
-        for(int i = 0; i < rotation_x.size(); i++) {
+        for(int i = 0; i < inst_num_gaussians; i++) {
             gs_rotations_[old_num_gaussians + i] = glm::vec4(rotation_x[i], rotation_y[i], rotation_z[i], rotation_w[i]);
             // activation: normalize
             auto & q = gs_rotations_[old_num_gaussians + i];
@@ -173,7 +176,7 @@ int Scene::LoadGaussians (std::filesystem::path path, bool always_load_sh) {
         auto ny = element.getProperty<float>("ny");
         auto nz = element.getProperty<float>("nz");
         gs_normals_.resize(num_gaussians_);
-        for(int i = 0; i < nx.size(); i++) {
+        for(int i = 0; i < inst_num_gaussians; i++) {
             // activation: normalize
             gs_normals_[old_num_gaussians + i] = normalize(glm::vec3(nx[i], ny[i], nz[i]));
         }
