@@ -620,8 +620,8 @@ void Renderer::Render() {
             UB.SSRC_ProbeUpdateRaySampleSeed = 0;
         }
         REGISTER_CVAR(UB.TonemapMode, "Tonemap mode. "
-                                      "0 for gamma correction,"
-                                      "1 for ACEST,"
+                                      "0 for ACEST,"
+                                      "1 for gamma correction,"
                                       "2 for consistent behavior with Relightable 3DGS.", 2, 0, 2);
         REGISTER_CVAR(UB.EnableAA, "Use FXAA Postprocessing.", true);
         REGISTER_CVAR(UB.SkyLightMultiplier, "Multiplier on the sky light (environment light).", 1, 0, 1);
