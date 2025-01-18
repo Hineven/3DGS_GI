@@ -216,8 +216,9 @@ void ProjectActiveGaussians (uint DispatchID : SV_DispatchThreadID) {
 	g_RWActiveGaussianNDCPositionBuffer[ActiveIndex] = PackUnorm16x2(ClampedPosition);
 	float LinearDepth = g_RWActiveGaussianLinearDepthSrcBuffer[ActiveIndex];
 	// Clamp the radius for gaussians (to fix holes for the dataset)
-	// TODO: this is totally a data-specific trick. But I found it useful.
-	// Otherwise my renderer is visually inconsistent with the original one intensively...
+	// TODO: this is totally an empirical trick. But I found it useful.
+	// Otherwise my renderer can be visually inconsistent with the original one intensively in
+	// some circumstances...
 #ifdef CARD_SHADERS
 	float Bias = UB.Card_GaussianClampingScale / InvScales.x;
 #else
@@ -1311,7 +1312,6 @@ void CalculateSSRCSampleWeights (
                 [unroll(1 << (SSRC_MAX_ADAPTIVE_PROBE_LAYERS * 2))]
 				for (uint AdaptiveProbeListIndex = 0; AdaptiveProbeListIndex < NumAdaptiveProbes; AdaptiveProbeListIndex++)
 				{
-                    // TODO: reconstruct probe data from G-Buffer to reduce VRAM bandwidth when shading
 					int  AdaptiveProbeIndex1 = GetAdaptiveProbeIndex(TileCoords, AdaptiveProbeListIndex, bPrevious);
 					int  ScreenProbeIndex1   = AdaptiveProbeIndex1 + UB.SSRC_NumUniformScreenProbes;
                     int2 ScreenProbeIndex    = int2(ScreenProbeIndex1 % UB.TileDimensions.x, ScreenProbeIndex1 / UB.TileDimensions.x);
