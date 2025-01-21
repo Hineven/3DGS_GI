@@ -11,8 +11,9 @@ Modify the scene loading logic inside `app_internal.cpp` to load different 3D Ga
 **NOTE**: Only 3D Gaussians with PBR material paramters are supported for relighting. We use Relightable 3DGS to produce 3D Gaussians with PBR features.
 Other inverse rendering frameworks may also work.
 
-## Open source libraries used
+## Open source libraries / code used
 * gfx
 * glm
 * half
 * happly
+* Capsaicin
