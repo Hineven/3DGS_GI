@@ -311,8 +311,8 @@ int Scene::LoadGltf (std::filesystem::path path) {
         int curr_instance = old_num_instances + i;
         gsi_types_[curr_instance] = InstanceType::eMesh;
         int mesh_index = instances[i].mesh.getIndex();
-        gsi_gs_index_offsets_[curr_instance] = old_num_vertices + mesh_vertex_offsets[mesh_index];
-        gsi_mesh_index_offsets_[curr_instance] = old_num_indices + mesh_index_offsets[mesh_index];
+        gsi_gs_index_offsets_[curr_instance] = mesh_vertex_offsets[mesh_index];
+        gsi_mesh_index_offsets_[curr_instance] = mesh_index_offsets[mesh_index];
         gsi_gs_counts_[curr_instance] = meshes[mesh_index].vertices.size();
         gsi_mesh_num_indices_[curr_instance] = meshes[mesh_index].indices.size();
         glm::vec3 position;

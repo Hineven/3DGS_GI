@@ -28,10 +28,10 @@ int AppInternal::Run () {
     gfx_ = gfxCreateContext(
             window_
 #ifndef NDEBUG
-            // ,
-            // kGfxCreateContextFlag_EnableShaderDebugging
-            // | kGfxCreateContextFlag_EnableDebugLayer
-            // | kGfxCreateContextFlag_EnableStablePowerState
+            ,
+            kGfxCreateContextFlag_EnableShaderDebugging
+            | kGfxCreateContextFlag_EnableDebugLayer
+            | kGfxCreateContextFlag_EnableStablePowerState
 #endif
     );
 
@@ -92,7 +92,9 @@ int AppInternal::Run () {
 
     // Load scene
     {
-        LoadTeaserScene();
+
+        // scene_.LoadGltf(root_path + "data/chinese_dragon/scene.gltf");
+        LoadTeaserScene("rogland_overcast_4k.exr", true);
 
         // LoadLightingComparisonScene("chair", "qwantani_dusk_2_4k.exr");
         // LoadLightingComparisonScene("jugs", "qwantani_dusk_2_4k.exr");
@@ -103,10 +105,14 @@ int AppInternal::Run () {
         // LoadLightingComparisonScene("barn", "rogland_overcast_4k.exr", {90, 0, 0}, {0.7, 0.7, 0.7});
         // LoadLightingComparisonScene("ficus", "rogland_overcast_4k.exr");
         // LoadLightingComparisonScene("armadillo", "rogland_overcast_4k.exr");
+        // LoadMultiModelLightingComparisonScene("tief_etz_4k.exr");
         // LoadFaultyArmadilloScene();
         // LoadCornellBoxScene("family", {-90, 36, 0});
         // LoadAllLightsScene();
-        // LoadLightRoomScene();
+        // LoadAllLightsScene(true);
+        // LoadLightRoomScene("air_baloons",  "overcast_soil_4k", glm::vec3(-0.4, 1.6, 0.4));
+        // LoadLightRoomScene("armadillo", "tief_etz_4k");
+
 
         scene_.UpdateSceneBounds();
         scene_.UpdateDeviceScene();

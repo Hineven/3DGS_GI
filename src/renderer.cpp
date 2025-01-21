@@ -548,7 +548,7 @@ void Renderer::Render() {
         UB.PreviousTAAJitterUV = history_UB_.TAAJitterUV;
 
         REGISTER_CVAR(UB.Reflection_MaxRoughness, "Maximum roughness to spawn reflection rays.", 0.4f);
-        REGISTER_CVAR(UB.Reflection_FilterRadius, "Gaussian filter radius for spatial reflection denoising.", 1.8f, 1, 5);
+        REGISTER_CVAR(UB.Reflection_FilterRadius, "Gaussian filter radius for spatial reflection denoising.", 2.8f, 1, 5);
         UB.Reflection_InvFilterRadius2 = 1.f / (UB.Reflection_FilterRadius * UB.Reflection_FilterRadius);
         UB.Reflection_InvFilterRadius = 1.f / UB.Reflection_FilterRadius;
         REGISTER_CVAR(UB.FallbackReflection_NoTemporalDenoising, "Disable temporal denoising for fallback reflection.", false);
@@ -566,7 +566,7 @@ void Renderer::Render() {
             1e-3f);
         REGISTER_CVAR(UB.TonemapExposure, "Exposure", 1.0f, 0.1f, 10.0f);
 
-        REGISTER_CVAR(UB.Denoiser_Reflection_MaxSampleCount, "Maximum number of temporal samples to accumulate when denoising reflections.", 10, 1, 64);
+        REGISTER_CVAR(UB.Denoiser_Reflection_MaxSampleCount, "Maximum number of temporal samples to accumulate when denoising reflections.", 32, 1, 64);
         REGISTER_CVAR(UB.Reflection_MaxSampleRoughness, "We want ray directions to be consistent when tracing reflection rays, so we clamp the roughness of the material", 0.1f, 0.001f, 1.f);
         UB.UseReconstructedNormals = options_.reconstruct_normals;
         REGISTER_CVAR(UB.OriginalNormalWeight, "How likely we're gonna use the rasterized normals instead of reconstructed normals", 6.f, 0.f, 10.f);
@@ -642,7 +642,7 @@ void Renderer::Render() {
 
     // other constants
     {
-        REGISTER_CVAR(CB.directional_light_dir, "", scene.GetDirectionalLight().V1);
+        REGISTER_CVAR(CB.directional_light_dir, "", scene.GetDirectionalLight().V1, -5, 5);
         REGISTER_CVAR(CB.directional_light_color, "", scene.GetDirectionalLight().Radiance);
     }
 
@@ -652,6 +652,7 @@ void Renderer::Render() {
         di.V1       = normalize(CB.directional_light_dir);
         scene.SetDirectionalLight(di);
     }
+
     {
         LightData ei = scene.GetSkyLight();
         // No need to do anything.

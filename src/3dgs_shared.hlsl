@@ -314,9 +314,9 @@ struct Light {
 };
 
 struct LightData {
-	float3 V1; // Light direction if this is a directional light
-	float3 V2;
-	float3 V3;
+	float3 V1; // Light direction if this is a directional light. Meaningless if this is a sky light.
+	float3 V2; // Only used for area lights.
+	float3 V3; // Only used for area lights.
 	float3 Radiance;
 };
 
