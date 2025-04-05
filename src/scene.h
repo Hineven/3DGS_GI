@@ -119,6 +119,8 @@ public:
     void OverwriteGaussianAlbedo (int instance_id, glm::vec3 albedo) ;
     void OverwriteGaussianRoughness (int instance_id, float roughness) ;
 
+    void OverwriteInstanceAlbedo (int instance_id, glm::vec3 albedo) ;
+
     LightData GetDirectionalLight ();
     LightData GetSkyLight ();
 

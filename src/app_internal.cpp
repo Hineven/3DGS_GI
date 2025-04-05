@@ -14,6 +14,7 @@
 #include "glm/detail/type_quat.hpp"
 #include "glm/ext/quaternion_trigonometric.hpp"
 #include "glm/gtx/quaternion.hpp"
+#include "glm/gtx/rotate_vector.hpp"
 
 AppInternal::AppInternal() {}
 
@@ -28,10 +29,10 @@ int AppInternal::Run () {
     gfx_ = gfxCreateContext(
             window_
 #ifndef NDEBUG
-            ,
-            kGfxCreateContextFlag_EnableShaderDebugging
-            | kGfxCreateContextFlag_EnableDebugLayer
-            | kGfxCreateContextFlag_EnableStablePowerState
+            // ,
+            // kGfxCreateContextFlag_EnableShaderDebugging
+            // | kGfxCreateContextFlag_EnableDebugLayer
+            // | kGfxCreateContextFlag_EnableStablePowerState
 #endif
     );
 
@@ -92,10 +93,13 @@ int AppInternal::Run () {
 
     // Load scene
     {
+        LoadRaw3DGSScene("garden");
 
         // scene_.LoadGltf(root_path + "data/chinese_dragon/scene.gltf");
-        LoadTeaserScene("rogland_overcast_4k.exr", true);
+        // LoadTeaserScene("rogland_overcast_4k.exr", true);
 
+        // LoadLightingComparisonScene("waymo1442", "rogland_overcast_4k.exr");
+        // LoadLightingComparisonScene("armadillo_pbr", "rogland_overcast_4k.exr");
         // LoadLightingComparisonScene("chair", "qwantani_dusk_2_4k.exr");
         // LoadLightingComparisonScene("jugs", "qwantani_dusk_2_4k.exr");
         // LoadLightingComparisonScene("hotdog", "qwantani_dusk_2_4k.exr");
@@ -103,13 +107,16 @@ int AppInternal::Run () {
         // LoadLightingComparisonScene("drums", "rogland_overcast_4k.exr");
         // LoadLightingComparisonScene("nerf_chair", "rogland_overcast_4k.exr");
         // LoadLightingComparisonScene("barn", "rogland_overcast_4k.exr", {90, 0, 0}, {0.7, 0.7, 0.7});
+        // LoadLightingComparisonScene("family", "tief_etz_4k.exr", {-90, 0, 0}, {0.7, 0.7, 0.7});
         // LoadLightingComparisonScene("ficus", "rogland_overcast_4k.exr");
         // LoadLightingComparisonScene("armadillo", "rogland_overcast_4k.exr");
+        // LoadArmadilloMeshScene("rogland_overcast_4k.exr");
         // LoadMultiModelLightingComparisonScene("tief_etz_4k.exr");
         // LoadFaultyArmadilloScene();
         // LoadCornellBoxScene("family", {-90, 36, 0});
         // LoadAllLightsScene();
         // LoadAllLightsScene(true);
+        // LoadMeshGaussianTransportScene("rogland_overcast_4k");
         // LoadLightRoomScene("air_baloons",  "overcast_soil_4k", glm::vec3(-0.4, 1.6, 0.4));
         // LoadLightRoomScene("armadillo", "tief_etz_4k");
 
@@ -126,12 +133,18 @@ int AppInternal::Run () {
     auto clock = std::chrono::high_resolution_clock();
 
     double last_frame_time = std::chrono::duration<double>(clock.now().time_since_epoch()).count();
+    double beginning_time = last_frame_time;
 
     float delta_tick = 1.f;
     std::vector<std::pair<std::string, float>> last_frame_timed_sections;
     std::vector<float> frame_latency_history;
 
     bool show_ui = true;
+
+    bool auto_rotate = false;//true;
+
+    glm::vec3 start_camera_position = scene_.GetCamera().position;
+    glm::vec3 start_camera_direction = scene_.GetCamera().direction;
 
     // Main loop
     while(!gfxWindowIsCloseRequested(window_)) {
@@ -217,6 +230,7 @@ int AppInternal::Run () {
         double this_frame_time = std::chrono::duration<double>(clock.now().time_since_epoch()).count();
         delta_tick = float(this_frame_time - last_frame_time);
         last_frame_time = this_frame_time;
+        double time_elapsed = this_frame_time - beginning_time;
 
         // Camera navigation
         {
@@ -302,7 +316,16 @@ int AppInternal::Run () {
                     camera.up          = normalize(cross(newRight, newForward));
                 }
             }
+        }
 
+        if (auto_rotate) {
+            // Rotate the camera for simple object relighting visualization
+            auto & camera = scene_.GetCamera();
+            glm::vec3 rotation = glm::vec3(0, 0.8 * time_elapsed, 0);
+            glm::vec3 rotated_position = glm::rotateY(start_camera_position, rotation.y);
+            glm::vec3 rotated_direction = glm::rotateY(start_camera_direction, rotation.y);
+            camera.position = rotated_position;
+            camera.direction = rotated_direction;
         }
 
         // Hot-reload the shaders if requested

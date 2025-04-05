@@ -862,4 +862,6 @@ Material UnpackCachedMaterial (uint Packed) {
     return M;
 }
 
+
+
 #endif // INC_3DGS_HLSL

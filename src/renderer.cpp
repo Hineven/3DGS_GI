@@ -183,6 +183,12 @@ void Renderer::RenderUI () {
         }
         ImGui::Checkbox("SSRT Enable", &options_.SSRT_enable);
         ImGui::Checkbox("HWRT Enable", &options_.HWRT_enable);
+        ImGui::Checkbox("Simple Mesh PT", &options_.simple_mesh_pt);
+        if (options_.simple_mesh_pt) {
+            if (ImGui::Button("Reset PT Accumulation")) {
+                should_reset_pt_accum_ = true;
+            }
+        }
         if (ImGui::Button("Reset HashGrids")) {
             should_reset_hash_grids_ = true;
         }
@@ -208,6 +214,7 @@ void Renderer::RenderUI () {
                 changed |= ImGui::SliderFloat3("Rotation", &model.rotation.x, -180, 180);
                 model.rotation = glm::radians(model.rotation);
                 changed |= ImGui::SliderFloat3("Scale", &model.scale.x, 0.01f, 2.5f);
+                model.scale = glm::vec3(model.scale.x);
                 if (changed) {
                     scene.SetInstanceTransform(i, model);
                     should_update_transforms_ = true;
@@ -417,7 +424,7 @@ void Renderer::Render() {
         5.f);
         REGISTER_CVAR(UB.SSRT_RelativeTexelThickness,
             "How thick a texel is on Z axis in the projected space when doing screen space ray tracing."
-            "Thicker values may produce more artifacts but can cull more rays.", 0.01f, 0.00f, 0.02f);
+            "Thicker values may produce more artifacts but can cull more rays.", 0.005f, 0.00f, 0.02f);
 
         REGISTER_CVAR(UB.Debug_LightPosition, "", glm::vec3(0, 0, 0), -10, 10);
         UB.SSRT_MaxNumIterations            = 50; // Consistent with Lumen
@@ -477,7 +484,7 @@ void Renderer::Render() {
         REGISTER_CVAR(UB.DI_OcclusionThresholdMinFactor, "Minimum factor of shadow ray length threshold upon DI occlusion tests.", 0.97f);
         REGISTER_CVAR(UB.DI_OcclusionThresholdMaxFactor, "Maximum factor of shadow ray length threshold upon DI occlusion tests.", 0.99f);
 
-        REGISTER_CVAR(UB.DI_FilterGaussianRadius, "Direct illumination spatial filter gaussian kernel multiplier.", 2.f, 0.5f, 4.f);
+        REGISTER_CVAR(UB.DI_FilterGaussianRadius, "Direct illumination spatial filter gaussian kernel multiplier.", 1.7f, 0.5f, 4.f);
         UB.DI_InvFilterGaussianRadius2 = 1.f / (UB.DI_FilterGaussianRadius * UB.DI_FilterGaussianRadius);
         UB.DI_InvFilterGaussianRadius = 1.f / UB.DI_FilterGaussianRadius;
 
@@ -1431,6 +1438,21 @@ void Renderer::Render() {
             auto section = TimedSection(*this, "DisplayCameraRays");
             int num_groups = UB.SmallTileDimensions.x * UB.SmallTileDimensions.y;
             gfxCommandBindKernel(gfx, kernel_.DisplayCameraRays);
+            gfxCommandDispatch(gfx, num_groups, 1, 1);
+        }
+    } else if (options_.simple_mesh_pt) {
+        if (should_reset_pt_accum_) {
+            gfxCommandClearTexture(gfx, tex_.radiance[!(frame_index_ & 1)]);
+            should_reset_pt_accum_ = false;
+        }
+        // Visualize HWRT trace results
+        {
+            auto section = TimedSection(*this, "Mesh PT");
+
+            gfxCommandBindKernel(gfx, kernel_.SimpleMeshPathTracing);
+            // Rays are packed in small tiles.
+            auto thread_count = gfxKernelGetNumThreads(gfx, kernel_.SimpleMeshPathTracing);
+            int num_groups = divideAndRoundUp((uint32_t)(UB.ScreenDimensions.x * UB.ScreenDimensions.y), thread_count[0]);
             gfxCommandDispatch(gfx, num_groups, 1, 1);
         }
     } else {

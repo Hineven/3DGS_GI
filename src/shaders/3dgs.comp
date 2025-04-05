@@ -722,7 +722,8 @@ void SampleLightRays (uint2 DispatchID : SV_DispatchThreadID) {
 				// Ignore sky light (we regard sky light as an indirect light source due to it's 
 				// low frequency nature)
 				if(L.Type == LIGHT_TYPE_SKY) Sample.Pdf = 0;
-				if(Sample.IsValid()) {
+				// Clip samples with low pdf (potential fireflies)
+				if(Sample.IsValid()  && Sample.Pdf > 0.01f) {
 					// 0104: Resampling results in poor visual quality. So no RIS.
 					float LightGridWeight = 1;//log2(EstimateLightGridContribution(L, GridMin, GridSize) + 1);
 					// Perception based weight (log (x + c))
@@ -1007,7 +1008,7 @@ void ResolveDirectLighting (uint DispatchID : SV_DispatchThreadID) {
 }
 
 // Similar to Lumen
-float GetFilterPositionWeight(float NeighborLinearDepth, float LinearDepth, float Factor = 1000.f)
+float GetFilterPositionWeight(float NeighborLinearDepth, float LinearDepth, float Factor = 2000.f)
 {
 	float DepthDifference = abs(NeighborLinearDepth - LinearDepth);
 	float RelativeDepthDifference = DepthDifference / LinearDepth;
@@ -2010,8 +2011,8 @@ void SSRC_SampleLightRays (uint DispatchID : SV_DispatchThreadID) {
 			LightData   Details = FetchLightDetails(LightIndex);
 			// Note: the returned sample is already cosine weighted (receiver cosine term included, but bsdf is not included)
 			LightSample Sample  = SampleLightDiffuseWithCosineWeight(HitPosition, HitMaterial, L.Type, Details, u2);
-			// We assume that secondary vertices are always diffuse.
-			if(Sample.IsValid()) {
+			// We assume that secondary vertices are always diffuse. Also, clip the samples with low pdf (potential fireflies).
+			if(Sample.IsValid() && Sample.Pdf > 0.01f) {
 				float LightGridWeight = 1;//log2(EstimateLightGridContribution(L, GridMin, GridSize) + 1);
 				// Perception based weight (log (x + c))
 				float LightCurrWeight = log2(Luminance(Sample.Radiance / Sample.Pdf) + 1.f); 
@@ -3613,6 +3614,19 @@ void FinalComposition (uint2 DispatchID : SV_DispatchThreadID) {
 
 	// Force on 0 lod for sky details
 	float3 SkyRadiance = EvaluateSkyRadiance(ViewDirection, 0);
+	// Grid Pattern Sky for debugging
+	if(false) {
+		SkyRadiance = float3(0.5, 0.5, 0.5);
+		float2 UV = (DispatchID + 0.5f) / UB.ScreenDimensions;
+		float2 GridUV = UV * 256.f;
+		SkyRadiance += float3(
+			0.5f * (sin(GridUV.x) + 1.f) * (sin(GridUV.y) + 1.f),
+			0.5f * (sin(GridUV.x) + 1.f) * (cos(GridUV.y) + 1.f),
+			0.5f * (cos(GridUV.x) + 1.f) * (sin(GridUV.y) + 1.f)
+		);
+		SkyRadiance = 1 - smoothstep(0.495f, 0.505, SkyRadiance);
+		SkyRadiance = saturate(SkyRadiance);
+	}
 	RadianceW.rgb += SkyRadiance * (1.f - RadianceW.w);
 	VisualizeRadianceW.rgb += SkyRadiance * (1.f - RadianceW.w);
 	GetRWRadianceTexture(C)[DispatchID] = float4(
@@ -3781,8 +3795,12 @@ void DisplayCameraRays (uint GroupID : SV_GroupID, uint LocalID : SV_GroupThread
 			uint2 Result = g_RWRayToTraceResultBuffer[RayIndex];
 			RayToTrace R = FetchRayToTrace(RayIndex, UB.RT_MaxTraceDistance, false);
 			if(R.bHit) {
+				float3 OldRadiance = g_HistoryRadiance.Load(int3(TexelCoords, 0)).rgb;
 				Material M = UnpackCachedMaterial(Result.x);
-				g_RW_Radiance[TexelCoords] = float4(M.Albedo, 1);
+				float3 NewRadiance = M.Albedo;
+				float3 Radiance = lerp(OldRadiance, NewRadiance, 0.01f);
+				// g_RW_Radiance[TexelCoords] = float4(Radiance, 1);
+				g_RW_Radiance[TexelCoords] = float4(NewRadiance, 1);
 			} else {
 				g_RW_Radiance[TexelCoords] = float4(0, 0, 0, 1);
 			}
@@ -3933,5 +3951,159 @@ void GenerateRTMesh (uint DispatchID : SV_DispatchThreadID) {
 		g_RW_RTIndexBuffer[IndexBase + i * 3 + 0] = Face.x + IndexOffset;
 		g_RW_RTIndexBuffer[IndexBase + i * 3 + 1] = Face.y + IndexOffset;
 		g_RW_RTIndexBuffer[IndexBase + i * 3 + 2] = Face.z + IndexOffset;
+	}
+}
+
+struct HitInfo
+{
+    uint instanceIndex;
+    uint geometryIndex;
+    uint primitiveIndex;
+    float2 barycentrics;
+    bool frontFace;
+};
+
+typedef RayQuery<RAY_FLAG_FORCE_OPAQUE| RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> ClosestRayQuery;
+typedef RayQuery<RAY_FLAG_FORCE_OPAQUE| RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> ShadowRayQuery;
+
+template<typename RayQueryType>
+RayQueryType TraceRay(RayDesc incommingRay)
+{
+    RayQueryType ray_query;
+    ray_query.TraceRayInline(g_HWRT_AccelerationStructure, RAY_FLAG_NONE, 0xFFu, incommingRay);
+    while (ray_query.Proceed())
+    {
+    }
+
+    return ray_query;
+}
+
+template<RAY_FLAG RAY_FLAGS>
+HitInfo GetHitInfoRtInlineCommitted(in RayQuery<RAY_FLAGS> ray_query)
+{
+    HitInfo hit_info;
+    hit_info.instanceIndex  = ray_query.CommittedInstanceID();
+    hit_info.primitiveIndex = ray_query.CommittedPrimitiveIndex();
+    hit_info.geometryIndex  = ray_query.CommittedGeometryIndex();
+    hit_info.barycentrics   = ray_query.CommittedTriangleBarycentrics();
+    hit_info.frontFace      = ray_query.CommittedTriangleFrontFace();
+    return hit_info;
+}
+
+struct PathTracingPayload {
+	float LastHitT;
+};
+
+void PathTracingTraceRayInline(uint DispatchID, inout PathTracingPayload payload, inout HitInfo hit, RayDesc ray)
+{
+    ClosestRayQuery ray_query = TraceRay<ClosestRayQuery>(ray);
+
+    if (ray_query.CommittedStatus() == COMMITTED_TRIANGLE_HIT)
+    {
+		hit = GetHitInfoRtInlineCommitted(ray_query);
+		payload.LastHitT = ray_query.CommittedRayT();
+    }
+    else
+    {
+		// Indicate a miss
+        payload.LastHitT = 0;
+    }
+}
+
+[numthreads(WAVE_SIZE, 1, 1)]
+void SimpleMeshPathTracing (uint DispatchID : SV_DispatchThreadID) {
+	PathTracingPayload payload;
+	payload.LastHitT = 0;
+	CameraDescription C = GetCameraDescription();
+	// Random rng = MakeRandom(PixelIndex ^ 0x61839948u, UB.FrameIndex);
+	float4 FallbackReflection = 0;
+	if(DispatchID >= UB.ScreenDimensions.x * UB.ScreenDimensions.y) return;
+	int2 TexCoords = int2(DispatchID % UB.ScreenDimensions.x, DispatchID / UB.ScreenDimensions.x);
+	float2 UV = (TexCoords + 0.5f) / UB.ScreenDimensions;
+	{
+		Random rng = MakeRandom(DispatchID, UB.FrameIndex);
+		RayDesc Ray;
+		// Frame
+		float3 HitWorldPosition = C.Position, ViewDirection = -NDC2ToCameraDirection(C, FilmToNDC2(C, TexCoords + 0.5f.xx));
+		Material HitM;
+		float3 Throughput = 1.f, Radiance = 0.f;
+
+		int Iteration = 0;
+		[unroll(10)]
+		while(Iteration < 10) {
+			
+			// Get ready for the next iteration
+			Ray.Direction = -ViewDirection;
+			Ray.Origin = HitWorldPosition;
+			Ray.TMin = 0;
+			Ray.TMax = UB.RT_MaxTraceDistance;
+
+			HitInfo hit = (HitInfo)0;
+			PathTracingTraceRayInline(DispatchID, payload, hit, Ray);
+			if(payload.LastHitT == 0) {
+				// Sky
+				float3 SkyRadiance = EvaluateSkyRadiance(-Ray.Direction, 0);
+				Radiance += Throughput * SkyRadiance;
+				break;
+			}
+			// Opaque object, commit hit.
+			int MeshInstance = hit.instanceIndex - RT_INSTANCE_REGULAR_MESH_BIT;
+			SimpleMaterial SimpleM = g_MaterialBuffer[MeshInstance];
+			int IndexBase  = hit.primitiveIndex * 3 + g_MeshIndexOffsetsBuffer[MeshInstance];
+			int VertexBase = g_InstanceGaussianIndexOffsetBuffer[MeshInstance];
+			int I0 = g_IndexBuffer[IndexBase + 0] + VertexBase;
+			int I1 = g_IndexBuffer[IndexBase + 1] + VertexBase;
+			int I2 = g_IndexBuffer[IndexBase + 2] + VertexBase;
+			float3x4 ToWorld = g_InstanceTransformBuffer[MeshInstance];
+			float3 V0 = TransformPoint(ToWorld, g_VertexBuffer[I0].Position);
+			float3 V1 = TransformPoint(ToWorld, g_VertexBuffer[I1].Position);
+			float3 V2 = TransformPoint(ToWorld, g_VertexBuffer[I2].Position);
+			float3 Normal = normalize(cross(V1 - V0, V2 - V0));
+			if(dot(Normal, Ray.Direction) > 0) Normal = -Normal;
+			
+			// Decode and update hit info
+			HitWorldPosition = hit.barycentrics.x * V0 + hit.barycentrics.y * V1 + (1.f - hit.barycentrics.x - hit.barycentrics.y) * V2 + Normal * 1e-4f;
+			HitM = MakeMaterial(Normal, SimpleM.Albedo, SimpleM.Roughness);
+
+
+			// Sample outgoing direction (naive hemispherical uniform sampling)
+			float3 SampleDirection; float SamplePdf;
+			{
+				float2 U = rng.rand2();
+				SamplePdf = SampleBDSF(HitM, ViewDirection, U, SampleDirection);
+			}
+			float3 BSDF_DotNL = EvaluateBSDFDotNL(HitM, SampleDirection, ViewDirection);
+
+			if(false) {
+				float3 Tangent, Bitangent;
+				GetOrthoVectors(HitM.Normal, Tangent, Bitangent);
+				SampleDirection = sampleLambert(HitM.Albedo, rng.rand2());
+				SampleDirection = SampleDirection.x * Tangent + SampleDirection.y * Bitangent + SampleDirection.z * HitM.Normal;
+				float DotNL = saturate(dot(SampleDirection, HitM.Normal));
+				SamplePdf = sampleLambertPDF(DotNL);
+				BSDF_DotNL = EvaluateLambertian(HitM.Albedo) * DotNL;
+			}
+
+			Throughput *= BSDF_DotNL / SamplePdf;
+			float P = clamp(dot(Throughput, 1.f.xxx), 0.2f, 1.f);
+			if(Iteration > 2 && P < rng.rand()) {
+				// Russian roulette termination
+				break;
+			} else {
+				Throughput /= P;
+			}
+			// Next iteration
+			ViewDirection = -SampleDirection;
+
+			Iteration ++;
+		}
+		// Store the result
+		float4 OldRadianceW = GetHistoryRadianceTexture(C).Load(int3(TexCoords, 0));
+		float3 OldRadiance = OldRadianceW.rgb;
+		float3 NewRadiance = lerp(OldRadiance, Radiance, 1 / (OldRadianceW.w + 1.f));
+		GetRWRadianceTexture(C)[TexCoords] = float4(
+			NewRadiance,
+			min(OldRadianceW.w + 1, 512)
+		);
 	}
 }

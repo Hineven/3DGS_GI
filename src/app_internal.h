@@ -21,8 +21,8 @@ public:
     inline GfxContext& GetGfx() { return gfx_; }
     inline const std::string & GetRootPath() { return root_path_; }
 
-    inline int GetWindowWidth() { return 1280; }
-    inline int GetWindowHeight() { return 720; }
+    inline int GetWindowWidth() { return 1920; }
+    inline int GetWindowHeight() { return 1088; }
 
     inline Scene & GetScene () { return scene_; }
 
@@ -32,6 +32,7 @@ public:
 
 protected:
 
+    void LoadRaw3DGSScene (std::string model_name = "");
     void LoadTeaserScene (std::string env_name = "", bool load_dragon = false);
     void LoadLightingComparisonScene (std::string model_name, std::string env_name, glm::vec3 extra_rot = {}, glm::vec3 extra_scale = {1, 1, 1}) ;
     void LoadMultiModelLightingComparisonScene (std::string env_name);
@@ -39,6 +40,8 @@ protected:
     void LoadCornellBoxScene (std::string model_name, glm::vec3 extra_rot = {}, glm::vec3 extra_scale = {1, 1, 1}) ;
     void LoadAllLightsScene (bool single_light = false);
     void LoadLightRoomScene (std::string model_name, std::string env_name = "", glm::vec3 extra_pos = {}, glm::vec3 extra_rot = {}, glm::vec3 extra_scale = {1, 1, 1}) ;
+    void LoadMeshGaussianTransportScene(std::string env_name = "");
+    void LoadArmadilloMeshScene (std::string env_name);
 
 
     GfxWindow window_;

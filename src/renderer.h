@@ -337,6 +337,7 @@ protected:
         GfxKernel DisplayCameraRays;
         GfxKernel VisualizeMeshCardScene;
         GfxKernel VisualizeMeshCardAtlas;
+        GfxKernel SimpleMeshPathTracing;
 
 
         GfxKernel Debug_SSRC_VisualizeProbes;
@@ -386,6 +387,9 @@ protected:
 
         bool HWRT_enable {true};
 
+        bool simple_mesh_pt {false};
+        bool clear_pt_accumulation {false};
+
         // Normals are reconstructed from the depth buffer rather than rasterized from gaussians.
         bool reconstruct_normals {false};
 
@@ -431,6 +435,7 @@ protected:
     bool should_update_transforms_ {false};
     bool should_update_materials_ {false};
     bool need_reload_shaders_ {false};
+    bool should_reset_pt_accum_ {false};
 
     std::vector<std::string> requested_screen_shots_;
 

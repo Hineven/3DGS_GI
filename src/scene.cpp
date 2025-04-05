@@ -64,22 +64,33 @@ int Scene::LoadGaussians (std::filesystem::path path, bool always_load_sh) {
         }
     }
     bool load_sh = true;
-    if (element.hasProperty("base_color_0")) {
+
+    std::string base_color_name = "base_color_";
+    if (!element.hasProperty(base_color_name + "0")) {
+        base_color_name = "diffuse_color_";
+    }
+    if (element.hasProperty(base_color_name + "0")) {
         load_sh = false;
 
         // Try to load attributes from the format specified by paper from Nanking Univ
         // [ECCV2024] Relightable 3D Gaussian: Real-time Point Cloud Relighting with BRDF Decomposition and Ray Tracing
 
+        bool scaled_sigmoid = base_color_name == "base_color_";
+
         // Albedo
         {
-            auto r = element.getProperty<float>("base_color_0");
-            auto g = element.getProperty<float>("base_color_1");
-            auto b = element.getProperty<float>("base_color_2");
+            auto r = element.getProperty<float>(base_color_name + "0");
+            auto g = element.getProperty<float>(base_color_name + "1");
+            auto b = element.getProperty<float>(base_color_name + "2");
             gs_albedos_.resize(num_gaussians_);
             for (int i = 0; i < inst_num_gaussians; i++) {
                 auto raw = glm::vec3(r[i], g[i], b[i]);
                 // activation: scaled sigmoid
-                gs_albedos_[old_num_gaussians + i] = 0.03f + 0.77f / (1.f + exp(-raw));
+                if (scaled_sigmoid) {
+                    gs_albedos_[old_num_gaussians + i] = 0.03f + 0.77f / (1.f + exp(-raw));
+                } else {
+                    gs_albedos_[old_num_gaussians + i] = 1.f / (1.f + exp(-raw));
+                }
             }
         }
         // Roughness
@@ -88,7 +99,11 @@ int Scene::LoadGaussians (std::filesystem::path path, bool always_load_sh) {
             gs_roughnesses_.resize(num_gaussians_);
             for (int i = 0; i < inst_num_gaussians; i++) {
                 // activation: sigmoid
-                gs_roughnesses_[old_num_gaussians + i] = 0.09f + 0.9f / (1.f + exp(-r[i]));
+                if (scaled_sigmoid) {
+                    gs_roughnesses_[old_num_gaussians + i] = 0.09f + 0.9f / (1.f + exp(-r[i]));
+                } else {
+                    gs_roughnesses_[old_num_gaussians + i] = 1.f / (1.f + exp(-r[i]));
+                }
             }
         }
 
@@ -171,10 +186,17 @@ int Scene::LoadGaussians (std::filesystem::path path, bool always_load_sh) {
         }
     }
     // Normals
+    std::string n_name = "n";
+    std::string n_suffix = "xyz";
+    if (!element.hasProperty(n_name + "x")) {
+        n_name = "normal_";
+        n_suffix = "012";
+    }
+    if (element.hasProperty(n_name + n_suffix[0]))
     {
-        auto nx = element.getProperty<float>("nx");
-        auto ny = element.getProperty<float>("ny");
-        auto nz = element.getProperty<float>("nz");
+        auto nx = element.getProperty<float>(n_name + n_suffix[0]);
+        auto ny = element.getProperty<float>(n_name + n_suffix[1]);
+        auto nz = element.getProperty<float>(n_name + n_suffix[2]);
         gs_normals_.resize(num_gaussians_);
         for(int i = 0; i < inst_num_gaussians; i++) {
             // activation: normalize
@@ -237,6 +259,10 @@ void Scene::OverwriteGaussianRoughness(int instance_id, float roughness) {
     for (int i = 0; i < num_gaussians; i++) {
         gs_roughnesses_[starting_gaussian + i] = roughness;
     }
+}
+
+void Scene::OverwriteInstanceAlbedo (int instance_id, glm::vec3 albedo) {
+    gsi_materials_[instance_id].Albedo = albedo;
 }
 
 

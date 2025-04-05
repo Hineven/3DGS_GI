@@ -12,6 +12,19 @@
 // I know it's dumb. But I have no time to code about reading configuration files.
 // I'm gonna coding ugly anyway!
 
+
+void AppInternal::LoadRaw3DGSScene (std::string model_name) {
+    auto root_path = GetRootPath();
+    if (model_name == "") model_name = "garden";
+    scene_.LoadEnvironmentMap("");
+    auto inst = scene_.LoadGaussians(root_path + "data/" + model_name + "/point_cloud/iteration_30000/point_cloud.ply", true);
+    scene_.SetDirectionalLight(LightData{
+        glm::normalize(glm::vec3(0, 1, 0)),
+        {}, {},
+        {0, 0, 0}
+    });
+}
+
 void AppInternal::LoadTeaserScene (std::string env_name, bool load_dragon) {
     auto root_path = GetRootPath();
     if (env_name == "") env_name = "rogland_overcast_4k.exr";
@@ -82,9 +95,9 @@ void AppInternal::LoadTeaserScene (std::string env_name, bool load_dragon) {
     if (load_dragon) {
         auto x = scene_.LoadGltf(root_path + "data/chinese_dragon/scene.gltf");
         auto y = x + 1;
-        glm::vec3 position = glm::vec3(-0.467, -1.660, 2.384);
-        glm::vec3 rotation = glm::radians(glm::vec3(-90, -55, 0));
-        glm::vec3 scale = glm::vec3(0.5, 0.5, 0.5);
+        glm::vec3 position = glm::vec3(0.046, -1.120, 0.826);
+        glm::vec3 rotation = glm::radians(glm::vec3(-90, -115, 0));
+        glm::vec3 scale = glm::vec3(0.4, 0.4, 0.4);
         scene_.SetInstanceTransform(x, {position, rotation, scale});
         scene_.SetInstanceTransform(y, {position, rotation, scale});
     }
@@ -131,6 +144,9 @@ void AppInternal::LoadLightingComparisonScene (std::string model_name, std::stri
         auto & camera = scene_.GetCamera();
         camera.direction = glm::normalize(glm::vec3{0.6, -0.41, -0.69});
         camera.position  = glm::vec3{-2.46, 1.78, 2.86};
+
+        // camera.direction = glm::normalize(glm::vec3{0, 0, 1});
+        // camera.position  = glm::vec3{0, 0, -4};//1.78, 2.86};
         camera.fov_y = 0.6911112070083618;
         glm::mat4 View = camera.GetViewMatrix();
         for(int i = 0; i < 4; i++)
@@ -142,6 +158,29 @@ void AppInternal::LoadLightingComparisonScene (std::string model_name, std::stri
         // 0, 0, 0, 1
     }
 }
+
+void AppInternal::LoadArmadilloMeshScene(std::string env_name) {
+    auto root_path = GetRootPath();
+    scene_.LoadEnvironmentMap(root_path + "data/environment_maps/" + env_name);
+    auto file_path = root_path + "data/armadillo_mesh/scene.gltf";
+    if(!std::filesystem::exists(file_path)) {
+        file_path = root_path + "data/armadillo_mesh/scene.gltf";
+    }
+    auto inst_obj = scene_.LoadGltf(file_path);
+    {
+        glm::vec3 position = glm::vec3(0);
+        glm::vec3 rotation = glm::radians(glm::vec3(99.76, 0, 0));
+        glm::vec3 scale = glm::vec3(0.012);
+        scene_.SetInstanceTransform(inst_obj, {position, rotation, scale});
+    }
+    {
+        auto & camera = scene_.GetCamera();
+        camera.direction = glm::normalize(glm::vec3{0.6, -0.41, -0.69});
+        camera.position  = glm::vec3{-2.46, 1.78, 2.86};
+        camera.fov_y = 0.6911112070083618;
+    }
+}
+
 
 void AppInternal::LoadMultiModelLightingComparisonScene (std::string env_name) {
     auto root_path = GetRootPath();
@@ -439,5 +478,49 @@ void AppInternal::LoadLightRoomScene(std::string model_name, std::string env_nam
         camera.position  = glm::vec3{1.02, 2.86, -5.62};
         camera.fov_y = 0.6911112070083618;
         // resolution: 800 x 800
+    }
+}
+
+void AppInternal::LoadMeshGaussianTransportScene(std::string env_name) {
+    auto root_path = GetRootPath();
+    if (!env_name.empty())
+        scene_.LoadEnvironmentMap(root_path + "data/environment_maps/" + env_name + ".exr");
+    else scene_.LoadEnvironmentMap("");
+    scene_.LoadGltf(root_path + "data/all_lights_single/scene.gltf");
+    auto path = root_path + "data/armadillo/point_cloud/iteration_40000/point_cloud.ply";
+    auto inst_gs = scene_.LoadGaussians(path, false);
+    auto inst_ms = scene_.LoadGltf(root_path + "data/chinese_dragon/scene.gltf");
+    scene_.OverwriteGaussianAlbedo(inst_gs, glm::vec3(0.4, 1, 0.4));
+    scene_.OverwriteInstanceAlbedo(inst_ms, glm::vec3(0.4, 0.4, 1));
+    scene_.OverwriteInstanceAlbedo(inst_ms + 1, glm::vec3(0.4, 0.4, 1));
+
+    scene_.SetDirectionalLight(LightData{
+        glm::normalize(glm::vec3(0, 1, -0.3)),
+        {}, {},
+        {7.f, 5.5f, 5.f}
+    });
+
+    {
+        glm::vec3 position = glm::vec3(-1.2, -0.6, -0.25);
+        glm::vec3 rotation = glm::radians(glm::vec3(-90, -130, 0));
+        glm::vec3 scale = glm::vec3(1, 1, 1);
+        scene_.SetInstanceTransform(inst_gs, {position, rotation, scale});
+    }
+
+    {
+
+        glm::vec3 position = glm::vec3(0, -1.25, 0.4);
+        glm::vec3 rotation = glm::radians(glm::vec3(-90, -100, 0));
+        glm::vec3 scale = glm::vec3(1, 1, 1);
+        scene_.SetInstanceTransform(inst_ms, {position, rotation, scale});
+        scene_.SetInstanceTransform(inst_ms + 1, {position, rotation, scale});
+    }
+
+    {
+        auto & camera = scene_.GetCamera();
+        camera.direction = glm::normalize(glm::vec3{0, 0, -1});
+        camera.position  = glm::vec3{0, 0, 7.8};
+        camera.fov_y = 0.6911112070083618 * (560.f / 1088);
+        // resolution: 1088 x 560
     }
 }

@@ -643,6 +643,8 @@ bool Renderer::CreateKernels () {
                                                                 defines_c.size());
         kernel_.VisualizeMeshCardAtlas = gfxCreateComputeKernel(gfx, program_, "VisualizeMeshCardAtlas", defines_c.data(),
                                                                 defines_c.size());
+        kernel_.SimpleMeshPathTracing = gfxCreateComputeKernel(gfx, program_, "SimpleMeshPathTracing", defines_c.data(),
+                                                                      defines_c.size());
 
         kernel_.Debug_SSRC_VisualizeProbes = gfxCreateComputeKernel(gfx, program_, "Debug_SSRC_VisualizeProbes", defines_c.data(), defines_c.size());
         kernel_.Debug_SSRC_PrepareVisualizeProbeUpdateRays = gfxCreateComputeKernel(gfx, program_, "Debug_SSRC_PrepareVisualizeProbeUpdateRays", defines_c.data(), defines_c.size());
@@ -943,6 +945,7 @@ void Renderer::DestroyKernels () {
     gfxDestroyKernel(gfx, kernel_.DisplayCameraRays);
     gfxDestroyKernel(gfx, kernel_.VisualizeMeshCardScene);
     gfxDestroyKernel(gfx, kernel_.VisualizeMeshCardAtlas);
+    gfxDestroyKernel(gfx, kernel_.SimpleMeshPathTracing);
 
     gfxDestroyKernel(gfx, kernel_.DrawRegularMeshes);
     gfxDestroyKernel(gfx, kernel_.DrawActiveGaussians);
