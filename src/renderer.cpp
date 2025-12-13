@@ -778,7 +778,7 @@ void Renderer::Render() {
     gfxProgramSetParameter(gfx, program_, "g_RWProbeUpdateRayDepthBuffer", buf_.probe_update_ray_depth);
     gfxProgramSetParameter(gfx, program_, "g_RWProbeUpdateRayHitShadeCountBuffer", buf_.probe_update_ray_hit_shade_count);
     gfxProgramSetParameter(gfx, program_, "g_RWProbeUpdateRayHitShadeListBuffer", buf_.probe_update_ray_hit_shade_list);
-    gfxProgramSetParameter(gfx, program_, "g_RWProbeUpdateRayResolveHashCellIndexBuffer", buf_.probe_update_ray_resolve_hash_cell_index);
+    gfxProgramSetParameter(gfx, program_, "g_RWProbeUpdateRayResolveBucketAndCellOffsetBuffer", buf_.probe_update_ray_resolve_bucket_and_cell_offset);
     gfxProgramSetParameter(gfx, program_, "g_RWTileAdaptiveProbeCountTexture", tex_.tile_adaptive_probe_count[frame_index_ & 1]);
     gfxProgramSetParameter(gfx, program_, "g_RWPreviousTileAdaptiveProbeCountTexture", tex_.tile_adaptive_probe_count[!(frame_index_ & 1)]);
     gfxProgramSetParameter(gfx, program_, "g_RWTileAdaptiveProbeIndexTexture", tex_.tile_adaptive_probe_index[frame_index_ & 1]);

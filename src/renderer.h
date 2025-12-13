@@ -99,7 +99,7 @@ protected:
         GfxBuffer probe_update_ray_hit_shade_count;
         GfxBuffer probe_update_ray_hit_shade_list;
 
-        GfxBuffer probe_update_ray_resolve_hash_cell_index;
+        GfxBuffer probe_update_ray_resolve_bucket_and_cell_offset;
 
         GfxBuffer adaptive_probe_count;
 

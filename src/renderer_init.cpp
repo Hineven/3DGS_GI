@@ -91,7 +91,7 @@ bool Renderer::CreateResources () {
     buf_.probe_update_ray_hit_shade_count.setName("ProbeUpdateRayHitShadeCount");
     buf_.probe_update_ray_hit_shade_list = gfxCreateBuffer<uint>(gfx, options_.SSRC_max_num_probe_update_rays);
     buf_.probe_update_ray_hit_shade_list.setName("ProbeUpdateRayHitShadeList");
-    buf_.probe_update_ray_resolve_hash_cell_index = gfxCreateBuffer<uint>(gfx, options_.SSRC_max_num_probe_update_rays);
+    buf_.probe_update_ray_resolve_bucket_and_cell_offset = gfxCreateBuffer<uint>(gfx, options_.SSRC_max_num_probe_update_rays);
     buf_.adaptive_probe_count = gfxCreateBuffer<uint>(gfx, 1);
     buf_.adaptive_probe_count.setName("AdaptiveProbeCount");
 
@@ -397,7 +397,7 @@ void Renderer::DestroyResources() {
     gfxDestroyBuffer(gfx, buf_.probe_update_ray_depth);
     gfxDestroyBuffer(gfx, buf_.probe_update_ray_hit_shade_count);
     gfxDestroyBuffer(gfx, buf_.probe_update_ray_hit_shade_list);
-    gfxDestroyBuffer(gfx, buf_.probe_update_ray_resolve_hash_cell_index);
+    gfxDestroyBuffer(gfx, buf_.probe_update_ray_resolve_bucket_and_cell_offset);
     gfxDestroyBuffer(gfx, buf_.adaptive_probe_count);
 
     gfxDestroyBuffer(gfx, buf_.active_gaussian_count);

@@ -62,8 +62,8 @@ RWStructuredBuffer<uint>  g_RWProbeUpdateRayHitShadeCountBuffer;
 RWStructuredBuffer<uint>  g_RWProbeUpdateRayHitShadeListBuffer;
 
 // Some probe update rays should resolve radiance results from the hash grid cache
-// Record the cache cell index they resolve result from
-RWStructuredBuffer<uint>  g_RWProbeUpdateRayResolveHashCellIndexBuffer;
+// Record the cache bucket index & cell offset they resolve result from
+RWStructuredBuffer<uint>  g_RWProbeUpdateRayResolveBucketAndCellOffsetBuffer;
 
 // Extra info for secondary vertex shading
 // RWStructuredBuffer<float3>  g_RWProbeUpdateRayHitShadePositionBuffer;

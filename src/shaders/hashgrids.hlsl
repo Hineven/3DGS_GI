@@ -156,39 +156,38 @@ uint HashGrids_Find (uint BucketHash) {
 
 // Return the cell index to index int the value buffer
 // ViewDirection is the view direction "watching" the cell
-uint HashGrids_AllocateTile (float3 WorldPosition, float3 ViewDirection) {
+uint HashGrids_AllocateTile (float3 WorldPosition, float3 ViewDirection, inout uint BucketSlotIndex, out uint2 CellOffset) {
     HashGridsKey Key = HashGrids_GetEntryKey(WorldPosition, ViewDirection);
     bool bIsNewSlot = false;
-    uint BucketSlotIndex = HashGrids_FindAndAllocate(Key.BucketHash, bIsNewSlot);
+    BucketSlotIndex = HashGrids_FindAndAllocate(Key.BucketHash, bIsNewSlot);
     if(BucketSlotIndex == INVALID_U32) return INVALID_U32;
-    int TileIndex = 0;
+    uint TileIndex = INVALID_U32;
     if(bIsNewSlot) {
         // No previous tile found, allocate a new one
         int TileFreeListIndex = 0;
         InterlockedAdd(g_HashGrids_FreeTileCountBuffer[0], -1, TileFreeListIndex);
         TileFreeListIndex --;
-        if(TileFreeListIndex < 0) {
-            return INVALID_U32; // No more space in the free list
+        if(TileFreeListIndex >= 0) {
+            TileIndex = g_HashGrids_FreeTileListBuffer[TileFreeListIndex];
+            // Register the tile to the active list
+            uint ActiveListIndex;
+            InterlockedAdd(g_HashGrids_ActiveTileCountBuffer[0], 1, ActiveListIndex);
+            g_HashGrids_ActiveTileListBuffer[ActiveListIndex] = TileIndex;
+            // Keep the key to index the tile for re-insertion
+            g_HashGrids_TileBucketHashBuffer[TileIndex] = Key.BucketHash;
+            // Record the mapping from bucket slot to tile index for future lookups in this frame
+            g_HashGrids_BucketTileIndexBuffer[BucketSlotIndex] = TileIndex;
         }
-        TileIndex = g_HashGrids_FreeTileListBuffer[TileFreeListIndex];
-        // Register the tile to the active list
-        uint ActiveListIndex;
-        InterlockedAdd(g_HashGrids_ActiveTileCountBuffer[0], 1, ActiveListIndex);
-        g_HashGrids_ActiveTileListBuffer[ActiveListIndex] = TileIndex;
-        // Keep the key to index the tile for re-insertion
-        g_HashGrids_TileBucketHashBuffer[TileIndex] = Key.BucketHash;
-    } else {
-        TileIndex = g_HashGrids_BucketTileIndexBuffer[BucketSlotIndex];
     }
-    uint Timestamp = UB.FrameIndex + 1, PrevTimestamp = 0;
-    InterlockedExchange(g_HashGrids_TileTimestampBuffer[TileIndex], Timestamp, PrevTimestamp);
-    if(bIsNewSlot || PrevTimestamp != Timestamp) {
+    if (IsValid(TileIndex)) {
+        uint Timestamp = UB.FrameIndex + 1, PrevTimestamp = 0;
+        InterlockedExchange(g_HashGrids_TileTimestampBuffer[TileIndex], Timestamp, PrevTimestamp);
         // This tile is touched (for the first time in this frame), queue it up for update.
         int UpdateListIndex = 0;
         InterlockedAdd(g_HashGrids_UpdateTileCountBuffer[0], 1, UpdateListIndex);
         g_HashGrids_UpdateTileListBuffer[UpdateListIndex] = TileIndex;
     }
-    return HashGrids_GetCellIndex(TileIndex, Key.CellOffset);
+    return TileIndex;
 }
 
 float4 HashGrids_GetCellRadiance (uint CellIndex) {

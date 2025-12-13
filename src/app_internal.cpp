@@ -93,10 +93,10 @@ int AppInternal::Run () {
 
     // Load scene
     {
-        LoadRaw3DGSScene("garden");
+        // LoadRaw3DGSScene("garden");
 
         // scene_.LoadGltf(root_path + "data/chinese_dragon/scene.gltf");
-        // LoadTeaserScene("rogland_overcast_4k.exr", true);
+        LoadTeaserScene("rogland_overcast_4k.exr", true);
 
         // LoadLightingComparisonScene("waymo1442", "rogland_overcast_4k.exr");
         // LoadLightingComparisonScene("armadillo_pbr", "rogland_overcast_4k.exr");

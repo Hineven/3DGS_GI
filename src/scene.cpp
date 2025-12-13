@@ -127,10 +127,10 @@ int Scene::LoadGaussians (std::filesystem::path path, bool always_load_sh) {
             gs_sh3_.resize(num_gaussians_ * 7);
             std::reference_wrapper<std::vector<glm::vec3>> arr[] = {gs_sh1_, gs_sh2_, gs_sh3_};
             int coeff_top = 0;
-            for(int degree = 1; degree <= 3; degree ++) {
-                int num_coeff = degree * 2 + 1;
-                for(int coeff = 0; coeff < num_coeff; coeff ++) {
-                    for (int ch = 0; ch < 3; ch++) {
+            for (int ch = 0; ch < 3; ch++) {
+                for(int degree = 1; degree <= 3; degree ++) {
+                    int num_coeff = degree * 2 + 1;
+                    for(int coeff = 0; coeff < num_coeff; coeff ++) {
                         std::string name = "f_rest_" + std::to_string(coeff_top);
                         auto data = element.getProperty<float>(name);
                         for(int i = 0; i < inst_num_gaussians; i++) {
@@ -288,8 +288,8 @@ int Scene::LoadGltf (std::filesystem::path path) {
     int num_materials = gfxSceneGetMaterialCount(scene);
     // A simple material system only for demonstration purpose. No textures. That'll save
     // my efforts as well.
-    // auto images = gfxSceneGetImages(scene);
-    // int num_textures = gfxSceneGetImageCount(scene);
+    auto images = gfxSceneGetImages(scene);
+    int num_textures = gfxSceneGetImageCount(scene);
 
     int old_num_instances = num_instances_;
     num_instances_ += num_instances;
