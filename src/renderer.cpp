@@ -214,7 +214,6 @@ void Renderer::RenderUI () {
                 changed |= ImGui::SliderFloat3("Rotation", &model.rotation.x, -180, 180);
                 model.rotation = glm::radians(model.rotation);
                 changed |= ImGui::SliderFloat3("Scale", &model.scale.x, 0.01f, 2.5f);
-                model.scale = glm::vec3(model.scale.x);
                 if (changed) {
                     scene.SetInstanceTransform(i, model);
                     should_update_transforms_ = true;
@@ -424,7 +423,7 @@ void Renderer::Render() {
         5.f);
         REGISTER_CVAR(UB.SSRT_RelativeTexelThickness,
             "How thick a texel is on Z axis in the projected space when doing screen space ray tracing."
-            "Thicker values may produce more artifacts but can cull more rays.", 0.005f, 0.00f, 0.02f);
+            "Thicker values may produce more artifacts but can cull more rays.", 0.002f, 0.00f, 0.02f);
 
         REGISTER_CVAR(UB.Debug_LightPosition, "", glm::vec3(0, 0, 0), -10, 10);
         UB.SSRT_MaxNumIterations            = 50; // Consistent with Lumen
