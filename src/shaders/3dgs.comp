@@ -913,7 +913,7 @@ void TraceRaysInScreenSpace (uint DispatchID : SV_DispatchThreadID) {
 		float2 NoiseUV = float2(
 			RayIndex % 1024,
 			RayIndex / 1024
-		) / 1024;
+		) / 1.3f;
 		float Noise = InterleavedGradientNoise(NoiseUV, UB.FrameIndex);
 		// No vignetting for screen traces for now.
 		if (bHit)
@@ -1548,7 +1548,7 @@ bool SSRC_GetProbeReprojectionSample (float3 ProbeNormal, float3 ProbeTangent, f
         OutOfRangeDecay2 = max(OutOfRangeDecay2, 0.f);
         float OutOfRangeDecay  = max(1.f - 2.f * length(OutOfRangeDecay2) / TILE_SIZE, 0.f);
         // Stochastic noise for the history trust
-        float Noise = InterleavedGradientNoise(float2(ProbeIndex) / UB.TileDimensions, UB.FrameIndex);
+        float Noise = InterleavedGradientNoise(float2(ProbeIndex), UB.FrameIndex);
         // 1.5 ~ 3 probes
         // Noise should not be affecting the trust value... it'll make the cache unstable
         float HistoryTrust = min(dot(Sample.Weights, 1)/* * lerp(0.8f, 1.2f, Noise)*/, 1.f) * OutOfRangeDecay;
@@ -3288,7 +3288,7 @@ void TemporalDenoiseReflection (uint2 DispatchID : SV_DispatchThreadID) {
 			ZDepthToLinear(C, HistoryZDepths.w)
 		);
 		float4 DepthDistances = abs(HistoryLinearDepths - PrevLinearDepth);
-		float  Noise = InterleavedGradientNoise(NDC2ToUV(WorldNDC.xy), UB.FrameIndex);
+		float  Noise = InterleavedGradientNoise(NDC2ToUV(WorldNDC.xy) * float2(C.FilmDimensions), UB.FrameIndex);
 		float4 DepthThresholds = UB.DI_Denoiser_DepthThreshold * lerp(0.5, 1.5, Noise);
 		// UE's resolution for disocclusion misses on geometry edges
 		DepthThresholds /= clamp(saturate(dot(ViewDirection, Normal)), .1f, 1.0f);
@@ -3347,7 +3347,7 @@ void TemporalDenoiseReflection (uint2 DispatchID : SV_DispatchThreadID) {
 			ZDepthToLinear(C, HistoryZDepths.w)
 		);
 		float4 DepthDistances = abs(HistoryLinearDepths - PrevLinearDepth);
-		float  Noise = InterleavedGradientNoise(NDC2ToUV(WorldNDC.xy), UB.FrameIndex);
+		float  Noise = InterleavedGradientNoise(NDC2ToUV(WorldNDC.xy) * float2(C.FilmDimensions), UB.FrameIndex);
 		float4 DepthThresholds = UB.DI_Denoiser_DepthThreshold * lerp(0.5, 1.5, Noise);
 		// UE's resolution for disocclusion misses on geometry edges
 		DepthThresholds /= clamp(saturate(dot(ViewDirection, Normal)), .1f, 1.0f);
@@ -3472,7 +3472,7 @@ void TemporalDenoiseLighting (uint2 DispatchID : SV_DispatchThreadID) {
 			ZDepthToLinear(C, HistoryZDepths.w)
 		);
 		float4 DepthDistances = abs(HistoryLinearDepths - PrevLinearDepth);
-		float  Noise = InterleavedGradientNoise(NDC2ToUV(NDC.xy), UB.FrameIndex);
+		float  Noise = InterleavedGradientNoise(NDC2ToUV(NDC.xy) * float2(C.FilmDimensions), UB.FrameIndex);
 		float4 DepthThresholds = UB.DI_Denoiser_DepthThreshold * lerp(0.5, 1.5, Noise);
 		// UE's resolution for disocclusion misses on geometry edges
 		DepthThresholds /= clamp(saturate(dot(ViewDirection, GeometryNormal)), .1f, 1.0f);
