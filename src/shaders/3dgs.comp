@@ -2198,6 +2198,8 @@ void SSRC_ResolveHitDirectLightingFromTraceResult (uint DispatchID : SV_Dispatch
     if(IsValid(BucketSlotIndex)) {
         uint TileIndex = g_HashGrids_BucketTileIndexBuffer[BucketSlotIndex];
         if(IsValid(TileIndex)) {
+            // Update tile timestamp and queue it up for update.
+            HashGrids_TouchTile(TileIndex);
             uint CellIndex = HashGrids_GetCellIndex(TileIndex, CellOffset);
 			uint CompactCellIndex = HashGrids_CellIndexToCompactCellIndex(CellIndex);
 			// Clamp the outliers (due to inadequate light sampling)

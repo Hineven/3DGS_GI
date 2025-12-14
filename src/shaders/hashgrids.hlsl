@@ -190,6 +190,20 @@ uint HashGrids_AllocateTile (float3 WorldPosition, float3 ViewDirection, inout u
     return TileIndex;
 }
 
+void HashGrids_TouchTile (uint TileIndex) {
+    if(IsValid(TileIndex)) { 
+        uint Timestamp = UB.FrameIndex + 1, PrevTimestamp = 0;
+        InterlockedExchange(g_HashGrids_TileTimestampBuffer[TileIndex], Timestamp, PrevTimestamp);
+        if(PrevTimestamp != Timestamp) {
+            // This tile is touched (for the first time in this frame), queue it up for update.
+            uint UpdateListIndex = 0;
+            InterlockedAdd(g_HashGrids_UpdateTileCountBuffer[0], 1, UpdateListIndex);
+            g_HashGrids_UpdateTileListBuffer[UpdateListIndex] = TileIndex;
+        }
+    }
+}
+
+
 float4 HashGrids_GetCellRadiance (uint CellIndex) {
     return UnpackFp16x4(uint2(g_HashGrids_CellValueBuffer[CellIndex * 2 + 0],
                               g_HashGrids_CellValueBuffer[CellIndex * 2 + 1]));
