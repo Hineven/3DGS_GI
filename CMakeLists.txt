@@ -20,18 +20,5 @@ include_directories(ext/half/include)
 # happly
 include_directories(ext/happly)
 
-# A test executable for dependencies and gfx
-add_executable(test test/test.cpp)
-target_link_libraries(test PUBLIC gfx glm)
-
-# Set the working directory to source directory (to make shader paths work)
-set_target_properties(test PROPERTIES VS_DEBUGGER_WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
-
-# Post-build command to copy WinPixEventRuntime.dll to the output directory
-add_custom_command(TARGET test POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_RUNTIME_DLLS:test> $<TARGET_FILE_DIR:test>
-        COMMAND_EXPAND_LISTS
-)
-
 # The major executable
 add_subdirectory(src)
