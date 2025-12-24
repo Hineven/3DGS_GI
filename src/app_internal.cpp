@@ -92,13 +92,13 @@ int AppInternal::Run () {
     }
 
     // Load scene
+    // Uncomment a certain line in the following to load a preset scene.
     {
-        // LoadRaw3DGSScene("garden");
+        // LoadRaw3DGSScene("garden");                                                                  // Load a raw 3DGS scene, without lighting
 
-        // scene_.LoadGltf(root_path + "data/chinese_dragon/scene.gltf");
-        LoadTeaserScene("rogland_overcast_4k.exr", true);
+        LoadTeaserScene("rogland_overcast_4k.exr", true);                                            // The paper teaser scene. Note: remember to tune exposure to your liking.
 
-        // LoadLightingComparisonScene("waymo1442", "rogland_overcast_4k.exr");
+        // LoadLightingComparisonScene("waymo1442", "rogland_overcast_4k.exr");                         // Load a single PBR available 3D Gaussian model for lighting comparison
         // LoadLightingComparisonScene("armadillo_pbr", "rogland_overcast_4k.exr");
         // LoadLightingComparisonScene("chair", "qwantani_dusk_2_4k.exr");
         // LoadLightingComparisonScene("jugs", "qwantani_dusk_2_4k.exr");
@@ -110,16 +110,27 @@ int AppInternal::Run () {
         // LoadLightingComparisonScene("family", "tief_etz_4k.exr", {-90, 0, 0}, {0.7, 0.7, 0.7});
         // LoadLightingComparisonScene("ficus", "rogland_overcast_4k.exr");
         // LoadLightingComparisonScene("armadillo", "rogland_overcast_4k.exr");
-        // LoadArmadilloMeshScene("rogland_overcast_4k.exr");
-        // LoadMultiModelLightingComparisonScene("tief_etz_4k.exr");
-        // LoadFaultyArmadilloScene();
-        // LoadCornellBoxScene("family", {-90, 36, 0});
-        // LoadAllLightsScene();
-        // LoadAllLightsScene(true);
-        // LoadMeshGaussianTransportScene("rogland_overcast_4k");
-        // LoadLightRoomScene("air_baloons",  "overcast_soil_4k", glm::vec3(-0.4, 1.6, 0.4));
-        // LoadLightRoomScene("armadillo", "tief_etz_4k");
+        // LoadLightingComparisonScene("hollow_box", "rogland_overcast_4k.exr");
 
+        // LoadLightingComparisonScene("garden", "rogland_overcast_4k.exr", {170, 0, 0});                            // Gaussian models without PBR attributes. Empirical conversion is used. Remember to enable the "Reconstruct Normals" option.
+        // LoadLightingComparisonScene("counter", "rogland_overcast_4k.exr", {150, 0, 0});
+        // LoadLightingComparisonScene("caterpillar", "rogland_overcast_4k.exr", {-90, 0, 0});
+
+        // LoadArmadilloMeshScene("rogland_overcast_4k.exr");                                           // A single armadillo mesh. Used to examine the difference between mesh and 3D Gaussian.
+
+        // The artifacts mentioned in the paper figures should be prominent when moving the camer in this scene.
+        // LoadMultiModelLightingComparisonScene("tief_etz_4k.exr");                           // Load a seris of 3D Gaussian models. Including the "fail case" ficus.
+
+        // LoadFaultyArmadilloScene();
+
+        // LoadCornellBoxScene("family", {-90, 36, 0});                                                 // Cornell box with a single 3D Gaussian model inside
+
+        // LoadAllLightsScene(true);                                                                    // 3 3D Gaussian armadillos in a row with all kinds of lights (area & directional & env)
+
+        // LoadMeshGaussianTransportScene("rogland_overcast_4k");                                       // Load the mesh + 3D Gaussian transport demo scene (the same as in the video)
+
+        // LoadLightRoomScene("air_baloons",  "overcast_soil_4k", glm::vec3(-0.4, 1.6, 0.4));           // The lighting room scene with air balloons inside
+        // LoadLightRoomScene("armadillo", "tief_etz_4k");                                              // Replace air balloons with an armadillo model and a different env map
 
         scene_.UpdateSceneBounds();
         scene_.UpdateDeviceScene();

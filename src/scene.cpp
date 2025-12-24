@@ -37,7 +37,7 @@ bool Scene::LoadEnvironmentMap(std::filesystem::path path) {
     return true;
 }
 
-int Scene::LoadGaussians (std::filesystem::path path, bool always_load_sh) {
+int Scene::LoadGaussians (std::filesystem::path path, bool always_load_sh, bool allow_empirical_conversion) {
     if(path.extension() != ".ply") {
         app_warning("only .ply files are supported.");
         return -1;
@@ -49,8 +49,6 @@ int Scene::LoadGaussians (std::filesystem::path path, bool always_load_sh) {
     assert(element.count < (1 << 24));
     int old_num_gaussians = num_gaussians_;
     int inst_num_gaussians = element.count;
-
-    // inst_num_gaussians = 10;
 
     num_gaussians_ += inst_num_gaussians;
     // Positions
@@ -71,45 +69,74 @@ int Scene::LoadGaussians (std::filesystem::path path, bool always_load_sh) {
     }
     if (element.hasProperty(base_color_name + "0")) {
         load_sh = false;
-
-        // Try to load attributes from the format specified by paper from Nanking Univ
-        // [ECCV2024] Relightable 3D Gaussian: Real-time Point Cloud Relighting with BRDF Decomposition and Ray Tracing
-
-        bool scaled_sigmoid = base_color_name == "base_color_";
-
-        // Albedo
-        {
-            auto r = element.getProperty<float>(base_color_name + "0");
-            auto g = element.getProperty<float>(base_color_name + "1");
-            auto b = element.getProperty<float>(base_color_name + "2");
-            gs_albedos_.resize(num_gaussians_);
-            for (int i = 0; i < inst_num_gaussians; i++) {
-                auto raw = glm::vec3(r[i], g[i], b[i]);
-                // activation: scaled sigmoid
-                if (scaled_sigmoid) {
-                    gs_albedos_[old_num_gaussians + i] = 0.03f + 0.77f / (1.f + exp(-raw));
-                } else {
-                    gs_albedos_[old_num_gaussians + i] = 1.f / (1.f + exp(-raw));
-                }
-            }
-        }
-        // Roughness
-        {
-            auto r = element.getProperty<float>("roughness");
-            gs_roughnesses_.resize(num_gaussians_);
-            for (int i = 0; i < inst_num_gaussians; i++) {
-                // activation: sigmoid
-                if (scaled_sigmoid) {
-                    gs_roughnesses_[old_num_gaussians + i] = 0.09f + 0.9f / (1.f + exp(-r[i]));
-                } else {
-                    gs_roughnesses_[old_num_gaussians + i] = 1.f / (1.f + exp(-r[i]));
-                }
-            }
-        }
-
-        // No lambertian term involved in their bsdf model. So they are always 'metals' (that is, metallic == 1).
     }
-    if (load_sh || always_load_sh) {
+    bool load_pbr = element.hasProperty(base_color_name + "0");
+    // Overwrite.
+    bool do_empirical_conversion = false;
+    if (allow_empirical_conversion) {
+        if (!load_pbr) do_empirical_conversion = true;
+        load_pbr = true;
+    }
+    if (load_pbr) {
+        if (!do_empirical_conversion) {
+            // Try to load attributes from the format specified by paper from Nanking Univ
+            // [ECCV2024] Relightable 3D Gaussian: Real-time Point Cloud Relighting with BRDF Decomposition and Ray Tracing
+            bool scaled_sigmoid = base_color_name == "base_color_";
+
+            // Albedo
+            {
+                auto r = element.getProperty<float>(base_color_name + "0");
+                auto g = element.getProperty<float>(base_color_name + "1");
+                auto b = element.getProperty<float>(base_color_name + "2");
+                gs_albedos_.resize(num_gaussians_);
+                for (int i = 0; i < inst_num_gaussians; i++) {
+                    auto raw = glm::vec3(r[i], g[i], b[i]);
+                    // activation: scaled sigmoid
+                    if (scaled_sigmoid) {
+                        gs_albedos_[old_num_gaussians + i] = 0.03f + 0.77f / (1.f + exp(-raw));
+                    } else {
+                        gs_albedos_[old_num_gaussians + i] = 1.f / (1.f + exp(-raw));
+                    }
+                }
+            }
+            // Roughness
+            {
+                auto r = element.getProperty<float>("roughness");
+                gs_roughnesses_.resize(num_gaussians_);
+                for (int i = 0; i < inst_num_gaussians; i++) {
+                    // activation: sigmoid
+                    if (scaled_sigmoid) {
+                        gs_roughnesses_[old_num_gaussians + i] = 0.09f + 0.9f / (1.f + exp(-r[i]));
+                    } else {
+                        gs_roughnesses_[old_num_gaussians + i] = 1.f / (1.f + exp(-r[i]));
+                    }
+                }
+            }
+        } else {
+            // Empirical conversion from color SH to albedo + roughness
+            // Albedo: simply use 0 degree sh
+            {
+                auto r = element.getProperty<float>("f_dc_0");
+                auto g = element.getProperty<float>("f_dc_1");
+                auto b = element.getProperty<float>("f_dc_2");
+                gs_albedos_.resize(num_gaussians_);
+                for (int i = 0; i < inst_num_gaussians; i++) {
+                    auto raw = glm::vec3(r[i], g[i], b[i]) + glm::vec3(0.5f);
+                    gs_albedos_[old_num_gaussians + i] = glm::saturate(raw);
+                }
+            }
+            // Roughness
+            // Use 0.35 as a constant roughness for all gaussians
+            {
+                gs_roughnesses_.resize(num_gaussians_);
+                for (int i = 0; i < inst_num_gaussians; i++) {
+                    gs_roughnesses_[old_num_gaussians + i] = 0.35f;
+                }
+            }
+        }
+    }
+    bool has_sh = element.hasProperty("f_rest_0") && element.hasProperty("f_dc_0");
+    if ((load_sh || always_load_sh) && has_sh) {
         // Colors
         {
             auto r = element.getProperty<float>("f_dc_0");
@@ -202,6 +229,15 @@ int Scene::LoadGaussians (std::filesystem::path path, bool always_load_sh) {
             // activation: normalize
             gs_normals_[old_num_gaussians + i] = normalize(glm::vec3(nx[i], ny[i], nz[i]));
         }
+    } else if (allow_empirical_conversion) {
+        // Fallback to 0, 1, 0. Reconstruct normals from depth in the shader.
+        gs_normals_.resize(num_gaussians_);
+        for(int i = 0; i < inst_num_gaussians; i++) {
+            gs_normals_[old_num_gaussians + i] = glm::vec3(0, 1, 0);
+        }
+    } else {
+        app_warning("No normal attribute found in the ply file. Allow empirical conversion to generate PBR attributes.");
+        assert(false);
     }
 
     num_instances_ ++;

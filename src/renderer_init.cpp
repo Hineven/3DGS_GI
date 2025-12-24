@@ -124,7 +124,8 @@ bool Renderer::CreateResources () {
     int num_tiles = divideAndRoundUp(width, TILE_SIZE) * divideAndRoundUp(height, TILE_SIZE);
 
 
-    int max_num_rays = options_.max_num_rays;
+    int max_num_pixels = width * height;
+    int max_num_rays = std::max(options_.max_num_rays, max_num_pixels);
 
     buf_.ray_count = gfxCreateBuffer<int>(gfx, 1);
     buf_.ray_count.setName("RayCount");
@@ -150,7 +151,6 @@ bool Renderer::CreateResources () {
     buf_.ray_to_trace_result = gfxCreateBuffer<uint2>(gfx, max_num_rays);
     buf_.ray_to_trace_result.setName("RayToTraceResult");
 
-    int max_num_pixels = width * height;
     buf_.direct_illumination_ray_occlusion_threshold = gfxCreateBuffer<float>(gfx, std::max(max_num_pixels, options_.SSRC_max_num_probe_update_rays));
     buf_.direct_illumination_ray_occlusion_threshold.setName("DirectIlluminationRayOcclusionThreshold");
     buf_.direct_illumination_ray_contribution = gfxCreateBuffer<uint2>(gfx, std::max(max_num_pixels, options_.SSRC_max_num_probe_update_rays));

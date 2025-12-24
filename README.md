@@ -18,7 +18,10 @@ Executable CMake target name: `3DGS_AdvGI`
 Modify the scene loading logic inside `app_internal.cpp` to load different 3D Gaussians / Gltf scenes.
 
 **NOTE**: Only 3D Gaussians with PBR material parameters are "good" for relighting. We use [Relightable 3DGS](https://github.com/NJU-3DV/Relightable3DGaussian) to produce 3D Gaussians with PBR features.
-Other inverse rendering frameworks may also work. While loading 3D Gaussians without proper material parameters for relighting, they are empirically converted.
+Other inverse rendering frameworks may also work.
+
+**NOTE2**: While loading 3D Gaussians without proper material parameters for relighting, they are empirically converted. Most of the time the results are bad.
+Remember to switch on "Reconstruct Normals" option for those models to always use fallback normals when relighting.
 
 ## Sample Data
 The project relies on PBR-featured 3D Gaussian models produced by [Relightable 3DGS](https://github.com/NJU-3DV/Relightable3DGaussian). Download the data here: [Data](https://drive.google.com/file/d/1e6XrQieyw-NMTD3-SeuyZHT4-DW65nEl/view?usp=sharing)

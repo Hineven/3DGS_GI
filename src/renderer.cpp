@@ -491,7 +491,7 @@ void Renderer::Render() {
         REGISTER_CVAR(UB.DI_NoTemporalDenoising, "Disable temporal denoising for direct illumination.", false);
 
         REGISTER_CVAR(UB.DI_NoSpatialDenoising, "Disable spatial denoising for direct illumination.", false);
-        REGISTER_CVAR(UB.DI_Denoiser_TargetNumSamples, "The target number of samples to achieve for direct illumination denoising.", 50, 1, 256);
+        REGISTER_CVAR(UB.DI_Denoiser_TargetNumSamples, "The target number of samples to achieve for direct illumination denoising.", 30, 1, 256);
 
 #ifdef MAXMIZE_RENDER_QUALITY_PRESET
 #define DENOISER_TARGET_NUM_SAMPLES 64

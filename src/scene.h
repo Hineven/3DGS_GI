@@ -99,7 +99,7 @@ public:
     // Clear and load gaussians from some .ply file.
     // If the gaussians are PBR ready, we won't load the SH coeffs and colors (by default)
     // returns -1 if failed, otherwise the instance index of the loaded gaussians
-    int LoadGaussians (std::filesystem::path path, bool always_load_sh = false) ;
+    int LoadGaussians (std::filesystem::path path, bool always_load_sh = false, bool allow_empirical_conversion = false) ;
 
     // Returns the starting index of loaded instances
     int LoadGltf (std::filesystem::path path);

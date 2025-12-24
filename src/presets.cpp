@@ -125,7 +125,11 @@ void AppInternal::LoadLightingComparisonScene (std::string model_name, std::stri
     if(!std::filesystem::exists(file_path)) {
         file_path = root_path + "data/" + model_name + "/point_cloud/iteration_40000/point_cloud.ply";
     }
-    auto inst_obj = scene_.LoadGaussians(file_path, true);
+    if(!std::filesystem::exists(file_path)) {
+        file_path = root_path + "data/" + model_name + "/point_cloud/iteration_30000/point_cloud.ply";
+    }
+
+    auto inst_obj = scene_.LoadGaussians(file_path, true, true);
 
     {
         glm::vec3 position = glm::vec3(0);
