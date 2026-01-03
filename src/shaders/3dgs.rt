@@ -428,6 +428,8 @@ void Trace3DGSStochasticClosestHit (inout Trace3DGSStochasticRayPayload Payload,
 #if defined(PROBE_UPDATE_STOCHASTIC_RAY_TRACING) || defined(REFLECTION_STOCHASTIC_RAY_TRACING) || defined(STOCHASTIC_RAY_TRACING)
         float3x3 ObjectToWorldNormal = g_InstanceNormalTransformBuffer[HitInstance];
         float3 Normal = TransformVector(ObjectToWorldNormal, Pbr.Normal);
+        // Invert the gaussian normal if it is pointing along the ray direction
+        if(dot(Normal, Ray.Direction) > 0) Normal = -Normal;
         Payload.HitNormal   = PackNormal(Normal);
 #endif
 #if defined(PROBE_UPDATE_STOCHASTIC_RAY_TRACING) || defined(STOCHASTIC_RAY_TRACING)

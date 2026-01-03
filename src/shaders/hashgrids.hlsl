@@ -74,8 +74,7 @@ HashGridsKey HashGrids_GetEntryKey (float3 WorldPosition, float3 ViewDirection, 
     // come from outside of the tile and inside of the tile, so we hash them separately
     // Imagine a box small enough to fit in a tile, light queries from within the box
     // should get different values than queries from outside of the box
-    // TODO: seems unworthy...
-    bool bWithinTile = false;//TraveledDistance < TileSize;
+    bool bWithinTile = TraveledDistance < TileSize;
     uint4 Features0 = uint4(asuint(TileIndex), uint(max(0, 100 + floor(log2(CellSize)))) + (bWithinTile ? 200 : 0));
     float3 QuantilizedViewDirection = floor(0.5f + 4 * (ViewDirection * 0.5 + 0.5));
     uint3 Features1 = QuantilizedViewDirection;
@@ -156,8 +155,8 @@ uint HashGrids_Find (uint BucketHash) {
 
 // Return the cell index to index int the value buffer
 // ViewDirection is the view direction "watching" the cell
-uint HashGrids_AllocateTile (float3 WorldPosition, float3 ViewDirection, inout uint BucketSlotIndex, out uint2 CellOffset) {
-    HashGridsKey Key = HashGrids_GetEntryKey(WorldPosition, ViewDirection);
+uint HashGrids_AllocateTile (float3 WorldPosition, float3 ViewDirection, float TravelDistance, inout uint BucketSlotIndex, out uint2 CellOffset) {
+    HashGridsKey Key = HashGrids_GetEntryKey(WorldPosition, ViewDirection, TravelDistance);
     bool bIsNewSlot = false;
     BucketSlotIndex = HashGrids_FindAndAllocate(Key.BucketHash, bIsNewSlot);
     if(BucketSlotIndex == INVALID_U32) return INVALID_U32;

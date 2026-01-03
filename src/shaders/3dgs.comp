@@ -1998,6 +1998,9 @@ void SSRC_SampleLightRays (uint DispatchID : SV_DispatchThreadID) {
 	uint2 PackedHitResult = g_RWRayToTraceResultBuffer[ProbeUpdateRayIndex];
 	Material HitMaterial = UnpackCachedMaterial(PackedHitResult.x);
 	float3 HitNormal     = UnpackNormal(PackedHitResult.y);
+	if(dot(HitNormal, HitViewDirection) < 0) {
+        HitNormal = -HitNormal;
+    }
 
 	HitMaterial.Normal = HitNormal;
 	// Offset the hit position to avoid self-intersection
@@ -2065,7 +2068,7 @@ void SSRC_SampleLightRays (uint DispatchID : SV_DispatchThreadID) {
 	uint BucketSlotIndex = 0xFFFFFFFFu;
     uint2 CellOffset;
 	uint NewTileIndex = HashGrids_AllocateTile(
-		HitPosition, HitViewDirection,
+		HitPosition, HitViewDirection, ProbeUpdateRayDepth,
         BucketSlotIndex, CellOffset
 	);
 	// Probe update ray results should be resolved from this cell
