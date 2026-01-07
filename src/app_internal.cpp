@@ -63,9 +63,9 @@ int AppInternal::Run () {
 
 
     // Detect shader path
-    std::string root_path = "";
+    std::string root_path = "./";
     bool found = false;
-    for (int depth = 0; depth < 4; depth++) {
+    for (int depth = 0; depth < 6; depth++) {
         if (std::filesystem::exists(root_path + "src/device_shared.hlsl")) {
             found = true;
             break;
