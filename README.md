@@ -1,5 +1,6 @@
 # Dynamic Global Illumination for Interactive Gaussian Splatting Scenes in Real Time
-_Paper source code_
+_Paper source code, [paper link](https://arxiv.org/abs/2503.17897)_
+
 ![Cover Image](cover.png)
 This is an implementation of a simple RTGI pipeline for interactive relighting of mixed scenes including 3D Gaussians and mesh models.
 The implementation is minimalistic. It does not include many possible optimizations or denoising techniques, neither a proper material system.
