@@ -1,5 +1,5 @@
 # Dynamic Global Illumination for Interactive Gaussian Splatting Scenes in Real Time
-_Paper source code, [paper link](https://arxiv.org/abs/2503.17897)_
+_Paper source code, [paper link](https://arxiv.org/abs/2503.17897)_. [project page](https://hineven.github.io/3DGS_GI/)
 
 ![Cover Image](cover.png)
 This is an implementation of a simple RTGI pipeline for interactive relighting of mixed scenes including 3D Gaussians and mesh models.
