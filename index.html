@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Dynamic Global Illumination for Interactive Gaussian Splatting Scenes in Real Time</title>
+<meta name="description" content="A real-time pipeline for dynamic global illumination in scenes mixing 3D Gaussians and meshes. IEEE TVCG 2026. 43 FPS at 1920x1088 on an RTX 3090, no precomputation.">
+<meta property="og:title" content="Dynamic Global Illumination for Interactive Gaussian Splatting Scenes in Real Time">
+<meta property="og:description" content="Real-time global illumination for 3D Gaussian and mesh hybrid scenes — no precomputation, fully dynamic lighting, materials and geometry. IEEE TVCG 2026.">
+<meta property="og:image" content="images/cover.jpg">
+<meta property="og:type" content="website">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<nav id="topnav">
+  <div class="nav-inner">
+    <span class="nav-title">3DGS&nbsp;Dynamic&nbsp;GI</span>
+    <div class="nav-links">
+      <a href="#video">Video</a>
+      <a href="#abstract">Abstract</a>
+      <a href="#method">Method</a>
+      <a href="#results">Results</a>
+      <a href="#performance">Performance</a>
+      <a href="#bibtex">BibTeX</a>
+    </div>
+  </div>
+</nav>
+
+<header class="hero">
+  <div class="container">
+    <p class="venue-badge">IEEE Transactions on Visualization and Computer Graphics (TVCG), Vol.&nbsp;32, No.&nbsp;7, July 2026</p>
+    <h1>Dynamic Global Illumination for Interactive<br>Gaussian Splatting Scenes in Real Time</h1>
+    <p class="authors">
+      <a href="https://github.com/Hineven" target="_blank" rel="noopener">Chenxiao&nbsp;Hu</a><sup>1</sup>,
+      Meng&nbsp;Gai<sup>1</sup>,
+      Guoping&nbsp;Wang<sup>1,2</sup>,
+      Sheng&nbsp;Li<sup>1,2,&dagger;</sup>
+    </p>
+    <p class="affiliations">
+      <sup>1</sup>School of Computer Science, Peking University&emsp;
+      <sup>2</sup>National Key Laboratory of Intelligent Parallel Technology<br>
+      <sup>&dagger;</sup>Corresponding author
+    </p>
+    <div class="link-buttons">
+      <a class="btn" href="https://ieeexplore.ieee.org/document/11505800" target="_blank" rel="noopener">
+        <svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z"/></svg>
+        Paper (IEEE)</a>
+      <a class="btn" href="https://arxiv.org/abs/2503.17897" target="_blank" rel="noopener">
+        <svg viewBox="0 0 24 24"><path d="M4 4h16v2H4zm0 4h16v12H4zm2 2v8h12v-8H6z"/></svg>
+        arXiv</a>
+      <a class="btn" href="https://github.com/Hineven/3DGS_GI" target="_blank" rel="noopener">
+        <svg viewBox="0 0 24 24"><path d="M12 .5C5.65.5.5 5.65.5 12c0 5.08 3.29 9.39 7.86 10.91.58.11.79-.25.79-.55v-2.17c-3.2.7-3.87-1.36-3.87-1.36-.52-1.33-1.28-1.68-1.28-1.68-1.04-.71.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.02 1.76 2.69 1.25 3.35.96.1-.75.4-1.25.72-1.54-2.55-.29-5.24-1.28-5.24-5.68 0-1.26.45-2.28 1.19-3.09-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.18 1.18a11.1 11.1 0 0 1 5.8 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.81 1.19 1.83 1.19 3.09 0 4.42-2.7 5.39-5.26 5.67.41.35.77 1.05.77 2.12v3.15c0 .3.21.67.8.55A11.52 11.52 0 0 0 23.5 12C23.5 5.65 18.35.5 12 .5z"/></svg>
+        Code</a>
+      <a class="btn" href="https://www.bilibili.com/video/BV1KgmXBVEXB/" target="_blank" rel="noopener">
+        <svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+        Video (Bilibili)</a>
+      <a class="btn" href="https://drive.google.com/file/d/1e6XrQieyw-NMTD3-SeuyZHT4-DW65nEl/view?usp=sharing" target="_blank" rel="noopener">
+        <svg viewBox="0 0 24 24"><path d="M19.35 10.04A7.49 7.49 0 0 0 12 4C9.11 4 6.6 5.64 5.35 8.04A5.994 5.994 0 0 0 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM17 13l-5 5-5-5h3V9h4v4h3z"/></svg>
+        Sample Data</a>
+    </div>
+  </div>
+</header>
+
+<section class="teaser">
+  <div class="container-wide">
+    <figure>
+      <img src="images/teaser.jpg" alt="Teaser: a compound scene with five 3D Gaussian models and mesh models relit in real time" loading="eager">
+      <figcaption>
+        Precomputation-free global illumination rendered by our pipeline at 1920&times;1088 at over 40 FPS on an RTX&nbsp;3090.
+        The compound scene contains five 3D Gaussian models (over 1.5&nbsp;million Gaussian primitives in the view frustum) together with mesh models
+        (e.g., the Chinese dragon) — all lights, materials and objects remain editable at run time.
+      </figcaption>
+    </figure>
+  </div>
+</section>
+
+<section id="video">
+  <div class="container">
+    <h2>Video</h2>
+    <p class="section-lead">Real-time scene navigation and live editing of objects, materials and lights, captured directly from our application.</p>
+    <div class="video-wrapper">
+      <iframe src="https://player.bilibili.com/player.html?bvid=BV1KgmXBVEXB&page=1&high_quality=1&danmaku=0&autoplay=0"
+              scrolling="no" frameborder="0" allowfullscreen
+              title="Demo video on Bilibili"></iframe>
+    </div>
+    <p class="video-fallback">Cannot see the player? <a href="https://www.bilibili.com/video/BV1KgmXBVEXB/" target="_blank" rel="noopener">Watch the video on Bilibili &nearr;</a></p>
+  </div>
+</section>
+
+<section id="abstract">
+  <div class="container">
+    <h2>Abstract</h2>
+    <p>
+      We present a real-time pipeline to approximate global illumination in interactive or dynamic scenes, including both 3D Gaussian models
+      and conventional meshes. Building on a formulated surface light transport model for 3D Gaussians, we address key performance challenges
+      through a fast compound stochastic ray-tracing algorithm and a hardware 3D Gaussian rasterizer, and we implement multiple RTGI
+      (real-time global illumination) techniques for 3D Gaussians. Our pipeline enables real-time rendering of interactive scenes featuring
+      editable materials, lights, meshes, and 3D Gaussian models, effectively capturing multi-bounce diffuse and one-bounce glossy light transport.
+      Our approach covers a wide range of dynamic light sources, including area lights, directional lights, and environmental lighting.
+      Comprehensive experimental results demonstrate that our approach can efficiently render global illumination for both 3DGS models and
+      hybrid models combining meshes and 3DGS, all in real time. Our pipeline highlights the potential of 3D Gaussians in real-time global
+      illumination, and offers insights into performance optimization.
+    </p>
+  </div>
+</section>
+
+<section id="method">
+  <div class="container">
+    <h2>Method</h2>
+    <p class="section-lead">
+      Two challenges stand between 3D Gaussians and real-time global illumination: there was no light-transport formulation for
+      3D Gaussians that is cheap enough to solve in real time, and the cost of ray tracing and rasterizing Gaussians was prohibitive.
+      We address both.
+    </p>
+
+    <figure class="wide-figure">
+      <img src="images/pipeline.png" alt="Overview of the RTGI pipeline" loading="lazy">
+      <figcaption>
+        Overview of the RTGI pipeline. A light grid supplies direct-lighting samples; a hash-grid cache stores the world-space outgoing
+        radiance field as the secondary radiance cache; screen probes store the incoming radiance field on camera-visible surfaces as the
+        primary cache. Stochastic ray tracing queries outgoing radiance and gathers material properties at primitive hits, while shadow
+        rays supply visibility. Lighting is split into direct diffuse, indirect diffuse and glossy reflectance, each rendered with a
+        specialized algorithm and spatio-temporal filtering.
+      </figcaption>
+    </figure>
+
+    <div class="cards">
+      <div class="card">
+        <h3>1 &middot; Surface Light Transport for 3D Gaussians</h3>
+        <p>
+          We formulate a modified surface light-transport equation (LTE) for 3D Gaussians: along a ray, Gaussians are squashed into
+          equivalent 2D semi-transparent splatted surfaces, and incoming radiance accumulates their outgoing radiance weighted by the
+          same opacity–transmittance products used in 3D Gaussian rasterization. The model is far cheaper to solve than volumetric
+          formulations, stays consistent with existing rasterizers and inverse renderers (R3DG), and reduces to classic surface LTE on meshes.
+        </p>
+      </div>
+      <div class="card">
+        <h3>2 &middot; Compound Stochastic Ray Tracing</h3>
+        <p>
+          Instead of enumerating every Gaussian intersected by a ray, we accept or reject hits stochastically &agrave; la Russian roulette,
+          obtaining unbiased estimators of visibility (shadow rays) and of hit material properties (shading rays) whose per-pixel mean matches
+          the reference algorithm — at a large ray-throughput gain. Rays from visible surfaces first march the screen-space Hi-Z buffer and
+          only fall back to stochastic tracing on occlusion.
+        </p>
+      </div>
+      <div class="card">
+        <h3>3 &middot; Hardware 3D Gaussian Rasterizer</h3>
+        <p>
+          View-frustum Gaussians are squashed to 2D hexagons aligned with their projected covariances and rasterized by the GPU hardware
+          in far-to-near order. Max-response depths stored at hexagon vertices are hardware-interpolated, mitigating edge artifacts and
+          producing smoother fallback normals on flat surfaces. Color-only rasterization runs between the original CUDA rasterizer and the
+          heavily optimized FlashGS.
+        </p>
+      </div>
+    </div>
+
+    <div class="figure-grid">
+      <figure>
+        <img src="images/tracing.png" alt="Illustration of a shading ray traced by the stochastic algorithm" loading="lazy">
+        <figcaption>A shading ray in our stochastic algorithm: hits are accepted with probability equal to their evaluated opacity; the closest accepted hit returns its material parameters.</figcaption>
+      </figure>
+      <figure>
+        <img src="images/stochastic.png" alt="Stochastic vs reference ray tracing comparison" loading="lazy">
+        <figcaption>Stochastic ray tracing (right columns) vs. the reference of Moenne-Loccoz et&nbsp;al.: the multi-frame mean is identical to the reference while ray throughput grows significantly.</figcaption>
+      </figure>
+      <figure>
+        <img src="images/hexagon.png" alt="Hexagon generation for hardware rasterization" loading="lazy">
+        <figcaption>Each frame, 3D Gaussians are converted to 2D hexagons for hardware rasterization, with Max-response depths as vertex attributes for hardware interpolation.</figcaption>
+      </figure>
+      <figure>
+        <img src="images/normals.jpg" alt="Reconstructed normals comparison" loading="lazy">
+        <figcaption>Interpolated depths (right) remove the edge artifacts of constant-depth hexagons (left), giving smoother reconstructed normals on flat surfaces.</figcaption>
+      </figure>
+    </div>
+  </div>
+</section>
+
+<section id="results">
+  <div class="container">
+    <h2>Results</h2>
+
+    <div class="metrics">
+      <div class="metric"><span class="metric-value">43 FPS</span><span class="metric-label">1920&times;1088 teaser scene<br>1.57M Gaussians, RTX 3090</span></div>
+      <div class="metric"><span class="metric-value">200+ FPS</span><span class="metric-label">single-object relighting<br>at 1280&times;720</span></div>
+      <div class="metric"><span class="metric-value">100&times;</span><span class="metric-label">faster than R3DG offline relighting<br>(&asymp;5 ms vs. &asymp;700 ms / frame)</span></div>
+      <div class="metric"><span class="metric-value">32.87 / 0.94</span><span class="metric-label">avg. foreground PSNR / SSIM<br>vs. R3DG</span></div>
+    </div>
+
+    <h3 class="result-title">Consistency with offline relighting</h3>
+    <figure class="wide-figure">
+      <img src="images/comparison_r3dg.jpg" alt="Comparison between R3DG and our method under environment lights" loading="lazy">
+      <figcaption>
+        R3DG offline relighting (left of each pair, &asymp;700 ms/frame excluding visibility baking) vs. our real-time rendering (right, &asymp;5 ms/frame)
+        under environment lights. Our method stays highly consistent with R3DG while being two orders of magnitude faster.
+      </figcaption>
+    </figure>
+
+    <h3 class="result-title">Global illumination components</h3>
+    <div class="figure-grid">
+      <figure>
+        <img src="images/components.jpg" alt="GI decomposition of the Family model in a Cornell box" loading="lazy">
+        <figcaption>&ldquo;Family&rdquo; in a Cornell box: full GI (1) decomposes into direct diffuse (2), indirect diffuse (3) and glossy reflectance (4).</figcaption>
+      </figure>
+      <figure>
+        <img src="images/mutual.jpg" alt="Mutual indirect light transport between Armadillo and Dragon" loading="lazy">
+        <figcaption>Mutual indirect transport between a 3D Gaussian Armadillo and a mesh Dragon — the Dragon picks up a green tint, the Armadillo an orange hue.</figcaption>
+      </figure>
+    </div>
+
+    <h3 class="result-title">Dynamic lighting</h3>
+    <figure class="wide-figure">
+      <img src="images/lighting.jpg" alt="Relighting under various environment, area and directional lights" loading="lazy">
+      <figcaption>
+        Real-time relighting under environment (top), area (middle) and directional lights (bottom). Area lights produce soft shadows;
+        strong directional lights scatter indirect diffuse lighting onto walls and neighboring models. All lighting changes happen live in the application.
+      </figcaption>
+    </figure>
+
+    <h3 class="result-title">Material editing &amp; fully dynamic scenes</h3>
+    <div class="figure-grid">
+      <figure>
+        <img src="images/material.jpg" alt="In-application material variation" loading="lazy">
+        <figcaption>Material parameters (albedo, roughness) edited on the fly under identical lighting.</figcaption>
+      </figure>
+      <figure>
+        <img src="images/dynamic.jpg" alt="Dynamic scene with complex light settings" loading="lazy">
+        <figcaption>A fully interactive scene: objects and lights can be transformed, scaled, inserted or removed in real time, with consistent GI throughout.</figcaption>
+      </figure>
+    </div>
+
+    <h3 class="result-title">Diffuse &amp; glossy under diverse lighting</h3>
+    <div class="figure-grid">
+      <figure>
+        <img src="images/glossy.jpg" alt="Three Armadillos with varying roughness" loading="lazy">
+        <figcaption>Three Armadillos of varying roughness: a glossy one lit by skylight through a wall opening, rough ones by multiple area lights.</figcaption>
+      </figure>
+      <figure>
+        <img src="images/barn.jpg" alt="Light bouncing inside a 3D Gaussian barn" loading="lazy">
+        <figcaption>Light bouncing within the barn model itself: damp grass reflects the walls; shadowed walls receive scattered light from sunlit walkways.</figcaption>
+      </figure>
+    </div>
+  </div>
+</section>
+
+<section id="performance">
+  <div class="container">
+    <h2>Performance Analysis</h2>
+    <p class="section-lead">
+      Measured on the teaser scene (1.57M Gaussian primitives in the view frustum) at 1920&times;1088 on an RTX&nbsp;3090: 43 FPS on average.
+      Gaussian rasterization — scaling linearly with total fragment byte size — is the main bottleneck, while stochastic ray tracing scales
+      sub-linearly with model size and remains a minor cost.
+    </p>
+    <div class="figure-grid">
+      <figure>
+        <img src="images/perf.png" alt="Time consumption breakdown by shader type and lighting type" loading="lazy">
+        <figcaption>Per-frame time budget by shader type and by lighting effect (mesh rasterization &lt;0.1 ms excluded).</figcaption>
+      </figure>
+      <div class="table-card">
+        <table>
+          <caption>Average color-only rasterization cost at 1920&times;1088 (ms)</caption>
+          <thead>
+            <tr><th></th><th>bonsai</th><th>garden</th><th>drjohnson</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>3DGS (Kerbl et al.)</td><td>4.02</td><td>11.74</td><td>9.31</td></tr>
+            <tr><td>FlashGS</td><td>1.48</td><td>4.05</td><td>1.77</td></tr>
+            <tr><td><strong>Ours</strong></td><td><strong>2.21</strong></td><td><strong>6.96</strong></td><td><strong>2.88</strong></td></tr>
+          </tbody>
+        </table>
+        <p class="table-note">Our hardware rasterizer sits between the original CUDA software rasterizer and the heavily optimized FlashGS. Comparison is for reference only due to non-equivalent implementations.</p>
+      </div>
+    </div>
+
+    <h3 class="result-title">Robustness &amp; limitations</h3>
+    <div class="figure-grid">
+      <figure>
+        <img src="images/stress.jpg" alt="Synthetic stress-test scenes" loading="lazy">
+        <figcaption>
+          Stress tests: thin Gaussian occluders with no light leakage, interpenetrating Gaussian geometry, and complex
+          Gaussian–mesh occlusions all render stably without noticeable artifacts.
+        </figcaption>
+      </figure>
+      <figure>
+        <img src="images/failure.jpg" alt="Failure case on blurry reconstructed Gaussians" loading="lazy">
+        <figcaption>
+          Failure case: loosely defined, &ldquo;blurry&rdquo; reconstructions mislead the sparse screen probes and darken the result (ours, right) compared
+          to R3DG (left). Temporal ghosting and glossy flickering from temporal filtering also remain future work.
+        </figcaption>
+      </figure>
+    </div>
+  </div>
+</section>
+
+<section id="bibtex">
+  <div class="container">
+    <h2>Citation</h2>
+    <div class="bibtex-box">
+      <button id="copy-btn" type="button">Copy</button>
+<pre id="bibtex">@article{hu2026dynamic,
+  author  = {Hu, Chenxiao and Gai, Meng and Wang, Guoping and Li, Sheng},
+  title   = {Dynamic Global Illumination for Interactive Gaussian Splatting Scenes in Real Time},
+  journal = {IEEE Transactions on Visualization and Computer Graphics},
+  year    = {2026},
+  volume  = {32},
+  number  = {7},
+  pages   = {6919--6931},
+  doi     = {10.1109/TVCG.2026.3689199}
+}</pre>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="container">
+    <p>
+      <strong>Dynamic Global Illumination for Interactive Gaussian Splatting Scenes in Real Time</strong><br>
+      Chenxiao Hu, Meng Gai, Guoping Wang, Sheng Li — IEEE TVCG 2026
+    </p>
+    <p class="footer-links">
+      <a href="https://github.com/Hineven/3DGS_GI" target="_blank" rel="noopener">GitHub</a> &middot;
+      <a href="https://arxiv.org/abs/2503.17897" target="_blank" rel="noopener">arXiv</a> &middot;
+      <a href="https://ieeexplore.ieee.org/document/11505800" target="_blank" rel="noopener">IEEE Xplore</a> &middot;
+      <a href="https://www.bilibili.com/video/BV1KgmXBVEXB/" target="_blank" rel="noopener">Video</a>
+    </p>
+    <p class="ack">
+      Supported by the National Key R&amp;D Program of China (2022ZD0160805), Shenzhen Science and Technology Program
+      (KJZD20230923114114028), and Shandong Key Research and Development Program (2024CXGC010801).<br>
+      Built upon <a href="https://github.com/gboisse/gfx" target="_blank" rel="noopener">gfx</a>,
+      <a href="https://github.com/GPUOpen-LibrariesAndSDKs/Capsaicin" target="_blank" rel="noopener">Capsaicin</a> and
+      <a href="https://github.com/NJU-3DV/Relightable3DGaussian" target="_blank" rel="noopener">Relightable 3D Gaussian</a>.
+    </p>
+  </div>
+</footer>
+
+<script>
+document.getElementById('copy-btn').addEventListener('click', function () {
+  const text = document.getElementById('bibtex').innerText;
+  navigator.clipboard.writeText(text).then(() => {
+    this.textContent = 'Copied!';
+    setTimeout(() => { this.textContent = 'Copy'; }, 1500);
+  });
+});
+</script>
+
+</body>
+</html>
