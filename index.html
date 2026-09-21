@@ -9,7 +9,7 @@
 <meta property="og:description" content="Real-time global illumination for 3D Gaussian and mesh hybrid scenes — no precomputation, fully dynamic lighting, materials and geometry. IEEE TVCG 2026.">
 <meta property="og:image" content="images/cover.jpg">
 <meta property="og:type" content="website">
-<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="style.css?v=2">
 </head>
 <body>
 
@@ -109,48 +109,44 @@
   <div class="container">
     <h2>Method</h2>
     <p class="section-lead">
-      Two challenges stand between 3D Gaussians and real-time global illumination: there was no light-transport formulation for
-      3D Gaussians that is cheap enough to solve in real time, and the cost of ray tracing and rasterizing Gaussians was prohibitive.
-      We address both.
+      Real-time global illumination needs two things: a way to describe how light travels between 3D Gaussians,
+      and a way to compute it cheaply, every frame. We contribute both — a simple light-transport model for
+      3D Gaussians, and fast ray-tracing / rasterization building blocks that make it practical.
     </p>
 
     <figure class="wide-figure">
       <img src="images/pipeline.png" alt="Overview of the RTGI pipeline" loading="lazy">
       <figcaption>
-        Overview of the RTGI pipeline. A light grid supplies direct-lighting samples; a hash-grid cache stores the world-space outgoing
-        radiance field as the secondary radiance cache; screen probes store the incoming radiance field on camera-visible surfaces as the
-        primary cache. Stochastic ray tracing queries outgoing radiance and gathers material properties at primitive hits, while shadow
-        rays supply visibility. Lighting is split into direct diffuse, indirect diffuse and glossy reflectance, each rendered with a
-        specialized algorithm and spatio-temporal filtering.
+        The pipeline at a glance: Gaussians and meshes are rasterized into a shared G-buffer; direct light is sampled
+        from a light grid; indirect light is gathered by tracing rays and cached in screen probes and a world-space
+        hash grid; glossy reflections are traced separately. Everything is filtered and accumulated over a few frames.
       </figcaption>
     </figure>
 
     <div class="cards">
       <div class="card">
-        <h3>1 &middot; Surface Light Transport for 3D Gaussians</h3>
+        <h3>A light-transport model for 3D Gaussians</h3>
         <p>
-          We formulate a modified surface light-transport equation (LTE) for 3D Gaussians: along a ray, Gaussians are squashed into
-          equivalent 2D semi-transparent splatted surfaces, and incoming radiance accumulates their outgoing radiance weighted by the
-          same opacity–transmittance products used in 3D Gaussian rasterization. The model is far cheaper to solve than volumetric
-          formulations, stays consistent with existing rasterizers and inverse renderers (R3DG), and reduces to classic surface LTE on meshes.
+          Along a ray, we treat every Gaussian as a tiny semi-transparent surface and blend their light front-to-back —
+          exactly the way 3DGS rasterization blends colors. This gives a light-transport equation that is cheap enough
+          for real time and works directly with models from existing 3DGS inverse renderers.
         </p>
       </div>
       <div class="card">
-        <h3>2 &middot; Compound Stochastic Ray Tracing</h3>
+        <h3>Fast stochastic ray tracing</h3>
         <p>
-          Instead of enumerating every Gaussian intersected by a ray, we accept or reject hits stochastically &agrave; la Russian roulette,
-          obtaining unbiased estimators of visibility (shadow rays) and of hit material properties (shading rays) whose per-pixel mean matches
-          the reference algorithm — at a large ray-throughput gain. Rays from visible surfaces first march the screen-space Hi-Z buffer and
-          only fall back to stochastic tracing on occlusion.
+          Testing every Gaussian a ray touches is too slow, so we flip a weighted coin at each hit instead: opaque
+          Gaussians are likely to block the ray, transparent ones to let it through. The result is noisy but correct
+          on average, and much faster — the pipeline's filters take care of the noise. Rays also try a cheap
+          screen-space walk first before falling back to full tracing.
         </p>
       </div>
       <div class="card">
-        <h3>3 &middot; Hardware 3D Gaussian Rasterizer</h3>
+        <h3>Hardware Gaussian rasterization</h3>
         <p>
-          View-frustum Gaussians are squashed to 2D hexagons aligned with their projected covariances and rasterized by the GPU hardware
-          in far-to-near order. Max-response depths stored at hexagon vertices are hardware-interpolated, mitigating edge artifacts and
-          producing smoother fallback normals on flat surfaces. Color-only rasterization runs between the original CUDA rasterizer and the
-          heavily optimized FlashGS.
+          Every Gaussian is turned into a small hexagon and drawn by the GPU's hardware rasterizer instead of a custom
+          CUDA kernel. Hardware interpolation of per-vertex depths yields smooth surfaces and clean normals,
+          fast enough to rebuild a full G-buffer every frame.
         </p>
       </div>
     </div>
@@ -158,19 +154,19 @@
     <div class="figure-grid">
       <figure>
         <img src="images/tracing.png" alt="Illustration of a shading ray traced by the stochastic algorithm" loading="lazy">
-        <figcaption>A shading ray in our stochastic algorithm: hits are accepted with probability equal to their evaluated opacity; the closest accepted hit returns its material parameters.</figcaption>
+        <figcaption>A shading ray randomly accepts Gaussian hits based on opacity — noisy per frame, correct on average.</figcaption>
       </figure>
       <figure>
         <img src="images/stochastic.png" alt="Stochastic vs reference ray tracing comparison" loading="lazy">
-        <figcaption>Stochastic ray tracing (right columns) vs. the reference of Moenne-Loccoz et&nbsp;al.: the multi-frame mean is identical to the reference while ray throughput grows significantly.</figcaption>
+        <figcaption>Averaged over a few frames, our stochastic tracing matches the reference exactly — with much higher ray throughput.</figcaption>
       </figure>
       <figure>
         <img src="images/hexagon.png" alt="Hexagon generation for hardware rasterization" loading="lazy">
-        <figcaption>Each frame, 3D Gaussians are converted to 2D hexagons for hardware rasterization, with Max-response depths as vertex attributes for hardware interpolation.</figcaption>
+        <figcaption>Gaussians become 2D hexagons for the hardware rasterizer, with depths stored at the corners.</figcaption>
       </figure>
       <figure>
         <img src="images/normals.jpg" alt="Reconstructed normals comparison" loading="lazy">
-        <figcaption>Interpolated depths (right) remove the edge artifacts of constant-depth hexagons (left), giving smoother reconstructed normals on flat surfaces.</figcaption>
+        <figcaption>Corner-interpolated depths (right) give much smoother normals than constant depths (left).</figcaption>
       </figure>
     </div>
   </div>
